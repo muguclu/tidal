@@ -765,13 +765,16 @@ components:
     BacktestMetrics:
       type: object
       required: [cagr, ann_vol, sharpe, max_drawdown, hit_rate, turnover, n_trades]
+      description: >
+        A metric with no mathematical definition is null, never NaN/inf (api-contract §3), e.g. hit_rate
+        with 0 closed trades, sharpe/ann_vol with < 2 returns or zero volatility.
       properties:
-        cagr: { type: number }
-        ann_vol: { type: number }
-        sharpe: { type: number }
-        max_drawdown: { type: number }
-        hit_rate: { type: number }
-        turnover: { type: number }
+        cagr: { type: [number, "null"] }
+        ann_vol: { type: [number, "null"] }
+        sharpe: { type: [number, "null"] }
+        max_drawdown: { type: [number, "null"] }
+        hit_rate: { type: [number, "null"] }
+        turnover: { type: [number, "null"] }
         n_trades: { type: integer, minimum: 0 }
     BacktestResult:
       type: object
