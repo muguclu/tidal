@@ -1,0 +1,68 @@
+name: review-checklist
+
+# Solo-developer review gate (SPEC-08 §1, option 2). Required status check on main.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+
+permissions:
+  pull-requests: read
+
+concurrency:
+  group: review-checklist-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review-checklist:
+    name: review-checklist
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # No checkout and no third-party actions: the check only reads the PR payload and file list,
+      # so there is nothing to pin and no credentials are persisted to disk.
+      - name: Validate PR body, title and review history
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          fail=0
+
+          # Rule 1: task ID in body, or docs:/chore: PR touching nothing under src/.
+          if printf '%s' "$PR_BODY" | grep -Eq 'T-[0-9]{3}'; then
+            echo "ok: task ID referenced in PR body"
+          elif printf '%s' "$PR_TITLE" | grep -Eq '^(docs|chore)(\([^)]*\))?!?:'; then
+            if gh api --paginate "repos/${GH_REPO}/pulls/${PR_NUMBER}/files" --jq '.[].filename' | grep -q '^src/'; then
+              echo "::error::docs:/chore: PR touches src/ and has no task ID (T-NNN) in the body"
+              fail=1
+            else
+              echo "ok: docs/chore PR with no changes under src/"
+            fi
+          else
+            echo "::error::PR body must reference a task ID (T-NNN)"
+            fail=1
+          fi
+
+          # Rule 2: "## Review history" section filled in (not empty, not the template placeholder).
+          section=$(printf '%s\n' "$PR_BODY" | tr -d '\r' | awk '
+            /^##[[:space:]]+Review history[[:space:]]*$/ { on=1; next }
+            on && /^##[[:space:]]/ { exit }
+            on { print }')
+          # Strip HTML comments (single-line and multi-line) and surrounding whitespace.
+          cleaned=$(printf '%s\n' "$section" | perl -0777 -pe 's/<!--.*?-->//gs' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' || true)
+          if [ -z "$cleaned" ]; then
+            echo "::error::'## Review history' section is missing or empty"
+            fail=1
+          elif printf '%s' "$cleaned" | grep -Eqi '^TODO: fill in review verdicts and rounds$'; then
+            echo "::error::'## Review history' still contains the template placeholder"
+            fail=1
+          else
+            echo "ok: review history present"
+          fi
+
+          exit "$fail"

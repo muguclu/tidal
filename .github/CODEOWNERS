@@ -1,6 +1,8 @@
-# Replace @muguclu-reviewer with your second review account (see SPEC-08 §1 solo note)
+# Solo-owner repository: there is no second reviewer account, and GitHub does not let an
+# author approve their own PR. Review is enforced by the required `review-checklist` check
+# instead of CODEOWNERS approval. See docs/specs/SPEC-08-cicd-engineering.md §1 (solo-developer note).
 *                       @muguclu
-/docs/contracts/        @muguclu @muguclu-reviewer
-/infra/                 @muguclu @muguclu-reviewer
-/.github/workflows/     @muguclu @muguclu-reviewer
-/src/tidal/api/auth.py  @muguclu @muguclu-reviewer
+/docs/contracts/        @muguclu
+/infra/                 @muguclu
+/.github/workflows/     @muguclu
+/src/tidal/api/auth.py  @muguclu
