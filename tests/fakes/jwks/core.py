@@ -235,7 +235,6 @@ class JwksFake:
 
     # Negative cases (SPEC-04 section 4). ``**kw: Any`` below is forwarded verbatim to
     # mint_token, whose parameters have heterogeneous types.
-    # Negative cases (SPEC-04 section 4) -----------------------------------------------------
     def expired_token(self, **kw: Any) -> str:
         """Token whose ``exp`` is in the past."""
         return self.mint_token(exp_offset=-3600, nbf_offset=-7200, **kw)
