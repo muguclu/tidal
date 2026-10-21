@@ -33,6 +33,9 @@ crash.log
 override.tf
 override.tf.json
 *_override.tf
+*.tfvars
+*.auto.tfvars
+!*.tfvars.example
 
 # Keys / certificates
 *.pem
