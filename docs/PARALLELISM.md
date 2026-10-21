@@ -8,7 +8,9 @@ tasks, spawns subagents, reviews their output, merges in order and checks gates.
    through contracts and fakes, never through each other's unfinished code.
 2. **File ownership.** A task may only touch the files in its `Owns` column (TASKS.md). Two tasks in the
    same wave never own the same file. The orchestrator checks this before spawning.
-3. **One worktree per lane.** Isolation via `git worktree` (or the Agent tool's `isolation: "worktree"`).
+3. **One worktree per lane.** The orchestrator creates them from the Tidal repo before spawning:
+   `git worktree add ../tidal-<lane> -b <branch> main`, and the brief names the absolute path. Do not use
+   the Agent tool's `isolation: "worktree"` here — it resolves to the parent Desktop repo (W0b lesson).
 4. **Max 3 implementing agents at once** + reviewers. More causes review bottlenecks, not speed.
 5. **Merge order is fixed per wave** (below). Rebase the next branch after each merge; re-run CI.
 6. **Subagents never:** merge, push to `main`, `terraform apply`, `helm upgrade` against Azure, change

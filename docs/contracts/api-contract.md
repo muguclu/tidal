@@ -13,8 +13,8 @@ CI fails if FastAPI's generated OpenAPI differs from it (`oasdiff breaking`).
 - Large results: `format=json|arrow|parquet` (`application/vnd.apache.arrow.stream` for arrow).
 - Errors: RFC 7807 `application/problem+json` with `type`, `title`, `status`, `detail`,
   `correlation_id`.
-- Every response carries `X-Correlation-Id`. Every market-data response (`/bars`, `/ticks`, `/latest`,
-  `/spreads`) also carries `X-Tidal-Tier` (`hot`, `cold`, `mixed`) — used in FinOps to attribute
+- Every response carries `X-Correlation-Id`. Every successful (2xx) market-data response (`/bars`,
+  `/ticks`, `/latest`, `/spreads`) also carries `X-Tidal-Tier` (`hot`, `cold`, `mixed`) — used in FinOps to attribute
   query cost to tiers.
 
 ### 1.1 Roles (Entra app roles, cumulative)
@@ -68,8 +68,12 @@ CI fails if FastAPI's generated OpenAPI differs from it (`oasdiff breaking`).
   "seed": 42,
   "sweep": { "fast": [10, 20, 50], "slow": [100, 200] }   // optional → fan-out N child jobs
 }
-// calendar_spread: instrument_ids = [leg_a, leg_b] (exactly 2, e.g. EIA.WTI.FUT1, EIA.WTI.FUT2);
-// params = { lookback, z_entry, z_exit }. All other strategies take exactly 1 instrument.
+// BacktestRequest is a union discriminated by `strategy` (OpenAPI oneOf; pydantic discriminated union):
+//   ma_crossover    → 1 instrument; params { fast:int≥1, slow:int≥1 }
+//   mean_reversion  → 1 instrument; params { lookback:int≥2, z_entry>0, z_exit≥0 }
+//   calendar_spread → 2 instruments [leg_a, leg_b] (e.g. EIA.WTI.FUT1, EIA.WTI.FUT2); params as mean_reversion
+// sweep: ≥ 1 key (param names of the strategy), each list ≥ 1 value, cartesian product ≤ 200 (else 413).
+// interval ∈ 1m|1h|1d (1s excluded: a 20-year 1s job exceeds the per-pod budget, SPEC-05 §5).
 // seed: strategies v1 are fully deterministic; seed is recorded and hashed for future stochastic
 // strategies (e.g. bootstrap), so the result hash already covers it.
 
@@ -88,5 +92,7 @@ CI fails if FastAPI's generated OpenAPI differs from it (`oasdiff breaking`).
 
 ## 4. Status codes
 
-`200` ok · `202` accepted (backtests) · `400` validation · `401` no/invalid token · `403` role
-missing · `404` unknown instrument/job · `413` range too large · `429` rate limited · `503` dependency down.
+`200` ok · `202` accepted (backtests, tiering run) · `400` validation (FastAPI's default 422 is
+mapped to 400 problem+json) · `401` no/invalid token · `403` role
+missing · `404` unknown instrument/job, or a job owned by another principal (no existence leak) ·
+`413` range too large, or sweep expands to > 200 children · `429` rate limited · `503` dependency down.
