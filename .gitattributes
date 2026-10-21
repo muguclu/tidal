@@ -1,0 +1,6 @@
+# LF everywhere so Windows checkouts, Linux CI and container builds agree.
+* text=auto eol=lf
+uv.lock linguist-generated=true
+*.parquet binary
+*.png binary
+*.gz binary

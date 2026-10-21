@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+.benchmarks/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Local data & emulators (storage-layout §5)
+.data/
+__azurite_*
+
+# Secrets — never committed (CLAUDE.md §2.3)
+.env
+.env.*
+!.env.example
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+
+# Keys / certificates
+*.pem
+*.pfx
+*.key
+
+# Node (npx tools: oasdiff, redocly)
+node_modules/
+
+# Tools / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+.claude/settings.local.json

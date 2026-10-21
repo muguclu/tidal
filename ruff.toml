@@ -1,0 +1,36 @@
+target-version = "py312"
+line-length = 100
+src = ["src", "tests", "benchmarks"]
+extend-exclude = [".data"]
+# Python only — ruff ≥ 0.17 would otherwise also reformat code blocks inside docs/*.md.
+include = ["*.py", "*.pyi", "pyproject.toml"]
+
+[lint]
+select = [
+    "E", "W", "F", "I", "B", "UP", "SIM", "C4", "N", "S", "PT", "RET", "ARG",
+    "DTZ",   # no naive datetimes (CLAUDE.md §7)
+    "T20",   # no print
+    "ERA",   # no commented-out code
+    "PL", "RUF", "TID", "ANN",
+    "D1",    # docstrings on public functions (CLAUDE.md §7)
+]
+ignore = [
+    "PLR0913",  # data functions legitimately take many keyword args
+    "ANN401",   # Any is allowed with an explaining comment (CLAUDE.md §7); reviewed by humans
+]
+
+[lint.per-file-ignores]
+"tests/**" = ["S101", "PLR2004", "ANN", "ARG", "D1"]
+"benchmarks/**" = ["S101", "PLR2004", "T20", "D1"]
+
+[lint.pydocstyle]
+convention = "google"
+
+[lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[lint.isort]
+known-first-party = ["tidal"]
+
+[format]
+docstring-code-format = true

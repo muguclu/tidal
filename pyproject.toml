@@ -1,0 +1,98 @@
+[project]
+name = "tidal"
+version = "0.1.0"
+description = "Cloud-native time-series platform for front-office trading on Azure"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = "MIT"
+authors = [{ name = "Müge Güçlü" }]
+# Baseline set fixed by ADR-0007. Lanes never edit this file (PARALLELISM §1.7).
+dependencies = [
+    # data
+    "polars>=1.20",
+    "pyarrow>=18",
+    "duckdb>=1.1",
+    "numpy>=2.1",
+    # api
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "httpx>=0.28",
+    "pyjwt[crypto]>=2.10",
+    "python-ulid>=3.0",
+    # cli / config files
+    "typer>=0.15",
+    "pyyaml>=6.0",
+    # relational
+    "sqlalchemy>=2.0.36",
+    "pyodbc>=5.2",
+    # azure
+    "azure-identity>=1.19",
+    "azure-storage-blob>=12.24",
+    "azure-servicebus>=7.13",
+    "azure-keyvault-secrets>=4.9",
+    # observability
+    "structlog>=24.4",
+    "azure-monitor-opentelemetry>=1.6",
+]
+
+# Entrypoints are declared up-front so lanes never edit this file; the target modules are
+# created by the task named in each comment (SPEC-07 §4).
+[project.scripts]
+tidal = "tidal.cli:app"                      # T-001 root; groups registered in tidal/cli.py
+tidal-api = "tidal.api.app:run"              # T-110
+tidal-query = "tidal.query.service:run"      # T-209
+tidal-worker = "tidal.worker.main:run"       # T-303
+tidal-ingest = "tidal.ingest.cli:run_daily"  # T-105
+tidal-tiering = "tidal.storage.tiering_cli:run"  # T-205
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "pytest-benchmark>=5.1",
+    "hypothesis>=6.120",
+    "testcontainers>=4.9",
+    "schemathesis>=4,<5",  # 4.x API (loaders/pytest plugin differ from 3.x)
+    "vcrpy>=6.0",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "pre-commit>=4.0",
+    "pyarrow-stubs>=17.0",
+    "types-pyyaml>=6.0",
+]
+bench = ["matplotlib>=3.9"]
+load = ["locust>=2.32"]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = ["--strict-markers", "--strict-config", "-ra"]
+xfail_strict = true
+markers = [
+    "integration: needs docker (Azurite, SQL Server container, Service Bus emulator)",
+    "flaky_quarantine: quarantined flaky test, must link an issue (PARALLELISM §6)",
+]
+filterwarnings = [
+    "error",
+    # testcontainers 4.x deprecates its own legacy modules/wait helpers on import.
+    "ignore::DeprecationWarning:testcontainers.*",
+]
+
+[tool.coverage.run]
+source = ["tidal"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+skip_covered = true
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "@overload"]

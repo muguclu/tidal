@@ -12,7 +12,7 @@ collide on every merge.
 Option 1. Runtime: polars, pyarrow, duckdb, numpy, fastapi, uvicorn[standard], pydantic, pydantic-settings,
 httpx, PyJWT[crypto], python-ulid, pyyaml, typer (CLI), structlog, sqlalchemy, pyodbc, azure-identity,
 azure-storage-blob, azure-servicebus, azure-keyvault-secrets, azure-monitor-opentelemetry.
-Dev group: pytest, pytest-cov, pytest-benchmark, hypothesis, testcontainers, schemathesis, vcrpy, ruff,
+Dev group: pytest, pytest-cov, pytest-benchmark, hypothesis, testcontainers, schemathesis 4.x, vcrpy, ruff,
 mypy, pre-commit, pyarrow-stubs, types-pyyaml. Optional groups: `bench` (matplotlib), `load` (locust).
 Non-Python tools via npx/CI only: oasdiff, redocly, gitleaks, tflint, checkov, trivy, syft.
 ## Consequences
