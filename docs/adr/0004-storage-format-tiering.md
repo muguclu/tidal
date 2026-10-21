@@ -38,8 +38,8 @@ recent data fast.
 - Hot window (90 d) stays in SQL; the migration job moves older rows, **all versions**, to Parquet.
 - Ticks and intraday bars: one file per instrument per **month** (5–60 MB typical); daily bars: one per year.
 - Compaction merges parts but **keeps every version** so `as_of` stays correct (data-contracts §7).
-- **Archive is never used for `md/`**: rehydration takes hours and breaks backtests. Only `raw/` archives.
-- `id-tiering` needs **Storage Blob Data Owner** on `md` (index tags need `tags/write`; ARM "Tag
+- **Archive is never used for `marketdata/`**: rehydration takes hours and breaks backtests. Only `raw/` archives.
+- `id-tiering` needs **Storage Blob Data Owner** on `marketdata` (index tags need `tags/write`; ARM "Tag
   Contributor" does not cover it); T-403 checks whether a custom role is tighter.
 - Monitor: capacity per tier, Cool/Cold read and early-deletion charges, retag job success each Jan 2.
 - Revisit if HNS accounts gain index-tag lifecycle support, or if Cool/Cold reads exceed at-rest savings.
