@@ -1,0 +1,70 @@
+# Calibration parameters for the synthetic tick generator (SPEC-01 section 4, T-104).
+#
+# CALIBRATION STATUS - READ THIS BEFORE QUOTING ANY NUMBER
+# --------------------------------------------------------
+# The daily-vol targets below are NOT yet fitted to real history. They are judgemental targets
+# set at the order of magnitude of widely published long-run figures: Brent roughly 30-35 %
+# annualised (about 2 % per day) in normal markets, rising to 60-100 %+ in 2008-09 and spring 2020;
+# Henry Hub spot roughly 50-70 % annualised (about 3-4 % per day) with winter spikes. No specific
+# publication is cited because none was consulted for this file; do not describe these values as
+# "calibrated". Follow-up (needs EIA ingest, T-102/T-105): compute daily realised vol per regime from
+# EIA RBRTE / RNGWHHD (regime = rolling 21-day realised vol terciles/threshold), replace the
+# `daily_vol` rows of SYN.BRENT.TICK and SYN.HH.TICK, and record the method + data vintage here.
+# Other instruments are scaled from those two by asset-class analogy and are placeholders.
+#
+# What IS verified: tests/unit/ingest/test_ingest_synthetic_stats.py asserts the generator reproduces
+# `daily_vol` per regime within +-10 % on simulated daily returns (jumps included in the target).
+#
+# Units: daily_vol = std of daily log-return of the (shifted) price process, jumps included.
+# Power: price = X - shift where X is a positive GBM; X-returns have the stated vol, so price
+# returns are larger and the price can go below zero when X < shift.
+# Regimes are ordered calm, stressed, crisis.
+#
+# Tick-rate choices (not fixed by the contract; documented here): the config contract fixes only the
+# total per scale. We use ticks_per_instrument_year (sum over used instruments / years matches
+# the contract totals: S 3 x 5 x 3.333M = 50M, M 10 x 10 x 3.0M = 300M, L 10 x 20 x 7.5M = 1.5B)
+# times the per-instrument `ticks_weight` (weights of the first 3 and of all 10 instruments sum to
+# 3 and 10). Ticks are produced on the 261 weekdays of a year only, inside the UTC session window.
+# Scale picks the LAST N years of [TIDAL_SYNTH__START, TIDAL_SYNTH__END] (so hot-window demos have data).
+
+scales:
+  S: {instruments: 3, years: 5, ticks_per_instrument_year: 3333333}
+  M: {instruments: 10, years: 10, ticks_per_instrument_year: 3000000}
+  L: {instruments: 10, years: 20, ticks_per_instrument_year: 7500000}
+
+# Fault injection (documented rates, SPEC-01 section 4)
+injection:
+  outlier_rate: 0.0001      # 0.01 % of emitted ticks: price displaced by +-(5..25) % of the level
+  gap_rate: 0.001           # 0.1 % of nominal ticks removed, in runs of mean length gap_mean_len
+  gap_mean_len: 20          # geometric run length; first row after a gap carries GAP_BEFORE
+
+defaults:
+  shift: 0.0
+  transition:               # rows: from calm / stressed / crisis; stationary approx 71 / 23 / 6 %
+    - [0.985, 0.014, 0.001]
+    - [0.040, 0.950, 0.010]
+    - [0.020, 0.080, 0.900]
+  regime_activity: [1.0, 1.6, 2.5]   # tick intensity multiplier per regime
+  jump_intensity: 0.005     # jumps per business day in the calm regime
+  jump_regime_mult: [1.0, 2.0, 4.0]
+  jump_mean: 0.0
+  jump_sd: 0.04
+  mean_reversion: 0.002     # daily pull of log-level to log(base_level + shift); keeps levels sane
+  session_start_h: 1.0      # UTC session window; U-shaped intensity inside it, zero outside
+  session_end_h: 22.0
+  trade_share: 0.35         # share of ticks that are trades; rest split evenly bid / ask
+  spread_bps: 4.0           # full quoted spread in bps of the (shifted) level, calm regime
+  spread_regime_mult: [1.0, 1.5, 3.0]
+  size_median: 10.0
+
+instruments:
+  SYN.BRENT.TICK:   {base_level: 60.0,  daily_vol: [0.016, 0.030, 0.060], ticks_weight: 1.2, spread_bps: 3.0}
+  SYN.WTI.TICK:     {base_level: 58.0,  daily_vol: [0.017, 0.031, 0.062], ticks_weight: 1.1, spread_bps: 3.0, session_start_h: 0.0, session_end_h: 23.0}
+  SYN.HH.TICK:      {base_level: 3.5,   daily_vol: [0.030, 0.055, 0.095], ticks_weight: 0.7, spread_bps: 8.0, jump_sd: 0.06}
+  SYN.NBP.TICK:     {base_level: 45.0,  daily_vol: [0.025, 0.045, 0.080], ticks_weight: 0.7, spread_bps: 8.0, jump_sd: 0.06}
+  SYN.TTF.TICK:     {base_level: 30.0,  daily_vol: [0.025, 0.050, 0.090], ticks_weight: 1.0, spread_bps: 6.0, jump_sd: 0.06}
+  SYN.POWER_DE.TICK: {base_level: 45.0, shift: 50.0, mean_reversion: 0.01, daily_vol: [0.030, 0.060, 0.100], ticks_weight: 1.0, spread_bps: 10.0, jump_sd: 0.08, jump_intensity: 0.01, session_start_h: 6.0, session_end_h: 18.0}
+  SYN.POWER_FR.TICK: {base_level: 45.0, shift: 50.0, mean_reversion: 0.01, daily_vol: [0.030, 0.060, 0.100], ticks_weight: 0.7, spread_bps: 10.0, jump_sd: 0.08, jump_intensity: 0.01, session_start_h: 6.0, session_end_h: 18.0}
+  SYN.GASOIL.TICK:  {base_level: 550.0, daily_vol: [0.015, 0.028, 0.055], ticks_weight: 0.7, spread_bps: 4.0}
+  SYN.RBOB.TICK:    {base_level: 1.8,   daily_vol: [0.018, 0.032, 0.060], ticks_weight: 0.8, spread_bps: 4.0, session_start_h: 0.0, session_end_h: 23.0}
+  SYN.EURUSD.TICK:  {base_level: 1.15,  daily_vol: [0.0045, 0.008, 0.015], ticks_weight: 2.1, spread_bps: 0.6, jump_sd: 0.004, session_start_h: 0.0, session_end_h: 24.0}
