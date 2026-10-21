@@ -26,11 +26,22 @@ prices:
   key: appservice_b1_linux_hour
   meterId: e08d4be1-d8c1-49ba-a814-6369d6f14c34
   meterName: B1
+  note: per plan-hour; month = x730
   productName: Azure App Service Basic Plan - Linux
   skuName: B1
   tierMinimumUnits: 0.0
   unit: 1 Hour
   unitPrice: 0.0158
+- effectiveStartDate: '2019-06-01T00:00:00Z'
+  key: appservice_b2_linux_hour
+  meterId: 953d62f6-b048-4311-8ea6-a4ccf5a50e5d
+  meterName: B2
+  note: per plan-hour; month = x730; C5 always-on baseline (see spec comment)
+  productName: Azure App Service Basic Plan - Linux
+  skuName: B2
+  tierMinimumUnits: 0.0
+  unit: 1 Hour
+  unitPrice: 0.0317
 - effectiveStartDate: '2019-06-01T00:00:00Z'
   key: blob_archive_early_delete_gb
   meterId: 7875f211-196f-4bf7-9a20-d8981af69540
@@ -209,7 +220,7 @@ prices:
   key: containerapps_memory_active_gib_second
   meterId: 3ba64b1c-cb46-5ee0-b086-a68736392ac0
   meterName: Standard Memory Active Usage
-  note: API rounds per-second price to 0.0000; free grant 360k GiB-s/month
+  note: per GiB-second; API rounds to 0.0000, C5 is MEASURED from the cost export; free grant 360k GiB-s/month
   precision_limited: true
   productName: Azure Container Apps
   skuName: Standard
@@ -220,7 +231,7 @@ prices:
   key: containerapps_memory_idle_gib_second
   meterId: cea8b5c0-c6fe-59cf-baa7-123dbc4c6bb8
   meterName: Standard Memory Idle Usage
-  note: API rounds per-second price to 0.0000
+  note: per second; API rounds to 0.0000, C5 is MEASURED from the cost export
   precision_limited: true
   productName: Azure Container Apps
   skuName: Standard
@@ -231,7 +242,7 @@ prices:
   key: containerapps_requests_1m
   meterId: b110d175-46b6-5bbc-adde-cf3438ed87f0
   meterName: Standard Requests
-  note: first 2M requests/month free (grant not in API)
+  note: per 1M requests; first 2M requests/month free (grant not in API)
   productName: Azure Container Apps
   skuName: Standard
   tierMinimumUnits: 0.0
@@ -241,7 +252,7 @@ prices:
   key: containerapps_vcpu_active_second
   meterId: 0426badc-b719-5201-b141-b2d5c4943b7d
   meterName: Standard vCPU Active Usage
-  note: API rounds per-second price to 0.0000; free grant 180k vCPU-s/month
+  note: per vCPU-second; API rounds to 0.0000, C5 is MEASURED from the cost export; free grant 180k vCPU-s/month
   precision_limited: true
   productName: Azure Container Apps
   skuName: Standard
@@ -252,7 +263,7 @@ prices:
   key: containerapps_vcpu_idle_second
   meterId: 7b7747f8-2c0b-5b6b-a6d9-d998e92f6bcc
   meterName: Standard vCPU Idle Usage
-  note: API rounds per-second price to 0.0000
+  note: per second; API rounds to 0.0000, C5 is MEASURED from the cost export
   precision_limited: true
   productName: Azure Container Apps
   skuName: Standard
@@ -290,7 +301,7 @@ prices:
   key: egress_first_tier_gb
   meterId: 9995d93a-7d35-4d3f-9c69-7a7fea447ef4
   meterName: Standard Data Transfer Out
-  note: 100 GB to 10 TB/month tier
+  note: per GB from 100 GB up to 10,335 GB/month; next tier starts at 10,335 GB
   productName: 'Rtn Preference: MGN'
   skuName: Standard
   tierMinimumUnits: 100.0
@@ -300,7 +311,7 @@ prices:
   key: egress_free_gb
   meterId: 9995d93a-7d35-4d3f-9c69-7a7fea447ef4
   meterName: Standard Data Transfer Out
-  note: 'tier 0: first 100 GB/month'
+  note: per GB; tier 0 = first 100 GB/month free (boundary 0-100 GB)
   productName: 'Rtn Preference: MGN'
   skuName: Standard
   tierMinimumUnits: 0.0
@@ -315,11 +326,31 @@ prices:
   tierMinimumUnits: 0.0
   unit: 10K
   unitPrice: 0.0264
+- effectiveStartDate: '2018-04-11T00:00:00Z'
+  key: lb_standard_rules_hour
+  meterId: 27827eb0-7f60-4928-940b-f5fe15e7a4cb
+  meterName: Standard Included LB Rules and Outbound Rules
+  note: per hour while the LB exists (first 5 rules); month = x730; region Global
+  productName: Load Balancer
+  skuName: Standard
+  tierMinimumUnits: 0.0
+  unit: 1 Hour
+  unitPrice: 0.022
+- effectiveStartDate: '2022-10-01T00:00:00Z'
+  key: loganalytics_basic_ingestion_gb
+  meterId: 93e3dffa-2088-59ec-ac65-7a2dab3e47a2
+  meterName: Basic Logs Data Ingestion
+  note: per GB ingested into Basic Logs tables; queries are billed extra, not snapshotted
+  productName: Azure Monitor
+  skuName: Basic Logs
+  tierMinimumUnits: 0.0
+  unit: 1 GB
+  unitPrice: 0.572
 - effectiveStartDate: '2018-02-01T00:00:00Z'
   key: loganalytics_ingestion_free_gb
   meterId: e5626349-2f1f-4563-babc-dc9219884716
   meterName: Analytics Logs Data Ingestion
-  note: 'tier 0: first 5 GB/month per billing account'
+  note: per GB; tier 0 = first 5 GB/month per billing account
   productName: Log Analytics
   skuName: Analytics Logs
   tierMinimumUnits: 0.0
@@ -329,7 +360,7 @@ prices:
   key: loganalytics_ingestion_gb
   meterId: e5626349-2f1f-4563-babc-dc9219884716
   meterName: Analytics Logs Data Ingestion
-  note: paid price above the 5 GB/month free tier
+  note: per GB; paid price above the 5 GB/month free tier
   productName: Log Analytics
   skuName: Analytics Logs
   tierMinimumUnits: 5.0
@@ -339,17 +370,18 @@ prices:
   key: loganalytics_retention_gb_month
   meterId: 127fa4bc-00f0-4ffe-b884-f3fcc5e62790
   meterName: Analytics Logs Data Retention
-  note: beyond the 31 days included
+  note: per GB-month beyond the 31 days included
   productName: Log Analytics
   skuName: Analytics Logs
   tierMinimumUnits: 0.0
   unit: 1 GB/Month
   unitPrice: 0.1144
 - effectiveStartDate: '2021-06-01T00:00:00Z'
-  key: logicapp_consumption_builtin_action
+  key: logicapp_consumption_builtin_action_free_tier
   meterId: 155afecf-5804-4ca4-ae3d-2cff595ab8d4
   meterName: Consumption Built-in Actions
-  note: API rounds to 0.0000; first 4,000 built-in actions/month free
+  note: FREE TIER row (tier 0, first 4,000 built-in actions/month); API rounds the paid price to 0.0000,
+    so this is not the price beyond the free tier
   precision_limited: true
   productName: Logic Apps
   skuName: Consumption
@@ -360,13 +392,23 @@ prices:
   key: logicapp_consumption_standard_connector_action
   meterId: 3d2036fb-cad3-47cf-98cb-0a66f53be6cd
   meterName: Consumption Standard Connector Actions
-  note: API rounds to 4 decimals; true per-action price differs from the shown value
+  note: per action; API rounds to 4 decimals, true price differs from the shown value
   precision_limited: true
   productName: Logic Apps
   skuName: Consumption
   tierMinimumUnits: 0.0
   unit: '1'
   unitPrice: 0.0001
+- effectiveStartDate: '2018-06-01T00:00:00Z'
+  key: publicip_standard_static_hour
+  meterId: 9c150bf9-2bad-430e-a53c-c213804f49ef
+  meterName: Standard IPv4 Static Public IP
+  note: per hour; month = x730
+  productName: IP Addresses
+  skuName: Standard
+  tierMinimumUnits: 0.0
+  unit: 1 Hour
+  unitPrice: 0.0044
 - effectiveStartDate: '2014-11-01T00:00:00Z'
   key: servicebus_basic_ops_1m
   meterId: 3c5657c6-28c7-49f0-9456-9a165161954d
@@ -376,10 +418,23 @@ prices:
   tierMinimumUnits: 0.0
   unit: 1M
   unitPrice: 0.044
+- effectiveStartDate: '2025-06-01T00:00:00Z'
+  key: sql_gp_provisioned_vcore_hour
+  meterId: 1cd4ee5b-2b55-4dd9-b3d9-ae1b22af74b0
+  meterName: vCore
+  note: 'per vCore-hour, 1 vCore: multiply by vCores x 730 h/month. The API publishes no separate SQL
+    licence meter; this rate is far below the serverless rate, so it may exclude the licence (Hybrid Benefit
+    style). Treat the C2/C6 baseline as a lower bound and cross-check against the Cost Management export'
+  productName: SQL Database Single/Elastic Pool General Purpose - Compute Gen5
+  skuName: 1 vCore
+  tierMinimumUnits: 0.0
+  unit: 1 Hour
+  unitPrice: 0.1473
 - effectiveStartDate: '2024-02-01T00:00:00Z'
   key: sql_gp_serverless_vcore_hour
   meterId: 76ba5cef-d9c0-5dd5-b6a3-070a0fe7e6a8
   meterName: vCore
+  note: per vCore-hour; vCore-second = unitPrice / 3600; billed per second of use
   productName: SQL Database General Purpose - Serverless - Compute Gen5
   skuName: 1 vCore
   tierMinimumUnits: 0.0
@@ -389,6 +444,7 @@ prices:
   key: sql_gp_storage_gb_month
   meterId: 62abdcb7-13bf-4ab6-98af-d22be94f9081
   meterName: General Purpose Data Stored
+  note: per GB-month
   productName: SQL Database Single/Elastic Pool General Purpose - Storage
   skuName: General Purpose
   tierMinimumUnits: 0.0
@@ -416,7 +472,7 @@ prices:
   key: vm_d4as_v5_hour
   meterId: b69c5dbc-6df2-5b78-8822-fb32b72f3d64
   meterName: D4as v5
-  note: on-demand; the Cloud Services row of the same name is a different product
+  note: per hour; on-demand; the Cloud Services row of the same name is a different product
   productName: Virtual Machines Dasv5 Series
   skuName: Standard_D4as_v5
   tierMinimumUnits: 0.0
@@ -426,7 +482,7 @@ prices:
   key: vm_d4as_v5_spot_hour
   meterId: 985003a6-73b4-5a89-a783-4f4bcd2f9c60
   meterName: D4as v5 Spot
-  note: list spot price; real spot price varies with capacity, evictions possible
+  note: per hour; list spot price; real spot price varies with capacity, evictions possible
   productName: Virtual Machines Dasv5 Series
   skuName: Standard_D4as_v5 Spot
   tierMinimumUnits: 0.0

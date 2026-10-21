@@ -17,10 +17,21 @@ Such meters are flagged ``precision_limited: true`` in the snapshot; consumers m
 them as free. Container Apps monthly free grants (180k vCPU-s, 360k GiB-s, 2M requests) are not
 exposed by the API either.
 
+Decision (C5): Container Apps compute is reported as MEASURED from the Cost Management export,
+never MODELLED from these meters. To make that impossible to get wrong by accident,
+:meth:`PriceBook.get` and :meth:`PriceBook.unit_price` raise :class:`PrecisionLimitedPrice` for
+``precision_limited`` meters unless the caller passes ``allow_imprecise=True``.
+
+Unit conversions live in each entry's ``note`` (vCore-hour to second: divide by 3600; month of
+hours: x730; egress tier boundaries). Not every meter is in ``westeurope``: Load Balancer rule
+prices are published under region ``Global`` (see ``MeterSpec.region``).
+
 CLI: ``uv run python -m tidal.finops.fetch_prices --out docs/finops/prices.yaml``
 """
 
 import argparse
+import contextlib
+import random
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -28,13 +39,14 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 from tidal.common.errors import DependencyUnavailable, TidalError
-from tidal.common.logging import get_logger
+from tidal.common.logging import correlation_scope, get_logger
 
 API_URL = "https://prices.azure.com/api/retail/prices"
 REGION = "westeurope"
@@ -42,6 +54,10 @@ CURRENCY = "EUR"
 DEFAULT_OUT = Path("docs/finops/prices.yaml")
 MAX_ATTEMPTS = 5
 BACKOFF_BASE_S = 1.0
+MAX_BACKOFF_S = 60.0
+MAX_PAGES = 200
+API_HOST = "prices.azure.com"
+JITTER_SEED = 0
 
 _log = get_logger(__name__)
 
@@ -53,6 +69,20 @@ class PriceResolutionError(TidalError):
     title = "Price meter could not be resolved"
 
 
+class PrecisionLimitedPrice(TidalError):  # noqa: N818 - name fixed by the T-501 review
+    """A price rounded by the API (4 decimals) was requested without ``allow_imprecise=True``."""
+
+    slug = "precision-limited-price"
+    title = "Price is precision-limited"
+
+
+class UntrustedPagination(DependencyUnavailable):
+    """``NextPageLink`` left ``prices.azure.com`` or the page limit was exceeded."""
+
+    slug = "untrusted-pagination"
+    title = "Untrusted or runaway pagination"
+
+
 @dataclass(frozen=True, slots=True)
 class MeterSpec:
     """Declarative filter for exactly one Retail Prices API row.
@@ -60,6 +90,7 @@ class MeterSpec:
     ``tier_min`` selects the pricing tier (``tierMinimumUnits``); ``meter_id`` pins one meter
     when the API lists identical duplicates. ``allow_zero`` marks legitimately free meters;
     ``precision_limited`` marks meters whose true price is lost to the API's 4-decimal rounding.
+    ``region`` overrides the API ``armRegionName`` for meters published as ``Global``.
     """
 
     key: str
@@ -72,12 +103,15 @@ class MeterSpec:
     allow_zero: bool = False
     precision_limited: bool = False
     note: str = ""
+    region: str = REGION
 
 
+# Any: **kw is forwarded verbatim to the typed MeterSpec constructor, which validates the names.
 def _m(key: str, service: str, product: str, sku: str, meter: str, **kw: Any) -> MeterSpec:
     return MeterSpec(key, service, product, sku, meter, **kw)
 
 
+# Any: forwarded to _m / MeterSpec, as above.
 def _blob(key: str, sku: str, meter: str, **kw: Any) -> MeterSpec:
     return _m(key, "Storage", "Blob Storage", sku, meter, **kw)
 
@@ -126,6 +160,23 @@ METERS: tuple[MeterSpec, ...] = (
         "1 vCore",
         "vCore",
         meter_id="76ba5cef-d9c0-5dd5-b6a3-070a0fe7e6a8",
+        note="per vCore-hour; vCore-second = unitPrice / 3600; billed per second of use",
+    ),
+    # Provisioned GP Gen5, the C2/C6 baseline ("GP 2 vCore" = 2 x this price). The API lists
+    # the same meterId twice (effective 2018 and 2025, same price); identical rows are collapsed.
+    _m(
+        "sql_gp_provisioned_vcore_hour",
+        "SQL Database",
+        "SQL Database Single/Elastic Pool General Purpose - Compute Gen5",
+        "1 vCore",
+        "vCore",
+        meter_id="1cd4ee5b-2b55-4dd9-b3d9-ae1b22af74b0",
+        note=(
+            "per vCore-hour, 1 vCore: multiply by vCores x 730 h/month. The API publishes no "
+            "separate SQL licence meter; this rate is far below the serverless rate, so it may "
+            "exclude the licence (Hybrid Benefit style). Treat the C2/C6 baseline as a lower "
+            "bound and cross-check against the Cost Management export"
+        ),
     ),
     _m(
         "sql_gp_storage_gb_month",
@@ -133,6 +184,7 @@ METERS: tuple[MeterSpec, ...] = (
         "SQL Database Single/Elastic Pool General Purpose - Storage",
         "General Purpose",
         "General Purpose Data Stored",
+        note="per GB-month",
     ),
     # --- Service Bus Basic ---
     _m(
@@ -151,7 +203,10 @@ METERS: tuple[MeterSpec, ...] = (
         "Standard vCPU Active Usage",
         allow_zero=True,
         precision_limited=True,
-        note="API rounds per-second price to 0.0000; free grant 180k vCPU-s/month",
+        note=(
+            "per vCPU-second; API rounds to 0.0000, C5 is MEASURED from the cost export; "
+            "free grant 180k vCPU-s/month"
+        ),
     ),
     _m(
         "containerapps_vcpu_idle_second",
@@ -161,7 +216,7 @@ METERS: tuple[MeterSpec, ...] = (
         "Standard vCPU Idle Usage",
         allow_zero=True,
         precision_limited=True,
-        note="API rounds per-second price to 0.0000",
+        note="per second; API rounds to 0.0000, C5 is MEASURED from the cost export",
     ),
     _m(
         "containerapps_memory_active_gib_second",
@@ -171,7 +226,10 @@ METERS: tuple[MeterSpec, ...] = (
         "Standard Memory Active Usage",
         allow_zero=True,
         precision_limited=True,
-        note="API rounds per-second price to 0.0000; free grant 360k GiB-s/month",
+        note=(
+            "per GiB-second; API rounds to 0.0000, C5 is MEASURED from the cost export; "
+            "free grant 360k GiB-s/month"
+        ),
     ),
     _m(
         "containerapps_memory_idle_gib_second",
@@ -181,7 +239,7 @@ METERS: tuple[MeterSpec, ...] = (
         "Standard Memory Idle Usage",
         allow_zero=True,
         precision_limited=True,
-        note="API rounds per-second price to 0.0000",
+        note="per second; API rounds to 0.0000, C5 is MEASURED from the cost export",
     ),
     _m(
         "containerapps_requests_1m",
@@ -189,15 +247,27 @@ METERS: tuple[MeterSpec, ...] = (
         _CA,
         "Standard",
         "Standard Requests",
-        note="first 2M requests/month free (grant not in API)",
+        note="per 1M requests; first 2M requests/month free (grant not in API)",
     ),
-    # --- App Service B1 Linux (the non-Linux "B1 App" row is Windows) ---
+    # --- App Service Linux (the non-Linux "B1 App" row is Windows) ---
     _m(
         "appservice_b1_linux_hour",
         "Azure App Service",
         "Azure App Service Basic Plan - Linux",
         "B1",
         "B1",
+        note="per plan-hour; month = x730",
+    ),
+    # C5 baseline "always-on B2" is interpreted as an always-on App Service Basic B2 Linux plan
+    # (2 vCPU / 3.5 GiB), the smallest always-on plan that matches the 1 vCPU / 2 GiB Container
+    # Apps query service with headroom. A VM B2s (vm_b2s_hour) is the alternative reading.
+    _m(
+        "appservice_b2_linux_hour",
+        "Azure App Service",
+        "Azure App Service Basic Plan - Linux",
+        "B2",
+        "B2",
+        note="per plan-hour; month = x730; C5 always-on baseline (see spec comment)",
     ),
     # --- Virtual machines (Linux; Windows rows carry "Windows" in productName) ---
     _m("vm_b1s_hour", "Virtual Machines", "Virtual Machines BS Series", "B1s", "B1s"),
@@ -208,7 +278,7 @@ METERS: tuple[MeterSpec, ...] = (
         "Virtual Machines Dasv5 Series",
         "Standard_D4as_v5",
         "D4as v5",
-        note="on-demand; the Cloud Services row of the same name is a different product",
+        note="per hour; on-demand; the Cloud Services row of the same name is a different product",
     ),
     _m(
         "vm_d4as_v5_spot_hour",
@@ -216,7 +286,7 @@ METERS: tuple[MeterSpec, ...] = (
         "Virtual Machines Dasv5 Series",
         "Standard_D4as_v5 Spot",
         "D4as v5 Spot",
-        note="list spot price; real spot price varies with capacity, evictions possible",
+        note="per hour; list spot price; real spot price varies with capacity, evictions possible",
     ),
     # --- Managed disks: P4 30 GiB = default Ubuntu OS disk, P10 128 GiB = AKS default OS disk,
     #     E4 32 GiB = Standard SSD alternative for the legacy VM ---
@@ -228,6 +298,27 @@ METERS: tuple[MeterSpec, ...] = (
         "Standard SSD Managed Disks",
         "E4 LRS",
         "E4 LRS Disk",
+    ),
+    # --- AKS networking: Standard LB rules and Standard static public IP ---
+    # The Standard LB rule price is published under region "Global" (applies in westeurope).
+    # "Included" = first 5 rules; AKS uses the Standard LB with one rule per service port.
+    _m(
+        "lb_standard_rules_hour",
+        "Load Balancer",
+        "Load Balancer",
+        "Standard",
+        "Standard Included LB Rules and Outbound Rules",
+        region="Global",
+        meter_id="27827eb0-7f60-4928-940b-f5fe15e7a4cb",
+        note="per hour while the LB exists (first 5 rules); month = x730; region Global",
+    ),
+    _m(
+        "publicip_standard_static_hour",
+        "Virtual Network",
+        "IP Addresses",
+        "Standard",
+        "Standard IPv4 Static Public IP",
+        note="per hour; month = x730",
     ),
     # --- ACR Basic ---
     _m(
@@ -255,7 +346,7 @@ METERS: tuple[MeterSpec, ...] = (
         "Analytics Logs",
         "Analytics Logs Data Ingestion",
         allow_zero=True,
-        note="tier 0: first 5 GB/month per billing account",
+        note="per GB; tier 0 = first 5 GB/month per billing account",
     ),
     _m(
         "loganalytics_ingestion_gb",
@@ -264,7 +355,7 @@ METERS: tuple[MeterSpec, ...] = (
         "Analytics Logs",
         "Analytics Logs Data Ingestion",
         tier_min=5.0,
-        note="paid price above the 5 GB/month free tier",
+        note="per GB; paid price above the 5 GB/month free tier",
     ),
     _m(
         "loganalytics_retention_gb_month",
@@ -272,18 +363,30 @@ METERS: tuple[MeterSpec, ...] = (
         "Log Analytics",
         "Analytics Logs",
         "Analytics Logs Data Retention",
-        note="beyond the 31 days included",
+        note="per GB-month beyond the 31 days included",
+    ),
+    # C8 "basic logs table": Basic Logs ingestion is priced separately from Analytics Logs.
+    _m(
+        "loganalytics_basic_ingestion_gb",
+        "Azure Monitor",
+        "Azure Monitor",
+        "Basic Logs",
+        "Basic Logs Data Ingestion",
+        note="per GB ingested into Basic Logs tables; queries are billed extra, not snapshotted",
     ),
     # --- Logic Apps Consumption (4-dp rounding distorts per-action prices) ---
     _m(
-        "logicapp_consumption_builtin_action",
+        "logicapp_consumption_builtin_action_free_tier",
         "Logic Apps",
         "Logic Apps",
         "Consumption",
         "Consumption Built-in Actions",
         allow_zero=True,
         precision_limited=True,
-        note="API rounds to 0.0000; first 4,000 built-in actions/month free",
+        note=(
+            "FREE TIER row (tier 0, first 4,000 built-in actions/month); API rounds the "
+            "paid price to 0.0000, so this is not the price beyond the free tier"
+        ),
     ),
     _m(
         "logicapp_consumption_standard_connector_action",
@@ -292,7 +395,7 @@ METERS: tuple[MeterSpec, ...] = (
         "Consumption",
         "Consumption Standard Connector Actions",
         precision_limited=True,
-        note="API rounds to 4 decimals; true per-action price differs from the shown value",
+        note="per action; API rounds to 4 decimals, true price differs from the shown value",
     ),
     # --- Bandwidth egress, Microsoft global network (default routing); first 100 GB free ---
     _m(
@@ -302,7 +405,7 @@ METERS: tuple[MeterSpec, ...] = (
         "Standard",
         "Standard Data Transfer Out",
         allow_zero=True,
-        note="tier 0: first 100 GB/month",
+        note="per GB; tier 0 = first 100 GB/month free (boundary 0-100 GB)",
     ),
     _m(
         "egress_first_tier_gb",
@@ -311,7 +414,7 @@ METERS: tuple[MeterSpec, ...] = (
         "Standard",
         "Standard Data Transfer Out",
         tier_min=100.0,
-        note="100 GB to 10 TB/month tier",
+        note="per GB from 100 GB up to 10,335 GB/month; next tier starts at 10,335 GB",
     ),
 )
 
@@ -345,17 +448,26 @@ class PriceBook(BaseModel):
     currency: str
     prices: tuple[Price, ...] = Field(min_length=1)
 
-    def get(self, key: str) -> Price:
-        """Return the price for ``key`` or raise ``KeyError`` naming the missing key."""
+    def get(self, key: str, *, allow_imprecise: bool = False) -> Price:
+        """Return the price for ``key``.
+
+        Raises ``KeyError`` for an unknown key and :class:`PrecisionLimitedPrice` for a
+        ``precision_limited`` meter unless ``allow_imprecise=True``.
+        """
         for price in self.prices:
             if price.key == key:
+                if price.precision_limited and not allow_imprecise:
+                    raise PrecisionLimitedPrice(
+                        f"price '{key}' is rounded by the API and unsafe for cost numbers; "
+                        "use the Cost Management export (MEASURED) or pass allow_imprecise=True"
+                    )
                 return price
         msg = f"price key not in snapshot: {key}"
         raise KeyError(msg)
 
-    def unit_price(self, key: str) -> float:
-        """Return the EUR unit price for ``key``."""
-        return self.get(key).unitPrice
+    def unit_price(self, key: str, *, allow_imprecise: bool = False) -> float:
+        """Return the EUR unit price for ``key`` (same guard as :meth:`get`)."""
+        return self.get(key, allow_imprecise=allow_imprecise).unitPrice
 
     def keys(self) -> frozenset[str]:
         """All keys present in the snapshot."""
@@ -376,7 +488,7 @@ def _odata_quote(value: str) -> str:
 def build_filter(spec: MeterSpec) -> str:
     """OData ``$filter`` for a meter (tier and meter id are checked client-side)."""
     parts = [
-        f"armRegionName eq '{REGION}'",
+        f"armRegionName eq '{_odata_quote(spec.region)}'",
         "priceType eq 'Consumption'",
         f"serviceName eq '{_odata_quote(spec.service_name)}'",
         f"productName eq '{_odata_quote(spec.product_name)}'",
@@ -386,15 +498,27 @@ def build_filter(spec: MeterSpec) -> str:
     return " and ".join(parts)
 
 
+def _retry_delay(attempt: int, retry_after: str | None, rng: random.Random) -> float:
+    """Exponential backoff plus seeded jitter; a numeric ``Retry-After`` is a lower bound."""
+    delay = BACKOFF_BASE_S * 2**attempt + rng.uniform(0.0, BACKOFF_BASE_S)
+    if retry_after is not None:
+        with contextlib.suppress(ValueError):  # HTTP-date form: keep the computed backoff
+            delay = max(delay, float(retry_after))
+    return float(min(delay, MAX_BACKOFF_S))
+
+
+# Any: the JSON body is untyped external data; its shape is validated by the callers below.
 def _get_json(
     client: httpx.Client,
     url: str,
     params: dict[str, str] | None,
     sleep: Callable[[float], None],
+    rng: random.Random,
 ) -> dict[str, Any]:
-    """GET with exponential backoff on transport errors, 429 and 5xx."""
+    """GET with backoff/jitter on transport errors, 429 and 5xx; honours ``Retry-After``."""
     last = ""
     for attempt in range(MAX_ATTEMPTS):
+        retry_after: str | None = None
         try:
             resp = client.get(url, params=params)
         except httpx.TransportError as exc:
@@ -402,52 +526,86 @@ def _get_json(
         else:
             code = resp.status_code
             if code == httpx.codes.TOO_MANY_REQUESTS or code >= httpx.codes.INTERNAL_SERVER_ERROR:
-                last = f"HTTP {resp.status_code}"
-            elif resp.status_code >= httpx.codes.BAD_REQUEST:
-                raise DependencyUnavailable(f"Retail Prices API returned HTTP {resp.status_code}")
+                last = f"HTTP {code}"
+                retry_after = resp.headers.get("Retry-After")
+            elif code >= httpx.codes.BAD_REQUEST:
+                raise DependencyUnavailable(f"Retail Prices API returned HTTP {code}")
             else:
-                data = resp.json()
+                try:
+                    data = resp.json()
+                except ValueError as exc:
+                    raise DependencyUnavailable("Retail Prices API returned invalid JSON") from exc
                 if not isinstance(data, dict):
                     raise DependencyUnavailable("Retail Prices API returned a non-object body")
                 return data
         if attempt < MAX_ATTEMPTS - 1:
             _log.warning("retail_prices_retry", attempt=attempt + 1, reason=last)
-            sleep(BACKOFF_BASE_S * 2**attempt)
+            sleep(_retry_delay(attempt, retry_after, rng))
     raise DependencyUnavailable(f"Retail Prices API unavailable after {MAX_ATTEMPTS} attempts")
 
 
+def _check_next_link(link: str) -> None:
+    """Only follow https links on ``prices.azure.com`` (no SSRF / credential-leak redirects)."""
+    parsed = urlparse(link)
+    if parsed.scheme != "https" or parsed.hostname != API_HOST:
+        raise UntrustedPagination("NextPageLink points outside prices.azure.com")
+
+
+# Any: rows are raw API JSON objects, narrowed field by field in resolve_meter.
 def fetch_items(
     client: httpx.Client,
     odata_filter: str,
     sleep: Callable[[float], None] = time.sleep,
+    rng: random.Random | None = None,
 ) -> list[dict[str, Any]]:
-    """All rows for ``odata_filter``, following ``NextPageLink`` until exhausted."""
+    """All rows for ``odata_filter``, following ``NextPageLink`` (same host, <= MAX_PAGES)."""
+    rng = rng or random.Random(JITTER_SEED)  # noqa: S311 - jitter, not security
     items: list[dict[str, Any]] = []
     url: str | None = API_URL
     params: dict[str, str] | None = {"currencyCode": f"'{CURRENCY}'", "$filter": odata_filter}
+    pages = 0
     while url:
-        body = _get_json(client, url, params, sleep)
+        pages += 1
+        if pages > MAX_PAGES:
+            raise UntrustedPagination(f"pagination exceeded {MAX_PAGES} pages")
+        body = _get_json(client, url, params, sleep, rng)
         items.extend(body.get("Items", []))
         url = body.get("NextPageLink")
+        if url:
+            _check_next_link(url)
         params = None  # NextPageLink already carries the query string
     return items
+
+
+# Any: raw API JSON rows, as above.
+def _dedupe(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse rows that are the same meter and price (API repeats them per effective date)."""
+    best: dict[tuple[str, float, float], dict[str, Any]] = {}
+    for r in rows:
+        k = (str(r.get("meterId")), float(r["tierMinimumUnits"]), float(r["unitPrice"]))
+        if k not in best or str(r["effectiveStartDate"]) > str(best[k]["effectiveStartDate"]):
+            best[k] = r
+    return list(best.values())
 
 
 def resolve_meter(
     client: httpx.Client,
     spec: MeterSpec,
     sleep: Callable[[float], None] = time.sleep,
+    rng: random.Random | None = None,
 ) -> Price:
     """Resolve ``spec`` to exactly one price, or raise :class:`PriceResolutionError`."""
-    rows = [
-        r
-        for r in fetch_items(client, build_filter(spec), sleep)
-        if r.get("currencyCode") == CURRENCY
-        and r.get("armRegionName") == REGION
-        and r.get("type") == "Consumption"
-        and float(r.get("tierMinimumUnits", 0.0)) == spec.tier_min
-        and (spec.meter_id is None or r.get("meterId") == spec.meter_id)
-    ]
+    rows = _dedupe(
+        [
+            r
+            for r in fetch_items(client, build_filter(spec), sleep, rng)
+            if r.get("currencyCode") == CURRENCY
+            and r.get("armRegionName") == spec.region
+            and r.get("type") == "Consumption"
+            and float(r.get("tierMinimumUnits", 0.0)) == spec.tier_min
+            and (spec.meter_id is None or r.get("meterId") == spec.meter_id)
+        ]
+    )
     if len(rows) != 1:
         found = sorted(f"{r.get('meterId')}@{r.get('effectiveStartDate')}" for r in rows)
         raise PriceResolutionError(
@@ -476,25 +634,27 @@ def resolve_all(
     client: httpx.Client,
     specs: Sequence[MeterSpec] = METERS,
     sleep: Callable[[float], None] = time.sleep,
+    rng: random.Random | None = None,
 ) -> list[Price]:
     """Resolve every spec, sorted by key; the first failure aborts (no partial snapshot)."""
     keys = [s.key for s in specs]
     if len(set(keys)) != len(keys):
         raise PriceResolutionError("duplicate meter keys in the meter spec")
-    return sorted((resolve_meter(client, s, sleep) for s in specs), key=lambda p: p.key)
+    rng = rng or random.Random(JITTER_SEED)  # noqa: S311 - jitter, not security
+    return sorted((resolve_meter(client, s, sleep, rng) for s in specs), key=lambda p: p.key)
 
 
 def render_yaml(prices: Sequence[Price], captured_at: date) -> str:
     """Deterministic YAML text: sorted keys, LF endings, entries sorted by key."""
     entries = []
     for p in sorted(prices, key=lambda x: x.key):
-        entry: dict[str, Any] = p.model_dump()
+        entry: dict[str, Any] = p.model_dump()  # Any: heterogeneous YAML scalars
         if not entry["precision_limited"]:
             del entry["precision_limited"]
         if not entry["note"]:
             del entry["note"]
         entries.append(entry)
-    doc = {
+    doc: dict[str, Any] = {  # Any: YAML document mixing scalars and a list of mappings
         "captured_at": captured_at.isoformat(),
         "source": API_URL,
         "region": REGION,
@@ -525,16 +685,21 @@ def main(argv: Sequence[str] | None = None, client: httpx.Client | None = None) 
     args = parser.parse_args(argv)
     own = client is None
     http = client or httpx.Client(timeout=30.0)
-    try:
-        prices = resolve_all(http)
-    except TidalError as exc:
-        print(f"fetch_prices failed: {exc.detail or exc.title}", file=sys.stderr)  # noqa: T201
-        return 1
-    finally:
-        if own:
-            http.close()
-    write_prices(args.out, prices, datetime.now(UTC).date())
-    print(f"wrote {len(prices)} priced meters to {args.out}")  # noqa: T201
+    with correlation_scope():
+        try:
+            prices = resolve_all(http)
+        except TidalError as exc:
+            print(f"fetch_prices failed: {exc.detail or exc.title}", file=sys.stderr)  # noqa: T201
+            return 1
+        except httpx.HTTPError as exc:
+            msg = f"fetch_prices failed: HTTP client error ({type(exc).__name__})"
+            print(msg, file=sys.stderr)  # noqa: T201
+            return 1
+        finally:
+            if own:
+                http.close()
+        write_prices(args.out, prices, datetime.now(UTC).date())
+        print(f"wrote {len(prices)} priced meters to {args.out}")  # noqa: T201
     return 0
 
 
