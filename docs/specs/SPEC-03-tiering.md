@@ -38,19 +38,19 @@ version (storage-layout §2). Runs yearly after retag, and is crash-safe the sam
 
 | Rule | Filter | Action |
 |---|---|---|
-| md-cool | container `md`, tag `age_band = cool` | tierToCool after 0 days since modification |
+| md-cool | container `marketdata`, tag `age_band = cool` | tierToCool after 0 days since modification |
 | md-cold | tag `age_band = cold` | tierToCold after 0 days |
 | raw | prefix `raw/` | Cool @ 30 d, Archive @ 180 d |
 | backtests | prefix `backtests/` | Cool @ 30 d, delete @ 365 d |
 | exports / bench | prefix | delete @ 14 / 30 d |
 
-**Archive is never used for `md/`** — rehydration takes hours and breaks backtests; documented as
+**Archive is never used for `marketdata/`** — rehydration takes hours and breaks backtests; documented as
 a deliberate trade-off (ADR-0004). Early-deletion penalties (Cool 30 d, Cold 90 d, Archive 180 d) are
 modelled in the cost model.
 
 ## 5. Unified reader (`query/reader.py`)
 - `read_bars(instrument, interval, start, end, as_of=None)` splits the range at the watermark:
-  cold part via duckdb `read_parquet('az://md/v1/...', hive_partitioning=1)` with filter pushdown,
+  cold part via duckdb `read_parquet('az://marketdata/v1/...', hive_partitioning=1)` with filter pushdown,
   hot part via SQL; concatenates with polars; resolves versions per data-contracts §7 (latest, or
   max version with `ingested_at_ns ≤ as_of`).
 - Returns tier used (`hot|cold|mixed`) for the `X-Tidal-Tier` header.

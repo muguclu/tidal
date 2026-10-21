@@ -5,6 +5,9 @@ concatenation of blob paths elsewhere fails code review.
 
 ## 1. Storage account & containers
 
+Container names follow Azure rules (3–63 chars, lowercase): the market-data container is `marketdata`
+(v1.1, ADR-0010 — `md` was too short to create). SQL keeps its `md` schema; only the Blob container is renamed.
+
 One StorageV2 account, LRS, default access tier `Hot`, **hierarchical namespace disabled**
 (flat namespace) so that blob index tags can drive lifecycle rules (§4). Verify current tag support
 for HNS accounts before changing this; the trade-off is recorded in ADR-0004.
@@ -12,7 +15,7 @@ for HNS accounts before changing this; the trade-off is recorded in ADR-0004.
 | Container | Purpose | Lifecycle |
 |---|---|---|
 | `raw` | Verbatim source responses (JSON/CSV), gzip | → Cool @ 30 d → Archive @ 180 d |
-| `md` | Market data Parquet (cold store) | tier by **data age** via blob index tag, see §4 |
+| `marketdata` | Market data Parquet (cold store) | tier by **data age** via blob index tag, see §4 |
 | `reference` | Instruments, calendars | Hot, no lifecycle |
 | `backtests` | Job inputs/outputs | → Cool @ 30 d → delete @ 365 d |
 | `exports` | Legacy CSV feed from VM | delete @ 14 d |
@@ -22,7 +25,7 @@ for HNS accounts before changing this; the trade-off is recorded in ADR-0004.
 ## 2. Market-data paths
 
 ```
-md/v1/{dataset}/instrument={instrument_id}/year={YYYY}/month={MM}/part-{seq:05d}.parquet
+marketdata/v1/{dataset}/instrument={instrument_id}/year={YYYY}/month={MM}/part-{seq:05d}.parquet
   dataset ∈ { ticks, bars_1s, bars_1m, bars_1h, bars_1d }
 ```
 

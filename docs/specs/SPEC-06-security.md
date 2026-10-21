@@ -19,8 +19,8 @@ Owner agents: `infra-engineer`, `api-engineer`; reviewer: `security-reviewer` ·
 | id-api | Blob Data Reader | Blob Data Reader | db_datareader + exec on `ops` procs | Data Sender (`backtest-jobs`, `tiering-jobs`), Data Receiver (`backtest-results`) | Secrets User | — |
 | id-query | Blob Data Reader | — | db_datareader | — | Secrets User | — |
 | id-worker | Blob Data Reader | Blob Data Contributor | db_datareader on `md`, `ref` (unified reader reads the hot window) | Data Receiver (`backtest-jobs`), Data Sender (`backtest-results`) | — | — |
-| id-ingest | Blob Data Contributor (`raw`,`md`,`reference`) | — | db_datareader + db_datawriter on `md`, `ref`, `ops` (checkpoints, instrument first/last ts) | — | Secrets User | — |
-| id-tiering | Blob Data Owner on container `md` (blob index tags need `tags/write`; the ARM "Tag Contributor" role does **not** cover blob tags; T-403 checks whether Blob Data Contributor + a custom `tags/write` role is tighter) | — | db_datareader/writer + delete on `md`, `ops` | Data Receiver (`tiering-jobs`) | — | — |
+| id-ingest | Blob Data Contributor (`raw`,`marketdata`,`reference`) | — | db_datareader + db_datawriter on `md`, `ref`, `ops` (checkpoints, instrument first/last ts) | — | Secrets User | — |
+| id-tiering | Blob Data Owner on container `marketdata` (blob index tags need `tags/write`; the ARM "Tag Contributor" role does **not** cover blob tags; T-403 checks whether Blob Data Contributor + a custom `tags/write` role is tighter) | — | db_datareader/writer + delete on `md`, `ops` | Data Receiver (`tiering-jobs`) | — | — |
 | id-legacy-vm | Blob Data Contributor (`exports`) | — | db_datareader | — | — | — (plus custom role `vm-self-deallocate`: `deallocate/action` on its own VM only) |
 | AKS kubelet | — | — | — | — | — | AcrPull |
 | sp-tidal-ci | — | — | — | — | — | AcrPush; Contributor on RG `rg-tidal-dev` only (enough for image push and app updates; **not** for `terraform apply`, which needs role-assignment and Graph rights and stays human-only) |
