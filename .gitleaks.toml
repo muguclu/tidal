@@ -6,6 +6,8 @@ useDefault = true
 [allowlist]
 description = "Public, machine-independent local emulator credentials (Azurite, Service Bus emulator)"
 regexTarget = "match"
+# Generated snapshot of public Azure retail prices (T-501): `key:` fields trip generic-api-key.
+paths = ['''^docs/finops/prices\.yaml$''']
 regexes = [
   # Azurite devstoreaccount1 key, published in the Azurite docs; works only against a local emulator.
   '''Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==?''',
