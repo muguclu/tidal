@@ -11,4 +11,5 @@ You are the orchestrator. Wave: $ARGUMENTS.
 5. When each finishes, spawn `code-reviewer` (and `security-reviewer` for infra/auth/CI/Docker diffs).
 6. Send blocking findings back to the implementing agent (max 2 rounds), then summarise for me:
    per task — verdict, files, tests, open questions, suggested PR title.
-Never merge, push to main, or apply infrastructure.
+7. Push each branch, open its PR, and squash-merge in the PARALLELISM §3 order once CI is green and no
+   `blocking:` finding is open. Never push directly to main, never apply infrastructure.

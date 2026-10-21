@@ -25,7 +25,7 @@ Implement T-001 in the main session (it is the scaffold everything else needs). 
 /wave 0
 ```
 This proposes W0b (T-003/T-004/T-002) and then W0c (T-006/T-008) — at most 3 lanes at once. Confirm, let agents run, read reviews,
-open PRs, merge in order. Then:
+the orchestrator opens PRs and merges them in order. Then:
 ```
 /gate G0
 ```
@@ -33,11 +33,11 @@ Tag `contracts-v1` when G0 passes.
 
 ## 3. Each later phase
 ```
-/wave <n>   → confirm lanes → agents implement → reviewers review → you open PRs & merge
+/wave <n>   → confirm lanes → agents implement → reviewers review → orchestrator opens PRs & merges
 /gate G<n>  → fix gaps → next wave
 ```
 Human-only steps (never delegated): `terraform apply`, first `helm upgrade`, Entra admin consent,
-screenshots for evidence, merging PRs, recording the demo.
+screenshots for evidence, recording the demo.
 
 ## 4. Session hygiene
 - Start every session with: "Read CLAUDE.md and TASKS.md; tell me the current phase, open tasks and blockers."
