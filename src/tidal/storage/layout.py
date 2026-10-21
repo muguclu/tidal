@@ -32,7 +32,9 @@ _MD = re.compile(
     rf"{CONTAINER_MARKETDATA}/{MD_VERSION}/(?P<dataset>[a-z0-9_]+)/instrument=(?P<instrument>[^/]+)"
     r"/year=(?P<year>\d{4})/month=(?P<month>\d{2})/(?:part-(?P<seq>\d{5})\.parquet|_manifest\.json)"
 )
-_RAW = re.compile(r"raw/(?P<source>[a-z]+)/(?P<series>[a-z0-9_]+)/(?P<day>\d{8})\.json\.gz")
+_RAW = re.compile(
+    r"raw/(?P<source>[a-z]+)/(?P<series>[a-z0-9_]+)/(?P<day>\d{8})(?:-(?P<digest>[0-9a-f]{8}))?\.json\.gz"
+)
 
 
 class InvalidPath(TidalError):
@@ -102,12 +104,19 @@ def parse_md_path(path: str) -> MdPart:
     return part
 
 
-def raw_path(source: str, series: str, day: date) -> str:
-    """``raw/{source}/{series}/{yyyymmdd}.json.gz``; the series is lower-cased (§5)."""
+def raw_path(source: str, series: str, day: date, digest: str | None = None) -> str:
+    """``raw/{source}/{series}/{yyyymmdd}[-{sha8}].json.gz``; the series is lower-cased (§5).
+
+    ``digest`` (first 8 hex chars of the payload sha256) makes restated responses for the same day
+    distinct, immutable blobs instead of a silent no-op on the create-only store.
+    """
     series = series.lower()
     if source not in RAW_SOURCES or not _SERIES.fullmatch(series):
         raise InvalidPath(f"bad raw source/series {source!r}/{series!r}")
-    return f"{CONTAINER_RAW}/{source}/{series}/{day:%Y%m%d}.json.gz"
+    if digest is not None and not re.fullmatch(r"[0-9a-f]{8}", digest):
+        raise InvalidPath(f"bad raw digest {digest!r}")
+    suffix = f"-{digest}" if digest is not None else ""
+    return f"{CONTAINER_RAW}/{source}/{series}/{day:%Y%m%d}{suffix}.json.gz"
 
 
 def parse_raw_path(path: str) -> tuple[str, str, date]:

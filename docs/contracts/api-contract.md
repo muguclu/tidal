@@ -50,13 +50,13 @@ CI fails if FastAPI's generated OpenAPI differs from it (`oasdiff breaking`).
 ## 3. Schemas
 
 ```jsonc
-// Bar
+// Bar — EIA.WTI.FUT1 (NYMEX contract 1) settled at −37.63 on 2020-04-20; EIA WTI spot (RWTC) printed −36.98
 { "ts": "2020-04-20T00:00:00Z", "ts_ns": 1587340800000000000,
   "open": -37.63, "high": -37.63, "low": -37.63, "close": -37.63,
   "volume": null, "quality": 1, "version": 1 }
 
 // BarsResponse
-{ "instrument_id": "EIA.WTI.SPOT", "interval": "1d", "tier": "cold",
+{ "instrument_id": "EIA.WTI.FUT1", "interval": "1d", "tier": "cold",
   "rows": [Bar, ...], "next_cursor": null }
 
 // BacktestRequest

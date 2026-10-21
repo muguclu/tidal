@@ -13,7 +13,7 @@ cold store (Parquet) according to age.
 | Module | Responsibility |
 |---|---|
 | `ingest/sources/base.py` | `Source` protocol: `fetch(instrument, start, end) -> Iterator[RawChunk]` |
-| `ingest/sources/eia.py` | EIA v2 API client: pagination, retry w/ exponential backoff + jitter, raw response saved to `raw/eia/{series}/{yyyymmdd}.json.gz` |
+| `ingest/sources/eia.py` | EIA v2 API client: pagination, retry w/ exponential backoff + jitter, raw response saved to `raw/eia/{series}/{yyyymmdd}-{sha8}.json.gz` (sha8 = first 8 hex of the payload sha256, so restated responses never collide) |
 | `ingest/sources/fred.py` | FRED client, same pattern |
 | `ingest/sources/synthetic.py` | Generator (§4) |
 | `ingest/normalise.py` | Raw → arrow table in contract schema, UTC epoch ns |
@@ -50,7 +50,7 @@ cold store (Parquet) according to age.
 ## 5. Acceptance criteria
 - [ ] Backfill EIA Brent, WTI, Henry Hub and FRED EUR/USD from first available date; row counts logged
       and asserted against source totals.
-- [ ] WTI 2020-04-20 stored as negative with `NEGATIVE` flag (golden test).
+- [ ] WTI 2020-04-20 stored as negative with `NEGATIVE` flag (golden test): `EIA.WTI.FUT1` −37.63, `EIA.WTI.SPOT` −36.98.
 - [ ] `tidal synth --scale S --seed 1` twice ⇒ identical file hashes.
 - [ ] Generating L scale on 8 cores finishes < 60 min locally; peak RSS < 2 GB.
 - [ ] Re-running daily ingest with unchanged source writes 0 rows.

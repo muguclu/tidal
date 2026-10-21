@@ -37,7 +37,7 @@ scanned in bulk occasionally (model training, backtests, regulatory look-backs).
 
 | Reality | Example | Rule in Tidal |
 |---|---|---|
-| Negative prices | WTI front-month settled at −$37.63 on 2020-04-20 | Never clamp or reject negatives; validator sets the `NEGATIVE` quality flag, keeps value |
+| Negative prices | WTI front-month (NYMEX CL1, EIA `RCLC1`) settled at −$37.63 on 2020-04-20; EIA WTI spot (`RWTC`) −$36.98 | Never clamp or reject negatives; validator sets the `NEGATIVE` quality flag, keeps value |
 | Missing days | Holidays, exchange closures, source gaps | No forward-fill in storage; fill only in query layer if requested (`fill=ffill`) |
 | Restatements | Source corrects a past value | Append new version with later `ingested_at`; latest wins unless `as_of` given |
 | Time zones / DST | Exchange local time vs UTC | Store UTC epoch ns; keep `exchange_tz` in instrument metadata |
