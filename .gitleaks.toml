@@ -1,0 +1,14 @@
+# gitleaks config: default rules + a narrow allowlist for publicly documented emulator values.
+# Only exact, well-known strings are allowed; any other key-like value still fails the scan.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Public, machine-independent local emulator credentials (Azurite, Service Bus emulator)"
+regexTarget = "match"
+regexes = [
+  # Azurite devstoreaccount1 key, published in the Azurite docs; works only against a local emulator.
+  '''Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==?''',
+  # Service Bus emulator literal placeholder key.
+  '''SharedAccessKey=SAS_KEY_VALUE''',
+]
