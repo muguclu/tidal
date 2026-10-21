@@ -11,7 +11,7 @@ import json
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any  # Any: JWT claims/headers are arbitrary JSON values
 
 import httpx
 import jwt
@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 TEST_TENANT_ID = "11111111-2222-3333-4444-555555555555"
 DEFAULT_AUDIENCE = "api://tidal"
+FOREIGN_TENANT_ID = "99999999-9999-9999-9999-999999999999"
 DEFAULT_OID = "00000000-0000-0000-0000-0000000000a1"
 
 
@@ -75,6 +76,12 @@ class KeyPair:
             serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
         )
 
+    def public_der(self) -> bytes:
+        """DER SubjectPublicKeyInfo of the public key."""
+        return self.private_key.public_key().public_bytes(
+            serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+
     def public_jwk(self) -> dict[str, str]:
         """Public JWK (RFC 7517) for this key."""
         numbers = self.private_key.public_key().public_numbers()
@@ -106,7 +113,9 @@ def mint_token(
     kid: str | None = None,
     alg: str = "RS256",
     now: float | None = None,
-    extra_claims: Mapping[str, Any] | None = None,
+    extra_claims: Mapping[str, Any] | None = None,  # Any: arbitrary JSON claim values
+    tenant_id: str = TEST_TENANT_ID,
+    hs256_secret: bytes | None = None,
 ) -> str:
     """Mint a JWT shaped like an Entra v2 access token.
 
@@ -115,7 +124,7 @@ def mint_token(
             the classic algorithm-confusion attack).
         roles: Value of the ``roles`` claim; ``None`` omits the claim entirely.
         aud: Audience claim.
-        iss: Issuer claim; defaults to :func:`issuer_for` the test tenant.
+        iss: Issuer claim; defaults to :func:`issuer_for` ``tenant_id``.
         oid: Object id claim.
         exp_offset: Seconds from ``now`` until expiry (negative = already expired).
         nbf_offset: Seconds from ``now`` until not-before (positive = not yet valid).
@@ -123,17 +132,21 @@ def mint_token(
         alg: ``RS256`` (default), ``none`` or ``HS256``.
         now: Epoch seconds used as the issue time (defaults to the current time).
         extra_claims: Extra claims merged last.
+        tenant_id: Tenant used for the default ``iss`` and for ``tid`` (so they always agree).
+        hs256_secret: HMAC secret for ``alg=HS256`` (defaults to the public key PEM).
 
     Returns:
         The compact serialised token.
     """
+    if isinstance(roles, str):
+        raise TypeError("roles must be a sequence of strings, not a single str")
     issued = int(time.time() if now is None else now)
-    claims: dict[str, Any] = {
-        "iss": iss if iss is not None else issuer_for(),
+    claims: dict[str, Any] = {  # Any: heterogeneous JSON claim values
+        "iss": iss if iss is not None else issuer_for(tenant_id),
         "aud": aud,
         "oid": oid,
         "sub": oid,
-        "tid": TEST_TENANT_ID,
+        "tid": tenant_id,
         "iat": issued,
         "nbf": issued + nbf_offset,
         "exp": issued + exp_offset,
@@ -149,7 +162,9 @@ def mint_token(
         return _encode_forged(header, claims, b"")
     if alg == "HS256":
         signing_input = _encode_forged(header, claims, b"").rsplit(".", 1)[0]
-        mac = hmac.new(key.public_pem(), signing_input.encode(), hashlib.sha256).digest()
+        mac = hmac.new(
+            hs256_secret or key.public_pem(), signing_input.encode(), hashlib.sha256
+        ).digest()
         return _encode_forged(header, claims, mac)
     raise ValueError(f"unsupported alg {alg!r}")
 
@@ -209,15 +224,17 @@ class JwksFake:
         """Async httpx client wired to :meth:`transport`."""
         return httpx.AsyncClient(transport=self.transport())
 
-    def mint_token(self, **kwargs: Any) -> str:
+    def mint_token(self, **kwargs: Any) -> str:  # Any: forwarded to module-level mint_token
         """Mint a token signed by the active key; kwargs as :func:`mint_token`.
 
         Accepts an extra ``key=`` to sign with another :class:`KeyPair`.
         """
-        kwargs.setdefault("iss", self.issuer)
+        kwargs.setdefault("tenant_id", self.tenant_id)
         key = kwargs.pop("key", self.active)
         return mint_token(key, **kwargs)
 
+    # Negative cases (SPEC-04 section 4). ``**kw: Any`` below is forwarded verbatim to
+    # mint_token, whose parameters have heterogeneous types.
     # Negative cases (SPEC-04 section 4) -----------------------------------------------------
     def expired_token(self, **kw: Any) -> str:
         """Token whose ``exp`` is in the past."""
@@ -233,7 +250,7 @@ class JwksFake:
 
     def wrong_issuer_token(self, **kw: Any) -> str:
         """Token from a different tenant's issuer."""
-        return self.mint_token(iss=issuer_for("99999999-9999-9999-9999-999999999999"), **kw)
+        return self.mint_token(tenant_id=FOREIGN_TENANT_ID, **kw)
 
     def unknown_kid_token(self, **kw: Any) -> str:
         """Validly signed token whose key (and kid) is not in the JWKS."""
@@ -246,6 +263,15 @@ class JwksFake:
     def hs256_confusion_token(self, **kw: Any) -> str:
         """HS256 token MACed with the active public key PEM as the secret."""
         return self.mint_token(alg="HS256", **kw)
+
+    def hs256_confusion_der_token(self, **kw: Any) -> str:
+        """HS256 token MACed with the DER form of the active public key."""
+        return self.mint_token(alg="HS256", hs256_secret=self.active.public_der(), **kw)
+
+    def hs256_confusion_jwk_token(self, **kw: Any) -> str:
+        """HS256 token MACed with the JSON-serialised public JWK."""
+        secret = json.dumps(self.active.public_jwk()).encode()
+        return self.mint_token(alg="HS256", hs256_secret=secret, **kw)
 
     def missing_roles_token(self, **kw: Any) -> str:
         """Valid token without a ``roles`` claim."""

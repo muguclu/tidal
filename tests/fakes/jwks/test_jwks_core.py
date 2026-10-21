@@ -87,6 +87,27 @@ def test_hs256_confusion_rejected(jwks: JwksFake) -> None:
         _decode(jwks, token)
 
 
+@pytest.mark.parametrize("variant", ["hs256_confusion_der_token", "hs256_confusion_jwk_token"])
+def test_hs256_confusion_other_secret_forms_rejected(jwks: JwksFake, variant: str) -> None:
+    token = getattr(jwks, variant)(roles=["Tidal.Admin"])
+    assert jwt.get_unverified_header(token)["alg"] == "HS256"
+    with pytest.raises(jwt.InvalidAlgorithmError):
+        _decode(jwks, token)
+
+
+def test_tid_matches_issuer_tenant(jwks: JwksFake) -> None:
+    ok = jwt.decode(jwks.mint_token(), options={"verify_signature": False})
+    assert ok["tid"] in ok["iss"]
+    bad = jwt.decode(jwks.wrong_issuer_token(), options={"verify_signature": False})
+    assert bad["tid"] in bad["iss"]
+    assert bad["tid"] != jwks.tenant_id
+
+
+def test_roles_str_rejected(jwks: JwksFake) -> None:
+    with pytest.raises(TypeError):
+        jwks.mint_token(roles="Tidal.Quant")
+
+
 def test_missing_roles_claim(jwks: JwksFake) -> None:
     claims = _decode(jwks, jwks.missing_roles_token())
     assert "roles" not in claims

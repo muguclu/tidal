@@ -53,14 +53,20 @@ def test_mints_token_and_caches_keys(
     assert "PRIVATE" not in jwks_out.read_text(encoding="utf-8")
 
 
-def test_unset_env_allowed(
+def test_unset_env_refused(
     script: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("TIDAL_ENV", raising=False)
     result = CliRunner().invoke(
-        script.app, ["--role", "Tidal.Reader", "--keys-dir", str(tmp_path), "--ttl", "60"]
+        script.app, ["--role", "Tidal.Reader", "--keys-dir", str(tmp_path / "k")]
     )
-    assert result.exit_code == 0
+    assert result.exit_code == 2
+    assert not (tmp_path / "k").exists()
+
+
+def test_default_keys_dir_is_repo_rooted(script: ModuleType) -> None:
+    assert SCRIPT.parents[1] / ".data" / "dev-jwks" == script.DEFAULT_KEYS_DIR
+    assert script.DEFAULT_KEYS_DIR.is_absolute()
 
 
 @pytest.mark.parametrize("env", ["dev", "prod", ""])
@@ -83,3 +89,4 @@ def test_rejects_unknown_role(
         script.app, ["--role", "Tidal.Nope", "--keys-dir", str(tmp_path / "k")]
     )
     assert result.exit_code == 2
+    assert not (tmp_path / "k").exists()

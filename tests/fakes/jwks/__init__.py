@@ -1,10 +1,7 @@
 """Local Entra-like JWKS and token minting for auth tests (T-113).
 
-Usage in a consumer test package::
-
-    from fakes.jwks.plugin import jwks, mint_token  # noqa: F401  (re-export the fixtures)
-
-or ``pytest_plugins = ["fakes.jwks.plugin"]`` in a top-level conftest.
+The ``jwks`` and ``mint_token`` fixtures are available everywhere (registered globally in
+``tests/conftest.py``); import helpers from ``fakes.jwks``.
 """
 
 from fakes.jwks.core import (
