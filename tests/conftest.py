@@ -4,6 +4,9 @@ import os
 
 from hypothesis import HealthCheck, settings
 
+# Shared fixtures (T-113): `jwks`, `mint_token` for every test without re-export imports.
+pytest_plugins = ["fakes.jwks.plugin"]
+
 # Deterministic property tests (CLAUDE.md §2.2): "ci" never randomises between runs and prints the
 # seed of any failure; "dev" explores more examples locally.
 settings.register_profile(

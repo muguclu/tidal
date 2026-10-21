@@ -75,6 +75,8 @@ build-backend = "uv_build"
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
+# tests/ is on sys.path so shared fakes import as `fakes.*` in any import mode.
+pythonpath = ["tests"]
 addopts = ["--strict-markers", "--strict-config", "-ra"]
 xfail_strict = true
 markers = [
