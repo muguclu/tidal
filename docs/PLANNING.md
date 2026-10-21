@@ -70,11 +70,13 @@ Items marked `NEEDS-CLOUD` are written and validated locally in their phase but 
 the cloud window (`LOCAL-DEV.md` §2); `/gate` reports them as NEEDS-CLOUD, which does not block the gate.
 
 **Gate G0**
-- [ ] `uv sync && pre-commit && pytest` green in CI on an empty skeleton
-- [ ] All contracts in `docs/contracts/` reviewed and tagged `contracts-v1`
-- [ ] `src/tidal/contracts/` models generated & contract tests pass
-- [ ] Branch protection + CODEOWNERS + PR template active on `main`
-- [ ] Terraform bootstrap + OIDC module `terraform validate` clean (`NEEDS-CLOUD`: state account applied, OIDC login works)
+- [x] `uv sync && pre-commit && pytest` green in CI on an empty skeleton
+- [x] All contracts in `docs/contracts/` reviewed and tagged `contracts-v1`
+- [x] `src/tidal/contracts/` models generated & contract tests pass
+- [x] Branch protection + CODEOWNERS + PR template active on `main`
+- [x] Terraform bootstrap + OIDC module `terraform validate` clean (`NEEDS-CLOUD`: state account applied, OIDC login works)
+
+G0 passed 2026-10-22 — evidence in `docs/status/2026-W43-G0.md`; tag `contracts-v1`.
 
 ### Phase 1 — Data core & infra base (Wave 1, 3 parallel lanes)
 Lane A data: synthetic generator, EIA/FRED sources, normaliser, epoch Parquet writer, layout.

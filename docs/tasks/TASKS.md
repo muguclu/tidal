@@ -24,7 +24,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | T-007 | Repo governance | platform-engineer | W0b/L1 | T-002 | `.github/CODEOWNERS`, `.github/pull_request_template.md`, `.github/ISSUE_TEMPLATE/**`, `scripts/protect-main.sh`, `.github/workflows/review-checklist.yml` | branch protection applied; demo PR shows required checks | done |
 | T-008 | TF bootstrap + CI OIDC | infra-engineer | W0b/L5 | — | `infra/terraform/bootstrap/**`, `docs/runbooks/bootstrap.md`, `.github/workflows/oidc-smoke.yml`, `docs/finops/deltas/T-008.md` | `terraform validate`/tflint/checkov clean; runbook complete; `NEEDS-CLOUD`: state account exists, OIDC login works in the smoke workflow | done |
 
-**Gate G0** → PLANNING.md §4. Tag `contracts-v1`.
+**Gate G0** → PLANNING.md §4. **Passed 2026-10-22**, tagged `contracts-v1`. NEEDS-CLOUD (cloud-window day 1): T-008 state account apply + OIDC smoke.
 
 ---
 
