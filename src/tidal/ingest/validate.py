@@ -20,11 +20,13 @@ Flag definitions (documented choices)
     first 31 observations of a series are never flagged. A degenerate ``sigma`` (at most
     ``1e-10 * |x_i|``, e.g. a flat series) never flags. A spike also makes the *reversion* row's
     difference large, so the row after a spike is typically flagged as well. Windows do not span
-    separate calls: validate in chunks large enough for the warm-up to matter little.
+    separate calls (known limitation: no carry-over context between chunks, so each chunk
+    restarts the warm-up, and the first row of a chunk never carries ``GAP_BEFORE``).
 ``GAP_BEFORE``
     Only for ``1d`` bars: at least one Monday-Friday date lies strictly between the previous
-    distinct bar date and this one, using the *exchange-local* date (``exchange_tz`` mapping,
-    UTC when absent). No holiday calendar (out of scope), so holidays are flagged as gaps, and
+    distinct bar date and this one, using the UTC date of ``ts_ns`` (ADR-0009: daily bars sit at
+    UTC midnight of the trade date, so DST never shifts the weekday). No holiday
+    calendar (out of scope), so holidays are flagged as gaps, and
     weekends are never expected. The first row of a series never carries it. Ticks and bars of
     other intervals are not gap-checked here.
 ``RESTATED``
@@ -103,16 +105,8 @@ def _outlier(x: pl.Expr, keys: list[str]) -> pl.Expr:
     return flagged.fill_null(value=False)
 
 
-def _local_date(exchange_tz: Mapping[str, str]) -> pl.Expr:
-    utc = pl.col("ts_ns").cast(_NS).dt.replace_time_zone("UTC")
-    expr = utc.dt.date()
-    for instrument, tz in exchange_tz.items():
-        expr = (
-            pl.when(pl.col("instrument_id") == instrument)
-            .then(utc.dt.convert_time_zone(tz).dt.date())
-            .otherwise(expr)
-        )
-    return expr
+def _utc_date() -> pl.Expr:
+    return pl.col("ts_ns").cast(_NS).dt.date()
 
 
 def _flag_bits(**flags: pl.Expr) -> pl.Expr:
@@ -140,9 +134,7 @@ def _validate_ticks(df: pl.DataFrame, *, synthetic: bool) -> pl.Expr:
     )
 
 
-def _validate_bars(
-    df: pl.DataFrame, *, synthetic: bool, exchange_tz: Mapping[str, str]
-) -> tuple[pl.DataFrame, pl.Expr]:
+def _validate_bars(df: pl.DataFrame, *, synthetic: bool) -> tuple[pl.DataFrame, pl.Expr]:
     df = df.with_columns(
         pl.col("instrument_id").cast(pl.String), pl.col("interval").cast(pl.String)
     )
@@ -167,21 +159,17 @@ def _validate_bars(
         .agg(pl.col("close").last())
         .sort([*keys, "ts_ns"])
     )
-    try:
-        date = _local_date(exchange_tz)
-        prev = date.shift(1).over(keys)
-        series = series.with_columns(
-            _outlier(pl.col("close"), keys).alias("_outlier"),
-            (
-                (pl.col("interval") == Interval.D1.value)
-                & (pl.business_day_count(prev + pl.duration(days=1), date) > 0)
-            )
-            .fill_null(value=False)
-            .alias("_gap"),
+    date = _utc_date()
+    prev = date.shift(1).over(keys)
+    series = series.with_columns(
+        _outlier(pl.col("close"), keys).alias("_outlier"),
+        (
+            (pl.col("interval") == Interval.D1.value)
+            & (pl.business_day_count(prev + pl.duration(days=1), date) > 0)
         )
-    except pl.exceptions.ComputeError as exc:
-        msg = "exchange_tz contains an unknown time zone"
-        raise ValueError(msg) from exc
+        .fill_null(value=False)
+        .alias("_gap"),
+    )
     df = df.join(
         series.select([*keys, "ts_ns", "_outlier", "_gap"]),
         on=[*keys, "ts_ns"],
@@ -202,19 +190,15 @@ def validate_and_flag(
     table: pa.Table,
     *,
     synthetic: bool = False,
-    exchange_tz: Mapping[str, str] | None = None,
 ) -> pa.Table:
     """Return ``table`` with ``quality`` flags set; all other columns are untouched.
 
     Args:
         table: a ``TICK_V1`` or ``BAR_V1`` table, sorted by ``ts_ns`` within each instrument.
         synthetic: set ``SYNTHETIC`` on all rows (caller knows the source is ``SYN``).
-        exchange_tz: ``instrument_id -> IANA tz`` used to find the local weekday of ``1d`` bars
-            for ``GAP_BEFORE``; instruments not listed use UTC dates.
 
     Raises:
         SchemaViolation: on any contract violation (see module docstring).
-        ValueError: if ``exchange_tz`` holds an unknown time zone.
     """
     schema = _detect(table)
     nulls = [f.name for f in schema if not f.nullable and table.column(f.name).null_count]
@@ -226,7 +210,7 @@ def validate_and_flag(
     if schema is TICK_V1:
         bits = _validate_ticks(df, synthetic=synthetic)
     else:
-        df, bits = _validate_bars(df, synthetic=synthetic, exchange_tz=exchange_tz or {})
+        df, bits = _validate_bars(df, synthetic=synthetic)
     quality = df.select((pl.col("quality").cast(pl.Int16) | bits).cast(pl.Int8))["quality"]
     index = table.schema.get_field_index("quality")
     return table.set_column(index, schema.field("quality"), quality.to_arrow())

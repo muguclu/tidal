@@ -16,6 +16,7 @@ DST policy for ``exchange_local_to_utc_ns`` (documented choice):
   i.e. interpreted with the offset in force before the transition (``01:30`` becomes ``02:30``
   local). Gaps are assumed to be 1 hour, which holds for every zone in the instrument catalogue.
 - Time zone data comes from polars' bundled IANA database (no ``tzdata`` package needed on Windows).
+  Accepted trade-off: tz rules move with polars upgrades (a pinned polars pins the rules).
 """
 
 import re
@@ -39,6 +40,9 @@ INTERVAL_NS: Final[Mapping[Interval, int]] = {
     Interval.D1: 86_400 * NS_PER_SECOND,
 }
 _EPOCH: Final = datetime(1970, 1, 1, tzinfo=UTC)
+_OFFSET_ISO: Final = re.compile(
+    r"(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?)(?:\.(\d{1,9}))?([+-]\d{2}(?::?\d{2})?)"
+)
 _NAIVE_ISO: Final = re.compile(r"\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?)?")
 
 
@@ -53,12 +57,27 @@ def _check_range(ns: int) -> int:
     return ns
 
 
+def _parse_offset_string(value: str) -> int:
+    """ISO-8601 with an explicit offset; the fraction (<= 9 digits) is kept to the nanosecond."""
+    match = _OFFSET_ISO.fullmatch(value)
+    if match is None:
+        msg = f"unparseable timestamp {value!r}"
+        raise ValueError(msg)
+    base, fraction, offset = match.groups()
+    try:
+        whole = datetime.fromisoformat(base + offset)  # whole seconds only: no precision loss
+    except ValueError:
+        msg = f"unparseable timestamp {value!r}"
+        raise ValueError(msg) from None
+    return _check_range(to_ts_ns(whole) + int((fraction or "").ljust(9, "0") or 0))
+
+
 def to_ts_ns(value: datetime | str) -> int:
     """Convert an aware ``datetime`` or a string to UTC epoch nanoseconds.
 
     Strings: the contract forms (``...Z`` ISO with up to 9 fraction digits, or epoch-ns digits) go
     through ``tidal.contracts.models.to_ts_ns``; other ISO-8601 strings with an explicit UTC offset
-    (``+01:00``) are accepted at microsecond precision.
+    (``+01:00``) are accepted with the fraction kept to the nanosecond (integer maths).
 
     Raises:
         NaiveDatetimeError: for a naive datetime or a string without offset.
@@ -75,12 +94,7 @@ def to_ts_ns(value: datetime | str) -> int:
         if _NAIVE_ISO.fullmatch(value):
             msg = f"naive timestamp {value!r} rejected; use an explicit offset or Z"
             raise NaiveDatetimeError(msg) from None
-        try:
-            parsed = datetime.fromisoformat(value)
-        except ValueError:
-            msg = f"unparseable timestamp {value!r}"
-            raise ValueError(msg) from None
-        return to_ts_ns(parsed)
+        return _parse_offset_string(value)
 
 
 def from_ts_ns(ts_ns: int) -> datetime:

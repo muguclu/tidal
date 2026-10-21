@@ -121,6 +121,32 @@ def test_outlier_injected() -> None:
     assert not (flags[2001:] & OUT).any()  # level shift: later diffs are normal again
 
 
+def test_outlier_spike_and_revert_flags_both_rows() -> None:
+    n = 3000
+    rng = np.random.Generator(np.random.PCG64(11))
+    price = 100.0 + np.cumsum(rng.normal(0.0, 0.05, n))
+    price[2000] += 5.0  # single-row spike, then back to the path
+    flags = np.array(q(validate_and_flag(ticks(list(range(1, n + 1)), price.tolist()))))
+    assert flags[2000] & OUT
+    assert flags[2001] & OUT  # decision: the reversion's |diff| is also > 8 sigma
+    assert not (flags[:2000] & OUT).any()
+    assert not (flags[2002:] & OUT).any()
+
+
+def test_outlier_on_daily_bars() -> None:
+    n = 400  # consecutive weekdays
+    rng = np.random.Generator(np.random.PCG64(5))
+    close = 50.0 + np.cumsum(rng.normal(0.0, 0.2, n))
+    close[300:] += 20.0
+    days = [d(2020, 1, 1) + i * DAY for i in range(7 * n // 5 + 10)]
+    days = [t for t in days if ((t // DAY) + 3) % 7 < 5][:n]  # epoch day 0 is a Thursday
+    out = np.array(q(validate_and_flag(bars(days, close.tolist()))))
+    assert out[300] & OUT
+    assert not (out[:300] & OUT).any()
+    assert not (out[301:] & OUT).any()
+    assert not (out & GAP).any()
+
+
 def test_outlier_warmup_and_flat_series_not_flagged() -> None:
     price = [100.0 + 0.01 * i for i in range(20)] + [500.0]  # < 30 prior diffs -> warm-up
     assert not any(q(validate_and_flag(ticks(list(range(1, 22)), price))))
@@ -149,14 +175,13 @@ def test_gap_weekend_is_not_a_gap_but_missing_wednesday_is() -> None:
     assert q(validate_and_flag(bars(days, [1.0, 2.0, 3.0, 4.0, 5.0]))) == [0, 0, GAP, 0, 0]
 
 
-def test_gap_uses_exchange_local_date() -> None:
-    # London midnight in summer = 23:00 UTC the previous day. Sun 23:00 UTC is Mon local.
-    h = 3_600 * 1_000_000_000
-    fri, mon = d(2021, 7, 8) + 23 * h, d(2021, 7, 11) + 23 * h  # Fri 9th local, Mon 12th local
-    table = bars([fri, mon], [1.0, 2.0], inst="EIA.BRENT.SPOT")
-    assert q(validate_and_flag(table, exchange_tz={"EIA.BRENT.SPOT": "Europe/London"})) == [0, 0]
-    with pytest.raises(ValueError, match="time zone"):
-        validate_and_flag(table, exchange_tz={"EIA.BRENT.SPOT": "Mars/Base"})
+def test_no_false_gap_across_dst_weekend() -> None:
+    # ADR-0009: UTC-midnight dates. Fri 2021-03-26 -> Mon 2021-03-29 spans the London DST switch.
+    days = [d(2021, 3, 25), d(2021, 3, 26), d(2021, 3, 29), d(2021, 3, 30)]
+    assert q(validate_and_flag(bars(days, [1.0, 2.0, 3.0, 4.0], inst="EIA.BRENT.SPOT"))) == [0] * 4
+    # Same for the US switch (Sun 2021-03-14) and the autumn ones.
+    for fri, mon in [((2021, 3, 12), (2021, 3, 15)), ((2021, 10, 29), (2021, 11, 1))]:
+        assert q(validate_and_flag(bars([d(*fri), d(*mon)], [1.0, 2.0]))) == [0, 0]
 
 
 def test_gaps_not_flagged_for_ticks_or_intraday_bars() -> None:

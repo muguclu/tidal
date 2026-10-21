@@ -1,4 +1,4 @@
-import re
+import tomllib
 from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -72,12 +72,42 @@ def test_naive_strings_raise(bad: str) -> None:
         to_ts_ns(bad)
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("2021-01-01T01:00:00.123456789+01:00", utc(2021, 1, 1) + 123_456_789),
+        ("2021-01-01T00:00:00.5-05:30", utc(2021, 1, 1, 5, 30) + 500_000_000),
+        ("2021-01-01T01:00:00.000000001+0100", utc(2021, 1, 1) + 1),
+        ("2021-01-01T01:00+01:00", utc(2021, 1, 1)),
+    ],
+)
+def test_offset_strings_keep_nanoseconds(text: str, expected: int) -> None:
+    assert to_ts_ns(text) == expected
+
+
+@given(st.integers(0, 999_999_999), st.integers(-14, 14))
+def test_offset_string_matches_z_form(nanos: int, hours: int) -> None:
+    local = datetime(2021, 6, 1, 12, tzinfo=UTC) + timedelta(hours=hours)
+    sign = "-" if hours < 0 else "+"
+    text = f"{local:%Y-%m-%dT%H:%M:%S}.{nanos:09d}{sign}{abs(hours):02d}:00"
+    assert to_ts_ns(text) == utc(2021, 6, 1, 12) + nanos
+
+
 def test_naive_datetime_raises() -> None:
     with pytest.raises(NaiveDatetimeError):
         to_ts_ns(datetime(2021, 1, 1))  # noqa: DTZ001 - the point of the test
 
 
-@pytest.mark.parametrize("bad", ["garbage", "99999999999999999999", "2021-13-01T00:00:00Z"])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "garbage",
+        "99999999999999999999",
+        "2021-13-01T00:00:00Z",
+        "2021-13-01T00:00:00+01:00",
+        "2021-01-01T00:00:00.1234567891+01:00",
+    ],
+)
 def test_unparseable_raises_value_error(bad: str) -> None:
     with pytest.raises(ValueError, match=r"."):
         to_ts_ns(bad)
@@ -213,15 +243,11 @@ def test_clock_from_settings() -> None:
     assert frozen.now_ns() == utc(2025, 12, 31, 23, 59, 59)
 
 
-def test_only_system_clock_reads_wall_time() -> None:
-    root = Path(timeutil.__file__).resolve().parents[1]
-    pattern = re.compile(r"datetime\.(now|utcnow|today)\(|\btime\.(time|time_ns)\(|\bdate\.today\(")
-    offenders = [
-        f"{path.relative_to(root)}:{n}"
-        for path in root.rglob("*.py")
-        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
-        if pattern.search(line) and path.name != "timeutil.py"
-    ]
-    assert offenders == []
-    own = Path(timeutil.__file__).read_text(encoding="utf-8")
-    assert len(pattern.findall(own)) == 1  # the single time.time_ns() in SystemClock
+def test_ruff_bans_wall_clock_calls_outside_timeutil() -> None:
+    """ruff TID251 enforces 'only the Clock reads wall time' in CI; check it stays configured."""
+    root = Path(timeutil.__file__).resolve().parents[3]
+    config = tomllib.loads((root / "ruff.toml").read_text(encoding="utf-8"))
+    banned = config["lint"]["flake8-tidy-imports"]["banned-api"]
+    for api in ("datetime.datetime.now", "datetime.datetime.utcnow", "time.time", "time.time_ns"):
+        assert api in banned
+    assert config["lint"]["per-file-ignores"]["src/tidal/common/timeutil.py"] == ["TID251"]
