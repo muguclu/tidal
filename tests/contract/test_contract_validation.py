@@ -1,6 +1,7 @@
 """Validation rules of the contract models (data-contracts, api-contract, messaging-contract)."""
 
 import math
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -19,6 +20,8 @@ from tidal.contracts.messages import (
 )
 from tidal.contracts.models import (
     MAX_SWEEP_CHILDREN,
+    TIME_PARAM_MAX_LENGTH,
+    TIME_PARAM_PATTERN,
     BacktestAccepted,
     BacktestList,
     BacktestMetrics,
@@ -248,18 +251,53 @@ def test_bad_backtest_requests_rejected(over: dict[str, Any]) -> None:
 def test_time_parameters_normalise_to_ts_ns() -> None:
     assert to_ts_ns(TS) == TS_NS
     assert to_ts_ns(str(TS_NS)) == TS_NS
-    assert to_ts_ns("2020-04-20T02:00:00+02:00") == TS_NS
+    assert to_ts_ns("2020-04-20T00:00:00.000000001Z") == TS_NS + 1
+    assert to_ts_ns("2020-04-20T00:00:00.5Z") == TS_NS + 500_000_000
+    assert to_ts_ns("1969-12-31T23:59:59Z") == -1_000_000_000
     req = BacktestRequest.model_validate(bt(start=str(TS_NS), end=TS_NS + 1))
     assert (req.root.start, req.root.end) == (TS_NS, TS_NS + 1)
-    with pytest.raises(ValueError, match="ISO-8601"):
-        to_ts_ns(1.5)
 
 
-@given(st.datetimes(timezones=st.just(UTC)))
-def test_to_ts_ns_is_exact(dt: datetime) -> None:
-    ns = to_ts_ns(dt.isoformat())
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "2020-04-20T02:00:00+02:00",  # offsets other than Z are rejected
+        "2020-04-20T00:00:00+00:00",
+        "2020-04-20T00:00:00z",
+        "2020-04-20T00:00:00",
+        "2020-04-20 00:00:00Z",
+        "2020-04-20",
+        "2020-04-20T25:00:00Z",
+        "2020-04-20T00:00:00.1234567891Z",  # finer than ns
+        "-1",
+        "1" * 20,
+        "",
+        1.5,
+        True,
+        datetime(2020, 4, 20, tzinfo=UTC),
+    ],
+)
+def test_time_parameters_outside_time_param_rejected(bad: object) -> None:
+    with pytest.raises(ValueError, match="ISO-8601 UTC"):
+        to_ts_ns(bad)
+
+
+@given(st.datetimes())
+def test_to_ts_ns_is_exact(naive: datetime) -> None:
+    ns = to_ts_ns(naive.isoformat() + "Z")
     assert ns % 1000 == 0
-    assert datetime(1970, 1, 1, tzinfo=UTC) + timedelta(microseconds=ns // 1000) == dt
+    epoch = datetime(1970, 1, 1)  # noqa: DTZ001 - naive on purpose, mirrors the naive input
+    assert epoch + timedelta(microseconds=ns // 1000) == naive
+
+
+@given(st.text(alphabet="0123456789-T:.Zz+ ", max_size=40))
+def test_accepted_strings_match_time_param_pattern(text: str) -> None:
+    try:
+        to_ts_ns(text)
+    except ValueError:
+        return
+    assert len(text) <= TIME_PARAM_MAX_LENGTH
+    assert re.fullmatch(TIME_PARAM_PATTERN, text)
 
 
 @pytest.mark.parametrize("job_id", [JOB_ID, "bt_7ZZZZZZZZZZZZZZZZZZZZZZZZZ"])

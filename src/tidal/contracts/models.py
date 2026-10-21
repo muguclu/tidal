@@ -31,6 +31,10 @@ SHA256_PATTERN: Final = r"^[0-9a-f]{64}$"
 MAX_SWEEP_CHILDREN: Final = 200
 MAX_SWEEP_KEYS: Final = 3
 _EPOCH: Final = datetime(1970, 1, 1, tzinfo=UTC)
+#: openapi ``TimeParam``; validation accepts exactly these strings (when they are real dates).
+TIME_PARAM_PATTERN: Final = r"^([0-9]{1,19}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z)$"
+TIME_PARAM_MAX_LENGTH: Final = 35
+_ISO_UTC: Final = re.compile(r"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+)(?:\.([0-9]{1,9}))?Z")
 
 Finite = Annotated[float, Field(allow_inf_nan=False)]
 NonNegative = Annotated[float, Field(ge=0, allow_inf_nan=False)]
@@ -43,22 +47,31 @@ Count = Annotated[int, Field(ge=0)]
 
 
 def to_ts_ns(value: object) -> int:
-    """Normalise an ISO-8601 date-time with offset, or an epoch-ns integer (string), to ``ts_ns``.
+    """Normalise a ``TimeParam`` (ISO-8601 UTC with ``Z``, or epoch-ns digits) to ``ts_ns``.
+
+    Integers pass through (already ``ts_ns``, e.g. when re-validating a dumped model). Fractions are
+    kept to the nanosecond.
 
     Raises:
-        ValueError: for naive date-times or unparseable input.
+        ValueError: if a string does not match ``TIME_PARAM_PATTERN`` or is not a valid date-time.
     """
     if isinstance(value, int) and not isinstance(value, bool):
         return value
-    if isinstance(value, str) and re.fullmatch(r"[0-9]{1,19}", value):
-        return int(value)
-    if isinstance(value, str):
-        value = datetime.fromisoformat(value)
-    if not isinstance(value, datetime) or value.tzinfo is None:
-        msg = "expected an ISO-8601 date-time with offset (e.g. ...Z) or an epoch-ns integer"
-        raise ValueError(msg)
-    delta = value - _EPOCH  # exact integer arithmetic, no float rounding
-    return (delta.days * 86_400 + delta.seconds) * 10**9 + delta.microseconds * 1_000
+    if isinstance(value, str) and len(value) <= TIME_PARAM_MAX_LENGTH:
+        if re.fullmatch(r"[0-9]{1,19}", value):
+            return int(value)
+        if (m := _ISO_UTC.fullmatch(value)) and re.fullmatch(TIME_PARAM_PATTERN, value):
+            try:
+                base = datetime.fromisoformat(m[1]).replace(tzinfo=UTC)
+            except ValueError:
+                pass
+            else:
+                delta = base - _EPOCH  # exact integer arithmetic, no float rounding
+                return (delta.days * 86_400 + delta.seconds) * 10**9 + int(
+                    (m[2] or "").ljust(9, "0")
+                )
+    msg = "expected an ISO-8601 UTC date-time ending in Z, or epoch nanoseconds as digits"
+    raise ValueError(msg)
 
 
 #: openapi ``TimeParam``: ISO-8601 UTC or epoch-ns string in; held as ``ts_ns``; JSON out as string.
@@ -67,11 +80,7 @@ TsNs = Annotated[
     BeforeValidator(to_ts_ns),
     PlainSerializer(str, return_type=str, when_used="json"),
     WithJsonSchema(
-        {
-            "type": "string",
-            "maxLength": 35,
-            "pattern": "^([0-9]{1,19}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z)$",
-        }
+        {"type": "string", "maxLength": TIME_PARAM_MAX_LENGTH, "pattern": TIME_PARAM_PATTERN}
     ),
 ]
 

@@ -116,9 +116,6 @@ OBJECT_COMPONENTS = sorted(
     for name, schema in YAML_DEFS.items()
     if name in PYD_DEFS and ("properties" in schema or "allOf" in schema)
 )
-KNOWN_DRIFT = {
-    "BacktestMetrics": "openapi.yaml metrics are not nullable; api-contract §3 note says they are",
-}
 
 
 def test_every_api_component_is_compared() -> None:
@@ -132,15 +129,7 @@ def test_every_api_component_is_compared() -> None:
     assert required <= set(OBJECT_COMPONENTS)
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        pytest.param(n, marks=pytest.mark.xfail(reason=KNOWN_DRIFT[n], strict=True))
-        if n in KNOWN_DRIFT
-        else n
-        for n in OBJECT_COMPONENTS
-    ],
-)
+@pytest.mark.parametrize("name", OBJECT_COMPONENTS)
 def test_component_matches_openapi(name: str) -> None:
     compare(YAML_DEFS[name], PYD_DEFS[name], name, top=True)
 
