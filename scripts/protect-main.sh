@@ -13,7 +13,12 @@
 # - Required approving reviews = 0: this is a solo-owner repo and GitHub forbids approving your
 #   own PR, so a review count >= 1 would make main unmergeable. The review gate is the required
 #   `review-checklist` status check instead (SPEC-08 §1 solo note, option 2). A PR is still required.
-# - enforce_admins = false so the owner can recover from a broken protection/CI state.
+# - enforce_admins = true: protection applies to the owner too. The owner/orchestrator still merges
+#   green PRs normally (0 approvals needed). Recovery from a broken CI/protection state stays possible
+#   via a deliberate protection change through the API (e.g. DELETE/PUT on the protection endpoint).
+# - `iac` and `image-scan` (SPEC-08 §3) are not required yet: their workflows do not exist, and
+#   conditional checks that never report would block every PR. Add them when T-127/T-308 land.
+# - Required checks are pinned to GitHub Actions (app_id 15368) so only Actions results count.
 # - Signed commits are NOT required: agent commits on the dev box are unsigned. This deviates from
 #   SPEC-08 §1 ("signed commits"); revisit once commit signing is set up.
 set -euo pipefail
@@ -35,7 +40,7 @@ done
 command -v gh >/dev/null || { echo "gh not found" >&2; exit 1; }
 # Check names must match `name:` of jobs in ci.yml / review-checklist.yml.
 CHECKS=(lint types tests coverage secrets-scan contracts openapi-diff review-checklist)
-CHECKS_JSON=$(printf '"%s",' "${CHECKS[@]}")
+CHECKS_JSON=$(printf '{"context":"%s","app_id":15368},' "${CHECKS[@]}")
 CHECKS_JSON="[${CHECKS_JSON%,}]"
 
 SETTINGS_JSON=$(cat <<JSON
@@ -52,8 +57,8 @@ JSON
 
 PROTECTION_JSON=$(cat <<JSON
 {
-  "required_status_checks": { "strict": true, "contexts": $CHECKS_JSON },
-  "enforce_admins": false,
+  "required_status_checks": { "strict": true, "checks": $CHECKS_JSON },
+  "enforce_admins": true,
   "required_pull_request_reviews": {
     "required_approving_review_count": 0,
     "dismiss_stale_reviews": false,
@@ -103,7 +108,7 @@ EOF2
     want_prot=$( {
       printf 'allow_deletions=false
 allow_force_pushes=false
-enforce_admins=false
+enforce_admins=true
 '
       printf 'required_approving_review_count=0
 required_conversation_resolution=true
@@ -112,7 +117,7 @@ required_conversation_resolution=true
 strict=true
 '
       printf '%s
-' "${CHECKS[@]}" | sort | sed 's/^/check=/'
+' "${CHECKS[@]}" | sort | sed 's/$/@15368/;s/^/check=/'
     } | sort )
     actual_prot=$(gh api "repos/$REPO/branches/$BRANCH/protection" --jq '
       ["allow_deletions=\(.allow_deletions.enabled)", "allow_force_pushes=\(.allow_force_pushes.enabled)",
@@ -121,7 +126,10 @@ strict=true
        "required_conversation_resolution=\(.required_conversation_resolution.enabled)",
        "required_linear_history=\(.required_linear_history.enabled)",
        "strict=\(.required_status_checks.strict)"]
-      + [.required_status_checks.contexts[] | "check=\(.)"] | .[]' | sort)
+      + [.required_status_checks.checks[] | "check=\(.context)@\(.app_id)"] | .[]' | sort) || {
+      echo "DRIFT: cannot read protection for $BRANCH (not protected?)" >&2
+      exit 1
+    }
     diff <(echo "$want_settings" | sort) <(echo "$actual_settings" | sort) || rc=1
     diff <(echo "$want_prot") <(echo "$actual_prot") || rc=1
     if [ "$rc" -eq 0 ]; then echo "OK: $REPO matches desired state"; else echo "DRIFT detected (< desired, > actual)" >&2; fi
