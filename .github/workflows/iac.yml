@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: iac-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -54,7 +54,7 @@ jobs:
           # A root is a directory that can be `terraform init`-ed on its own: bootstrap/,
           # every modules/*/examples/*, and (once they exist) envs/*.
           # Each entry also carries the nearest .tflint.hcl found walking up to $TF_ROOT.
-          entries=()
+          entries=""
           for dir in "$TF_ROOT/bootstrap" "$TF_ROOT"/modules/*/examples/* "$TF_ROOT"/envs/*; do
             [ -d "$dir" ] || continue
             compgen -G "$dir/*.tf" > /dev/null || continue
@@ -69,15 +69,33 @@ jobs:
               echo "::error::no .tflint.hcl found for $dir (looked up to $TF_ROOT)"
               exit 1
             fi
-            entries+=("{\"root\":\"${dir#"$TF_ROOT"/}\",\"path\":\"$dir\",\"tflint_config\":\"$cfg\"}")
+            entries+="$(jq -nc --arg root "${dir#"$TF_ROOT"/}" --arg path "$dir" --arg cfg "$cfg" \
+              '{root: $root, path: $path, tflint_config: $cfg}')"$'\n'
           done
-          if [ "${#entries[@]}" -eq 0 ]; then
+          if [ -z "$entries" ]; then
             echo "::error::no Terraform roots found under $TF_ROOT"
             exit 1
           fi
-          matrix="{\"include\":[$(IFS=,; echo "${entries[*]}")]}"
+          matrix="$(printf '%s' "$entries" | jq -sc '{include: .}')"
           echo "$matrix"
           echo "matrix=$matrix" >> "${GITHUB_OUTPUT:-/dev/stdout}"
+
+  fmt:
+    name: fmt
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff infra/terraform
 
   roots:
     name: terraform (${{ matrix.root }})
@@ -96,8 +114,6 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
-      - name: terraform fmt
-        run: terraform fmt -check -recursive -diff infra/terraform
       - name: terraform init (no backend, locked providers)
         working-directory: ${{ matrix.path }}
         run: terraform init -backend=false -lockfile=readonly
@@ -123,7 +139,8 @@ jobs:
           directory: ${{ matrix.path }}
           framework: terraform
           soft_fail: false
-          download_external_modules: true
+          # No remote modules exist yet (only local `../..` sources); enable when one is introduced.
+          download_external_modules: false
           quiet: true
           output_format: cli,json
           output_file_path: console,checkov-results
@@ -149,14 +166,15 @@ jobs:
   # or when nothing under infra/** changed and the legs were skipped on purpose.
   iac:
     name: iac
-    needs: [changes, roots]
-    if: always()
+    needs: [changes, fmt, roots]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Aggregate
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
+          FMT_RESULT: ${{ needs.fmt.result }}
           ROOTS_RESULT: ${{ needs.roots.result }}
           INFRA_CHANGED: ${{ needs.changes.outputs.infra }}
         run: |
@@ -168,11 +186,18 @@ jobs:
             echo "::notice::no infra/** changes; terraform checks skipped"
             exit 0
           fi
+          if [ "$FMT_RESULT" != "success" ]; then
+            echo "::error::terraform fmt result: $FMT_RESULT"
+            exit 1
+          fi
           if [ "$ROOTS_RESULT" != "success" ]; then
             echo "::error::terraform matrix result: $ROOTS_RESULT"
             exit 1
           fi
 
+  # Security: sp-tidal-ci-plan must hold federated credentials ONLY for subject
+  # `ref:refs/heads/main` and `pull_request`, and only the Reader + Storage Blob Data Reader roles.
+  # Never grant it write roles or an environment subject. See docs/runbooks/bootstrap.md.
   # NEEDS-CLOUD: inactive until the repo variable AZURE_PLAN_CLIENT_ID is set (client id of the
   # read-only sp-tidal-ci-plan app, see docs/runbooks/bootstrap.md). Plan only; never apply.
   plan:
@@ -220,6 +245,7 @@ jobs:
       - name: terraform plan (read-only, no state lock)
         if: steps.env.outputs.present == 'true'
         working-directory: infra/terraform/envs/dev
+        shell: bash # bash -e -o pipefail: a failed plan must fail the job despite `| tee`
         run: |
           terraform init -lockfile=readonly
           terraform plan -lock=false -no-color -out=tfplan | tee plan.txt
