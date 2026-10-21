@@ -68,6 +68,40 @@ def test_cause_text_never_reaches_detail() -> None:
         assert leaked not in problem
 
 
+SUBCLASSES = [
+    ValidationFailed,
+    Unauthenticated,
+    Forbidden,
+    NotFound,
+    RangeTooLarge,
+    DependencyUnavailable,
+    ConfigError,
+]
+
+
+@pytest.mark.parametrize("cls", SUBCLASSES, ids=lambda c: c.__name__)
+def test_exception_rejected_as_detail(cls: type[TidalError]) -> None:
+    cause = RuntimeError("SELECT password FROM users")
+    with pytest.raises(TypeError, match="caller-written text"):
+        cls(cause)  # type: ignore[arg-type]
+
+
+def test_rate_limited_rejects_exception_detail() -> None:
+    with pytest.raises(TypeError, match="caller-written text"):
+        RateLimited(1, RuntimeError("boom"))  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("cls", SUBCLASSES, ids=lambda c: c.__name__)
+def test_detail_is_caller_text_only(cls: type[TidalError]) -> None:
+    try:
+        raise ValueError("internal: stack and SQL")
+    except ValueError as exc:
+        err = cls("caller text")
+        err.__cause__ = exc
+    assert err.detail == "caller text"
+    assert err.to_problem(CID).detail == "caller text"
+
+
 def test_rate_limited_retry_after() -> None:
     assert RateLimited(retry_after=30).retry_after == 30
     with pytest.raises(ValueError, match="retry_after"):

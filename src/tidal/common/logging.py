@@ -26,6 +26,20 @@ SECRET_KEY_PATTERN = re.compile(
     r"password|secret|token|key|connection_string|authorization", re.IGNORECASE
 )
 
+# Secret-looking substrings inside free text (rendered messages, exception/traceback text).
+_SECRET_VALUE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(
+            r"\b(AccountKey|SharedAccessKey|SharedAccessSignature|Password|Pwd|sig)=[^;&\s'\"]+",
+            re.IGNORECASE,
+        ),
+        rf"\1={REDACTED}",
+    ),
+    (re.compile(r"\bBearer\s+[A-Za-z0-9\-._~+/]+=*", re.IGNORECASE), f"Bearer {REDACTED}"),
+    (re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*"), REDACTED),
+)
+PRINCIPAL_KEYS = ("principal_oid", "oid")
+
 _correlation_id: ContextVar[str | None] = ContextVar("tidal_correlation_id", default=None)
 
 
@@ -64,26 +78,40 @@ def hash_principal(oid: str) -> str:
     return hashlib.sha256(oid.encode()).hexdigest()
 
 
+def scrub_text(text: str) -> str:
+    """Mask connection-string secrets, SAS signatures, bearer tokens and JWTs inside ``text``."""
+    for pattern, replacement in _SECRET_VALUE_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
 def _redact_value(key: str, value: object) -> object:
     if isinstance(value, SecretStr) or SECRET_KEY_PATTERN.search(key):
         return REDACTED
+    if isinstance(value, str):
+        return scrub_text(value)
     if isinstance(value, dict):
         return {k: _redact_value(str(k), v) for k, v in value.items()}
-    if isinstance(value, list | tuple):
+    if isinstance(value, list | tuple | set | frozenset):
         return [_redact_value(key, v) for v in value]
     return value
 
 
 def redact_secrets(_logger: WrappedLogger, _method: str, event_dict: EventDict) -> EventDict:
-    """Mask values under secret-like keys (also nested) and every ``SecretStr`` value."""
-    return {k: _redact_value(k, v) for k, v in event_dict.items()}
+    """Mask secret-like keys and ``SecretStr`` values, and scrub secret patterns in all text.
+
+    Runs after positional-argument and exception formatting, so the rendered ``event`` and the
+    ``exception`` traceback text are scrubbed too. Internal ``_``-prefixed keys are left alone.
+    """
+    return {k: v if k.startswith("_") else _redact_value(k, v) for k, v in event_dict.items()}
 
 
 def hash_principal_oid(_logger: WrappedLogger, _method: str, event_dict: EventDict) -> EventDict:
-    """Replace a logged ``principal_oid`` with its sha256 hex digest."""
-    oid = event_dict.get("principal_oid")
-    if oid is not None:
-        event_dict["principal_oid"] = hash_principal(str(oid))
+    """Replace a logged ``principal_oid`` (or raw ``oid``) with its sha256 hex digest."""
+    for key in PRINCIPAL_KEYS:
+        oid = event_dict.get(key)
+        if oid is not None:
+            event_dict[key] = hash_principal(str(oid))
     return event_dict
 
 
@@ -115,6 +143,7 @@ def configure_logging(settings: Settings) -> None:
         _static_fields(settings.service_name),
         add_correlation_id,
         hash_principal_oid,
+        structlog.stdlib.PositionalArgumentsFormatter(),
         structlog.processors.format_exc_info,
         redact_secrets,
     ]

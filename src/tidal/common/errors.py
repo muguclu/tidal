@@ -24,7 +24,15 @@ class TidalError(Exception):
     title: ClassVar[str] = "Internal error"
 
     def __init__(self, detail: str | None = None) -> None:
-        """Create the error; ``detail`` must be safe to show to API clients."""
+        """Create the error; ``detail`` must be caller-written text safe to show to API clients.
+
+        Passing an exception is rejected so its message can never become ``detail``; chain it
+        with ``raise ... from exc`` instead.
+        """
+        # Runtime guard for callers that bypass the type checker (e.g. NotFound(exc)).
+        if detail is not None and not isinstance(detail, str):
+            msg = "detail must be caller-written text, not an exception or other object"  # type: ignore[unreachable]
+            raise TypeError(msg)
         super().__init__(detail or self.title)
         self.detail = detail
 

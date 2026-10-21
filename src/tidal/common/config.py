@@ -19,6 +19,7 @@ from pydantic import (
     AwareDatetime,
     BaseModel,
     ConfigDict,
+    Field,
     HttpUrl,
     SecretStr,
     TypeAdapter,
@@ -109,6 +110,13 @@ class SynthSettings(_Section):
     start: date = date(2005, 1, 1)
     end: date = date(2025, 12, 31)
 
+    @model_validator(mode="after")
+    def _start_not_after_end(self) -> Self:
+        if self.start > self.end:
+            msg = "TIDAL_SYNTH__START must be <= TIDAL_SYNTH__END"
+            raise ValueError(msg)
+        return self
+
 
 class ClockSettings(_Section):
     """``TIDAL_CLOCK__*``: local/test-only frozen "now"."""
@@ -169,7 +177,7 @@ class Settings(BaseSettings):
     env: Literal["local", "dev", "prod"] = "local"
     log_level: str = "INFO"
     service_name: Literal["api", "query", "worker", "ingest", "tiering", "legacy"] = "api"
-    hot_window_days: int = 90
+    hot_window_days: int = Field(default=90, gt=0)
     storage: StorageSettings = StorageSettings()
     sql: SqlSettings = SqlSettings()
     servicebus: ServiceBusSettings = ServiceBusSettings()
@@ -220,6 +228,14 @@ class Settings(BaseSettings):
         if self.env != "local":
             if self.auth.disabled:
                 problems.append("TIDAL_AUTH__DISABLED=true is only allowed when TIDAL_ENV=local")
+            elif self.auth.tenant_id is None:
+                problems.append(f"TIDAL_AUTH__TENANT_ID is required when TIDAL_ENV={self.env}")
+            if self.sql.auth != "entra_mi":
+                problems.append(f"TIDAL_SQL__AUTH must be entra_mi when TIDAL_ENV={self.env}")
+            if not self.storage.use_managed_identity:
+                problems.append(
+                    f"TIDAL_STORAGE__USE_MANAGED_IDENTITY must be true when TIDAL_ENV={self.env}"
+                )
             local_only = {
                 "TIDAL_STORAGE__CONNECTION_STRING": self.storage.connection_string,
                 "TIDAL_SERVICEBUS__CONNECTION_STRING": self.servicebus.connection_string,

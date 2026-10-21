@@ -23,6 +23,7 @@ from tidal.common.logging import (
     get_logger,
     new_correlation_id,
     reset_correlation_id,
+    scrub_text,
 )
 
 ULID_RE = r"[0-7][0-9A-HJKMNP-TV-Z]{25}"
@@ -123,6 +124,91 @@ def test_principal_oid_hashed(capsys: pytest.CaptureFixture[str]) -> None:
     (line,) = _lines(capsys)
     assert line["principal_oid"] == hashlib.sha256(oid.encode()).hexdigest()
     assert oid not in json.dumps(line)
+
+
+def test_raw_oid_hashed(capsys: pytest.CaptureFixture[str]) -> None:
+    _configure()
+    oid = "11111111-2222-3333-4444-555555555555"
+    get_logger().info("request", oid=oid)
+    (line,) = _lines(capsys)
+    assert line["oid"] == hashlib.sha256(oid.encode()).hexdigest()
+
+
+JWT = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl"
+
+
+@pytest.mark.parametrize(
+    ("text", "leaked"),
+    [
+        ("DefaultEndpointsProtocol=https;AccountKey=LEAKED==;EndpointSuffix=x", "LEAKED"),
+        ("Endpoint=sb://x/;SharedAccessKeyName=k;SharedAccessKey=LEAKED=", "LEAKED"),
+        ("SharedAccessSignature=LEAKED;Endpoint=x", "LEAKED"),
+        ("https://acct.blob.core.windows.net/c?sv=2024&sig=LEAKED%2Fx&se=1", "LEAKED"),
+        ("header Authorization: Bearer LEAKED.tok-en_9", "LEAKED"),
+        ("Server=db;Password=LEAKED;", "LEAKED"),
+        ("Server=db;pwd=LEAKED", "LEAKED"),
+        (f"token was {JWT} ok", "c2lnbmF0dXJl"),
+    ],
+)
+def test_scrub_text_masks_secret_patterns(text: str, leaked: str) -> None:
+    scrubbed = scrub_text(text)
+    assert leaked not in scrubbed
+    assert REDACTED in scrubbed
+
+
+def test_scrub_text_keeps_ordinary_text() -> None:
+    text = "fetched 3 bars for EIA.BRENT.SPOT signal=long key_count=2"
+    assert scrub_text(text) == text
+
+
+def test_structlog_exception_text_scrubbed(capsys: pytest.CaptureFixture[str]) -> None:
+    _configure()
+    try:
+        raise RuntimeError("AccountKey=LEAKED")
+    except RuntimeError:
+        get_logger().exception("upload_failed")
+    raw = capsys.readouterr().out
+    assert "LEAKED" not in raw
+    assert "RuntimeError: AccountKey=" in json.loads(raw)["exception"]
+
+
+def test_stdlib_exc_info_scrubbed(capsys: pytest.CaptureFixture[str]) -> None:
+    _configure()
+    try:
+        raise RuntimeError(f"Bearer {JWT}")
+    except RuntimeError:
+        logging.getLogger("azure.core").exception("request failed")
+    raw = capsys.readouterr().out
+    assert JWT not in raw
+    assert "RuntimeError" in json.loads(raw)["exception"]
+
+
+def test_stdlib_args_scrubbed(capsys: pytest.CaptureFixture[str]) -> None:
+    _configure()
+    logging.getLogger("azure").warning("conn %s", "AccountKey=x")
+    (line,) = _lines(capsys)
+    assert line["event"] == f"conn AccountKey={REDACTED}"
+
+
+def test_structlog_positional_args_scrubbed(capsys: pytest.CaptureFixture[str]) -> None:
+    _configure()
+    get_logger().info("conn %s", "Password=LEAKED")
+    raw = capsys.readouterr().out
+    assert "LEAKED" not in raw
+    assert json.loads(raw)["event"] == f"conn Password={REDACTED}"
+
+
+def test_sets_are_walked(capsys: pytest.CaptureFixture[str]) -> None:
+    _configure()
+    get_logger().info(
+        "x", tags={SecretStr("LEAKED")}, frozen=frozenset({"sig=LEAKED"}), plain={"a"}
+    )
+    raw = capsys.readouterr().out
+    assert "LEAKED" not in raw
+    line = json.loads(raw)
+    assert line["tags"] == [REDACTED]
+    assert line["frozen"] == [f"sig={REDACTED}"]
+    assert line["plain"] == ["a"]
 
 
 def test_log_level_filters(capsys: pytest.CaptureFixture[str]) -> None:

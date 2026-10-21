@@ -9,12 +9,24 @@ from uuid import UUID
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from tidal.common.config import AZURITE_ACCOUNT_URL, Settings, allowed_env_keys, get_settings
+from tidal.common.config import Settings, allowed_env_keys, get_settings
 from tidal.common.errors import ConfigError
 
 CONTRACT = Path(__file__).resolve().parents[3] / "docs" / "contracts" / "config-contract.md"
 ROW = re.compile(r"^\| `(TIDAL_[A-Z_]+)` \| (.+?) \| (.+?) \| (.+?) \|")
 TENANT = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b"
+
+
+def _azure(env: str = "prod", **extra: str) -> dict[str, str]:
+    """Minimal valid environment outside local (Entra-only, tenant set)."""
+    return {
+        "TIDAL_ENV": env,
+        "TIDAL_AUTH__TENANT_ID": TENANT,
+        "TIDAL_SQL__AUTH": "entra_mi",
+        "TIDAL_SQL__SERVER": "sql-tidal.database.windows.net",
+        "TIDAL_STORAGE__USE_MANAGED_IDENTITY": "true",
+        **extra,
+    }
 
 
 def _contract_rows() -> list[tuple[str, str, str, bool]]:
@@ -71,8 +83,6 @@ def test_default_matches_contract(key: str, typ: str, default: str, secret: bool
     value = _get(Settings.from_env({}), key)
     if default == "—":
         assert value is None
-    elif default == "Azurite URL":
-        assert value == AZURITE_ACCOUNT_URL
     else:
         assert str(value).lower() == default.lower()
     assert secret == (typ == "secret")
@@ -128,21 +138,59 @@ def test_unknown_key_fails_for_bare_settings(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_bare_settings_validation_hides_input(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TIDAL_ENV", "prod")
-    monkeypatch.setenv("TIDAL_SQL__PASSWORD", "hunter2")
+    for key, value in _azure(**{"TIDAL_SQL__PASSWORD": "hunter2"}).items():
+        monkeypatch.setenv(key, value)
     with pytest.raises(ValidationError) as exc_info:
         Settings()
     assert "hunter2" not in str(exc_info.value)
 
 
 @pytest.mark.parametrize("env", ["dev", "prod"])
+def test_minimal_azure_env_ok(env: str) -> None:
+    settings = Settings.from_env(_azure(env))
+    assert settings.env == env
+    assert settings.auth.tenant_id == UUID(TENANT)
+
+
+@pytest.mark.parametrize("env", ["dev", "prod"])
 def test_auth_disabled_outside_local_fails(env: str) -> None:
     with pytest.raises(ConfigError, match="TIDAL_AUTH__DISABLED"):
-        Settings.from_env({"TIDAL_ENV": env, "TIDAL_AUTH__DISABLED": "true"})
+        Settings.from_env(_azure(env, TIDAL_AUTH__DISABLED="true"))
 
 
 def test_auth_disabled_allowed_locally() -> None:
     assert Settings.from_env({"TIDAL_AUTH__DISABLED": "true"}).auth.disabled is True
+
+
+@pytest.mark.parametrize("env", ["dev", "prod"])
+def test_tenant_required_outside_local(env: str) -> None:
+    environ = _azure(env)
+    del environ["TIDAL_AUTH__TENANT_ID"]
+    with pytest.raises(ConfigError, match="TIDAL_AUTH__TENANT_ID is required"):
+        Settings.from_env(environ)
+
+
+def test_tenant_optional_locally() -> None:
+    assert Settings.from_env({}).auth.tenant_id is None
+
+
+@pytest.mark.parametrize("env", ["dev", "prod"])
+def test_sql_password_auth_rejected_outside_local(env: str) -> None:
+    environ = _azure(env, TIDAL_SQL__AUTH="sql_password")
+    with pytest.raises(ConfigError, match="TIDAL_SQL__AUTH must be entra_mi"):
+        Settings.from_env(environ)
+
+
+@pytest.mark.parametrize("value", [None, "false"])
+@pytest.mark.parametrize("env", ["dev", "prod"])
+def test_managed_identity_required_outside_local(env: str, value: str | None) -> None:
+    environ = _azure(env)
+    if value is None:
+        del environ["TIDAL_STORAGE__USE_MANAGED_IDENTITY"]
+    else:
+        environ["TIDAL_STORAGE__USE_MANAGED_IDENTITY"] = value
+    with pytest.raises(ConfigError, match="TIDAL_STORAGE__USE_MANAGED_IDENTITY must be true"):
+        Settings.from_env(environ)
 
 
 @pytest.mark.parametrize(
@@ -158,7 +206,7 @@ def test_auth_disabled_allowed_locally() -> None:
 def test_local_only_keys_fail_outside_local(key: str, env: str) -> None:
     value = "2025-12-31T00:00:00Z" if key == "TIDAL_CLOCK__NOW" else "AccountKey=topsecret"
     with pytest.raises(ConfigError, match=key) as exc_info:
-        Settings.from_env({"TIDAL_ENV": env, key: value})
+        Settings.from_env(_azure(env, **{key: value}))
     assert "topsecret" not in str(exc_info.value)
 
 
@@ -173,12 +221,12 @@ def test_local_only_keys_allowed_locally() -> None:
 
 
 def test_otel_connection_string_allowed_in_azure() -> None:
-    # The contract table sources it from a Key Vault reference in Azure (open question, T-005).
-    environ = {"TIDAL_ENV": "prod", "TIDAL_OTEL__CONNECTION_STRING": "InstrumentationKey=k"}
+    # Exempt: in Azure it is a Key Vault reference (config-contract rules).
+    environ = _azure(TIDAL_OTEL__CONNECTION_STRING="InstrumentationKey=k")
     assert Settings.from_env(environ).otel.connection_string is not None
 
 
-@pytest.mark.parametrize("server", [None, "", "localhost"])
+@pytest.mark.parametrize("server", [None, "", "localhost", "127.0.0.1"])
 def test_entra_mi_without_server_fails(server: str | None) -> None:
     environ = {"TIDAL_SQL__AUTH": "entra_mi"}
     if server is not None:
@@ -187,13 +235,21 @@ def test_entra_mi_without_server_fails(server: str | None) -> None:
         Settings.from_env(environ)
 
 
-def test_entra_mi_with_server_ok() -> None:
-    environ = {
-        "TIDAL_ENV": "prod",
-        "TIDAL_SQL__AUTH": "entra_mi",
-        "TIDAL_SQL__SERVER": "sql-tidal.database.windows.net",
-    }
-    assert Settings.from_env(environ).sql.auth == "entra_mi"
+@pytest.mark.parametrize("days", ["0", "-1"])
+def test_hot_window_days_must_be_positive(days: str) -> None:
+    with pytest.raises(ConfigError, match="hot_window_days"):
+        Settings.from_env({"TIDAL_HOT_WINDOW_DAYS": days})
+
+
+def test_synth_start_after_end_fails() -> None:
+    environ = {"TIDAL_SYNTH__START": "2020-01-02", "TIDAL_SYNTH__END": "2020-01-01"}
+    with pytest.raises(ConfigError, match="TIDAL_SYNTH__START must be <= TIDAL_SYNTH__END"):
+        Settings.from_env(environ)
+
+
+def test_synth_single_day_ok() -> None:
+    environ = {"TIDAL_SYNTH__START": "2020-01-01", "TIDAL_SYNTH__END": "2020-01-01"}
+    assert Settings.from_env(environ).synth.start == date(2020, 1, 1)
 
 
 @pytest.mark.parametrize(
