@@ -56,7 +56,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 ### Lane C — api & local stack
 | ID | Title | Agent | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|---|
-| T-110 | API skeleton, errors, health, fakes | api-engineer | T-004, T-005 | `src/tidal/api/{app,deps,errors}.py`, `api/routers/health.py`, `src/tidal/query/protocols.py`, `tests/fakes/**` | problem+json (`RequestValidationError` → 400, not 422); DI to fakes; `run()` entrypoint; wires oasdiff step in ci.yml (`openapi-diff` job) | todo |
+| T-110 | API skeleton, errors, health, fakes | api-engineer | T-004, T-005 | `src/tidal/api/{app,deps,errors}.py`, `api/routers/health.py`, `src/tidal/query/protocols.py`, `tests/fakes/**` | problem+json (`RequestValidationError` → 400, not 422; serialise `Problem` with `exclude_none=True`); DI to fakes; `run()` entrypoint; wires oasdiff step in ci.yml (`openapi-diff` job) | todo |
 | T-111 | Read routers on fakes | api-engineer | T-110 | `api/routers/{instruments,bars,ticks,latest,spreads}.py` +tests | oasdiff = 0; schemathesis green | todo |
 | T-112 | docker-compose local stack | platform-engineer | T-001 | `docker-compose.yml`, `deploy/docker/Dockerfile` (dev stage), `deploy/local/**` (incl. `sb-config.json`), `.env.example` | `docker compose up` gives Azurite, one SQL Server container shared by Tidal and the SB emulator, SB emulator, api | todo |
 | T-113 | Local JWKS + dev token script | api-engineer | T-005 | `scripts/dev-token.py`, `tests/fakes/jwks/**` | mints RS256 tokens per role for local/tests; keys generated at runtime, never committed | todo |
@@ -101,7 +101,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | T-301 | Engine, strategies, metrics | data-engineer | T-003 | `src/tidal/backtest/**` | SPEC-05 §2–3; engine is pure over polars frames (data loading is the worker's job), so it can start in W2 | todo |
 | T-302 | Golden + look-ahead + determinism tests | test-engineer | T-301 | `tests/unit/backtest/**`, `tests/fixtures/backtest/**` | hash identical across CI matrix | todo |
 | T-303 | Worker consumer | data-engineer | T-301, T-208 | `src/tidal/worker/**` +tests | idempotent; SIGTERM abandon; lock renew; `tidal dlq inspect/resubmit` CLI | todo |
-| T-304 | Submit endpoint + aggregator | api-engineer | T-209, T-303 | `api/routers/backtests.py`, `src/tidal/api/aggregator.py` +tests | sweep fan-out batching; parent status; aggregator idempotent on redelivery (messaging §4) | todo |
+| T-304 | Submit endpoint + aggregator | api-engineer | T-209, T-303 | `api/routers/backtests.py`, `src/tidal/api/aggregator.py` +tests | sweep fan-out batching; parent status; aggregator idempotent on redelivery (messaging §4); messages serialised with `exclude_none=True` and checked against `MAX_MESSAGE_BYTES` | todo |
 
 ### Lane B — containers & AKS (platform-engineer, infra-engineer)
 | ID | Title | Agent | Deps | Owns | Done when | Status |
