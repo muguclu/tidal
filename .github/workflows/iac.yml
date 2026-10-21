@@ -134,16 +134,12 @@ jobs:
       # Scan the roots, not the bare module directories. Module sources of the form
       # `source = "../.."` are resolved by checkov, so an example root scans the module's resources.
       - name: checkov
-        uses: bridgecrewio/checkov-action@99bb2caf247dfd9f03cf984373bc6043d4e32ebf # v12.1347.0
-        with:
-          directory: ${{ matrix.path }}
-          framework: terraform
-          soft_fail: false
-          # No remote modules exist yet (only local `../..` sources); enable when one is introduced.
-          download_external_modules: false
-          quiet: true
-          output_format: cli,json
-          output_file_path: console,checkov-results
+        # CLI pinned via pipx (preinstalled on ubuntu runners); the action's output_format input
+        # does not accept multiple formats, the CLI does (-o repeated).
+        env:
+          ROOT_PATH: ${{ matrix.path }}
+        run: |
+          pipx run --spec checkov==3.3.30 checkov -d "$ROOT_PATH" --framework terraform --quiet --compact             -o cli -o json --output-file-path console,checkov-results
       - name: checkov coverage note
         if: always()
         run: |
