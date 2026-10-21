@@ -23,6 +23,8 @@ SCHEMA_BACKTEST_JOB: Final = "backtest.job/v1"
 SCHEMA_BACKTEST_RESULT: Final = "backtest.result/v1"
 SCHEMA_TIERING_JOB: Final = "tiering.job/v1"
 CONTENT_TYPE: Final = "application/json"
+#: Max serialised message body (messaging §4); enforced by producers before sending.
+MAX_MESSAGE_BYTES: Final = 204_800
 #: ``backtests/{job_id}/`` or ``backtests/{parent_job_id}/child-NNNN/`` (messaging §3).
 OUTPUT_PREFIX_PATTERN: Final = rf"^backtests/bt_{ULID_PATTERN}/(child-[0-9]{{4}}/)?$"
 

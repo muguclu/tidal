@@ -92,23 +92,51 @@
     },
     "BacktestMetrics": {
       "additionalProperties": false,
-      "description": "Metrics per SPEC-05 §3.",
+      "description": "Metrics per SPEC-05 §3; a value without mathematical definition is ``null``.",
       "properties": {
         "ann_vol": {
-          "title": "Ann Vol",
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ann Vol"
         },
         "cagr": {
-          "title": "Cagr",
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Cagr"
         },
         "hit_rate": {
-          "title": "Hit Rate",
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Hit Rate"
         },
         "max_drawdown": {
-          "title": "Max Drawdown",
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Max Drawdown"
         },
         "n_trades": {
           "minimum": 0,
@@ -116,12 +144,26 @@
           "type": "integer"
         },
         "sharpe": {
-          "title": "Sharpe",
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Sharpe"
         },
         "turnover": {
-          "title": "Turnover",
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Turnover"
         }
       },
       "required": [

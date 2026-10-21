@@ -20,14 +20,22 @@ from tidal.contracts.messages import (
 from tidal.contracts.models import (
     MAX_SWEEP_CHILDREN,
     BacktestAccepted,
+    BacktestList,
+    BacktestMetrics,
     BacktestRequest,
+    BacktestStatus,
     Bar,
     BarsResponse,
     CalendarSpreadRequest,
+    HealthStatus,
     JobStatus,
+    LatestResponse,
     MaCrossoverRequest,
     Problem,
+    SpreadPoint,
+    StorageStats,
     Tick,
+    TieringRunAccepted,
     to_ts_ns,
 )
 from tidal.contracts.schemas import QUALITY_MAX, QualityFlag, validate_quality
@@ -351,3 +359,61 @@ def test_tiering_message() -> None:
             ENVELOPE
             | {"schema": "tiering.job/v1", "payload": payload | {"table": "ref.instrument"}}
         )
+
+
+# --- openapi-aligned shapes -------------------------------------------------------------------
+
+
+def test_metrics_are_nullable_but_never_nan() -> None:
+    undefined = METRICS | {"hit_rate": None, "sharpe": None}
+    assert BacktestMetrics.model_validate(undefined).hit_rate is None
+    with pytest.raises(ValidationError):
+        BacktestMetrics.model_validate(METRICS | {"sharpe": math.nan})
+    with pytest.raises(ValidationError):
+        BacktestMetrics.model_validate({k: v for k, v in METRICS.items() if k != "cagr"})
+
+
+def test_status_and_list_shapes() -> None:
+    status: dict[str, Any] = {
+        "job_id": JOB_ID,
+        "status": "running",
+        "submitted_at": TS,
+        "finished_at": None,
+    }
+    status |= {"result": None, "children": {"total": 1, "succeeded": 0, "failed": 0}}
+    assert BacktestStatus.model_validate(status).result is None
+    for missing in ("children", "finished_at", "result"):
+        with pytest.raises(ValidationError):
+            BacktestStatus.model_validate({k: v for k, v in status.items() if k != missing})
+    assert BacktestList.model_validate({"items": [status], "next_cursor": None}).items
+    with pytest.raises(ValidationError):
+        BarsResponse.model_validate(
+            {"instrument_id": "EIA.WTI.SPOT", "interval": "1d", "tier": "cold", "rows": []}
+        )  # next_cursor is required (nullable)
+    with pytest.raises(ValidationError):
+        Bar.model_validate({k: v for k, v in bar().items() if k != "volume"})
+
+
+def test_latest_spread_admin_and_health_shapes() -> None:
+    latest = {"instrument_id": "EIA.WTI.SPOT", "interval": "1d", "bar": bar()}
+    assert LatestResponse.model_validate({"tier": "hot", "rows": [latest]}).rows[0].bar.close == 1.5
+    with pytest.raises(ValidationError):
+        LatestResponse.model_validate({"tier": "cold", "rows": []})
+    point = SpreadPoint.model_validate(
+        {"ts": TS, "ts_ns": TS_NS, "leg_a": -37.63, "leg_b": 10.01, "spread": -47.64}
+    )
+    assert point.spread == -47.64
+    assert TieringRunAccepted(run_id="r-1", status=JobStatus.QUEUED).run_id == "r-1"
+    usage = {"rows": 1, "bytes": 2}
+    stats = StorageStats.model_validate({"as_of": TS, "hot": usage, "cold": usage})
+    assert stats.cold.bytes == 2
+    assert HealthStatus(status="not_ready").status == "not_ready"
+    with pytest.raises(ValidationError):
+        HealthStatus.model_validate({"status": "degraded"})
+
+
+def test_optional_non_nullable_fields_dump_without_null() -> None:
+    problem = Problem(type="about:blank", title="Bad", status=400, correlation_id="c-1")
+    assert "detail" not in problem.model_dump(exclude_none=True)
+    req = BacktestRequest.model_validate(bt())
+    assert "sweep" not in req.model_dump(mode="json", exclude_none=True)

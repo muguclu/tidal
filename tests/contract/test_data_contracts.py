@@ -157,25 +157,18 @@ def _doc_catalogue() -> list[CatalogueEntry]:
     out = []
     for row in table(section(DATA_MD, "1.1")):
         ids = _expand(row[0])
-        series: list[str | None] = [None] * len(ids)
-        if row[1] != "generator":
-            series = [*_expand(row[1])]
+        series = [row[1]] * len(ids) if row[1] == "generator" else _expand(row[1])
         assert len(series) == len(ids)
-
-        def val(cell: str) -> str | None:
-            return None if cell == "per name" else cell
-
-        asset = val(row[2])
         for iid, ser in zip(ids, series, strict=True):
             out.append(
                 CatalogueEntry(
                     iid,
                     ser,
-                    AssetClass(asset) if asset else None,
+                    AssetClass(row[2]),
                     InstrumentKind(row[3]),
-                    val(row[4]),
-                    val(row[5]),
-                    val(row[6]),
+                    row[4],
+                    row[5],
+                    row[6],
                     Granularity(row[7]),
                 )
             )
@@ -184,10 +177,39 @@ def _doc_catalogue() -> list[CatalogueEntry]:
 
 def test_catalogue_matches_doc() -> None:
     assert list(CATALOGUE_V1) == _doc_catalogue()
+    assert len(CATALOGUE_V1) == 22
     assert len({e.instrument_id for e in CATALOGUE_V1}) == len(CATALOGUE_V1)
     for entry in CATALOGUE_V1:
-        assert INSTRUMENT_ID_RE.fullmatch(entry.instrument_id)
-        assert Source(entry.instrument_id.split(".")[0])
+        inst = entry.to_instrument()  # validates id regex, enums, currency
+        assert inst.source == entry.instrument_id.split(".")[0]
+        assert inst.roll_method is None
+        assert inst.description == entry.description
+
+
+def test_catalogue_descriptions_follow_doc_rule() -> None:
+    assert "`<source> <series or name>, <kind>, <unit>`" in section(DATA_MD, "1.1")
+    by_id = {e.instrument_id: e.description for e in CATALOGUE_V1}
+    assert by_id["EIA.BRENT.SPOT"] == "EIA RBRTE, spot, USD/bbl"
+    assert by_id["EIA.WTI.FUT2"] == "EIA RCLC2, future, USD/bbl"
+    assert by_id["FRED.EURUSD.FX"] == "FRED DEXUSEU, fx, USD/EUR"
+    assert by_id["SYN.POWER_DE.TICK"] == "SYN POWER_DE, spot, EUR/MWh"
+    assert by_id["SYN.EURUSD.TICK"] == "SYN EURUSD, fx, USD/EUR"
+
+
+def test_bar_encodings_follow_doc_paragraph() -> None:
+    paragraph = section(DATA_MD, "2.")
+    assert "Bars (§3) use the" in paragraph
+    assert "`trade_count` writer default" in paragraph
+    rle, bss, delta = "RLE_DICTIONARY", "BYTE_STREAM_SPLIT", "DELTA_BINARY_PACKED"
+    assert PARQUET_ENCODINGS["BAR_V1"] == {
+        "ts_ns": delta, "instrument_id": rle, "interval": rle, "open": bss, "high": bss,
+        "low": bss, "close": bss, "volume": bss, "quality": rle, "ingested_at_ns": delta,
+        "version": rle,
+    }  # fmt: skip
+
+
+def test_message_size_limit_matches_doc() -> None:
+    assert f"{messages.MAX_MESSAGE_BYTES:,} bytes" in MESSAGING_MD
 
 
 def test_queue_and_schema_names_match_messaging_doc() -> None:

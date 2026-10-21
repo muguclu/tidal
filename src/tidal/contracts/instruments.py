@@ -87,44 +87,72 @@ class Instrument(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class CatalogueEntry:
-    """One row of the v1 catalogue. ``None`` = "per name" in the contract (synthetic rows)."""
+    """One row of the v1 catalogue; ``source_series`` is ``generator`` for ``SYN.*``."""
 
     instrument_id: str
-    source_series: str | None
-    asset_class: AssetClass | None
+    source_series: str
+    asset_class: AssetClass
     kind: InstrumentKind
-    unit: str | None
-    currency: str | None
-    exchange_tz: str | None
+    unit: str
+    currency: str
+    exchange_tz: str
     granularity: Granularity
 
+    @property
+    def source(self) -> Source:
+        """Source, from the ``instrument_id`` prefix."""
+        return Source(self.instrument_id.split(".")[0])
 
-_CRUDE, _GAS, _FX = AssetClass.CRUDE, AssetClass.GAS, AssetClass.FX
-_SPOT, _FUT = InstrumentKind.SPOT, InstrumentKind.FUTURE
-_D1 = Granularity.D1
+    @property
+    def description(self) -> str:
+        """``<source> <series or name>, <kind>, <unit>`` (data-contracts §1.1)."""
+        name = self.instrument_id.split(".")[1] if self.source is Source.SYN else self.source_series
+        return f"{self.source} {name}, {self.kind}, {self.unit}"
+
+    def to_instrument(self) -> Instrument:
+        """Reference-data row for this entry (``roll_method``/ts bounds unset)."""
+        return Instrument(
+            instrument_id=self.instrument_id,
+            source=self.source,
+            asset_class=self.asset_class,
+            kind=self.kind,
+            unit=self.unit,
+            currency=self.currency,
+            exchange_tz=self.exchange_tz,
+            granularity=self.granularity,
+            description=self.description,
+        )
+
+
+_CRUDE, _GAS, _POWER, _REF = AssetClass.CRUDE, AssetClass.GAS, AssetClass.POWER, AssetClass.REFINED
+_SPOT, _FUT, _FX = InstrumentKind.SPOT, InstrumentKind.FUTURE, InstrumentKind.FX
+_D1, _TICK = Granularity.D1, Granularity.TICK
 _NY, _CHI, _LON = "America/New_York", "America/Chicago", "Europe/London"
-_BBL, _MMBTU = "USD/bbl", "USD/MMBtu"
-_SYN_NAMES: Final = (
-    *("BRENT", "WTI", "HH", "NBP", "TTF", "POWER_DE", "POWER_FR", "GASOIL", "RBOB"),
-    "EURUSD",
-)
+_BBL, _MMBTU, _EMWH = "USD/bbl", "USD/MMBtu", "EUR/MWh"
+_E = CatalogueEntry
+
+
+def _syn(name: str, asset: AssetClass, unit: str, ccy: str, tz: str) -> CatalogueEntry:
+    kind = _FX if asset is AssetClass.FX else _SPOT
+    return _E(f"SYN.{name}.TICK", "generator", asset, kind, unit, ccy, tz, _TICK)
+
 
 #: Normative seed catalogue (data-contracts §1.1), in contract order.
 CATALOGUE_V1: Final[tuple[CatalogueEntry, ...]] = (
-    CatalogueEntry("EIA.BRENT.SPOT", "RBRTE", _CRUDE, _SPOT, _BBL, "USD", _LON, _D1),
-    CatalogueEntry("EIA.WTI.SPOT", "RWTC", _CRUDE, _SPOT, _BBL, "USD", _CHI, _D1),
-    *(
-        CatalogueEntry(f"EIA.WTI.FUT{n}", f"RCLC{n}", _CRUDE, _FUT, _BBL, "USD", _NY, _D1)
-        for n in range(1, 5)
-    ),
-    CatalogueEntry("EIA.HH.SPOT", "RNGWHHD", _GAS, _SPOT, _MMBTU, "USD", _CHI, _D1),
-    *(
-        CatalogueEntry(f"EIA.HH.FUT{n}", f"RNGC{n}", _GAS, _FUT, _MMBTU, "USD", _NY, _D1)
-        for n in range(1, 5)
-    ),
-    CatalogueEntry("FRED.EURUSD.FX", "DEXUSEU", _FX, InstrumentKind.FX, "USD/EUR", "USD", _NY, _D1),
-    *(
-        CatalogueEntry(f"SYN.{name}.TICK", None, None, _SPOT, None, None, None, Granularity.TICK)
-        for name in _SYN_NAMES
-    ),
+    _E("EIA.BRENT.SPOT", "RBRTE", _CRUDE, _SPOT, _BBL, "USD", _LON, _D1),
+    _E("EIA.WTI.SPOT", "RWTC", _CRUDE, _SPOT, _BBL, "USD", _CHI, _D1),
+    *(_E(f"EIA.WTI.FUT{n}", f"RCLC{n}", _CRUDE, _FUT, _BBL, "USD", _NY, _D1) for n in range(1, 5)),
+    _E("EIA.HH.SPOT", "RNGWHHD", _GAS, _SPOT, _MMBTU, "USD", _CHI, _D1),
+    *(_E(f"EIA.HH.FUT{n}", f"RNGC{n}", _GAS, _FUT, _MMBTU, "USD", _NY, _D1) for n in range(1, 5)),
+    _E("FRED.EURUSD.FX", "DEXUSEU", AssetClass.FX, _FX, "USD/EUR", "USD", _NY, _D1),
+    _syn("BRENT", _CRUDE, _BBL, "USD", _LON),
+    _syn("WTI", _CRUDE, _BBL, "USD", _CHI),
+    _syn("HH", _GAS, _MMBTU, "USD", _CHI),
+    _syn("NBP", _GAS, "GBp/therm", "GBP", _LON),
+    _syn("TTF", _GAS, _EMWH, "EUR", "Europe/Amsterdam"),
+    _syn("POWER_DE", _POWER, _EMWH, "EUR", "Europe/Berlin"),
+    _syn("POWER_FR", _POWER, _EMWH, "EUR", "Europe/Paris"),
+    _syn("GASOIL", _REF, "USD/t", "USD", _LON),
+    _syn("RBOB", _REF, "USD/gal", "USD", _NY),
+    _syn("EURUSD", AssetClass.FX, "USD/EUR", "USD", _NY),
 )

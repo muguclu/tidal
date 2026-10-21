@@ -101,17 +101,10 @@
           "$ref": "#/$defs/BacktestCosts"
         },
         "end": {
-          "anyOf": [
-            {
-              "format": "date-time",
-              "type": "string"
-            },
-            {
-              "pattern": "^-?[0-9]+$",
-              "type": "string"
-            }
-          ],
-          "title": "End"
+          "maxLength": 35,
+          "pattern": "^([0-9]{1,19}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z)$",
+          "title": "End",
+          "type": "string"
         },
         "instrument_ids": {
           "items": {
@@ -141,17 +134,10 @@
           "type": "integer"
         },
         "start": {
-          "anyOf": [
-            {
-              "format": "date-time",
-              "type": "string"
-            },
-            {
-              "pattern": "^-?[0-9]+$",
-              "type": "string"
-            }
-          ],
-          "title": "Start"
+          "maxLength": 35,
+          "pattern": "^([0-9]{1,19}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z)$",
+          "title": "Start",
+          "type": "string"
         },
         "strategy": {
           "const": "calendar_spread",
@@ -159,37 +145,30 @@
           "type": "string"
         },
         "sweep": {
-          "anyOf": [
-            {
-              "additionalProperties": {
-                "items": {
-                  "type": "number"
-                },
-                "maxItems": 200,
-                "minItems": 1,
-                "type": "array"
-              },
-              "maxProperties": 3,
-              "minProperties": 1,
-              "type": "object"
+          "additionalProperties": {
+            "items": {
+              "type": "number"
             },
-            {
-              "type": "null"
-            }
-          ],
+            "maxItems": 200,
+            "minItems": 1,
+            "type": "array"
+          },
           "default": null,
-          "title": "Sweep"
+          "maxProperties": 3,
+          "minProperties": 1,
+          "title": "Sweep",
+          "type": "object"
         }
       },
       "required": [
-        "params",
         "interval",
         "start",
         "end",
         "costs",
         "seed",
         "strategy",
-        "instrument_ids"
+        "instrument_ids",
+        "params"
       ],
       "title": "CalendarSpreadRequest",
       "type": "object"
@@ -224,17 +203,10 @@
           "$ref": "#/$defs/BacktestCosts"
         },
         "end": {
-          "anyOf": [
-            {
-              "format": "date-time",
-              "type": "string"
-            },
-            {
-              "pattern": "^-?[0-9]+$",
-              "type": "string"
-            }
-          ],
-          "title": "End"
+          "maxLength": 35,
+          "pattern": "^([0-9]{1,19}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z)$",
+          "title": "End",
+          "type": "string"
         },
         "instrument_ids": {
           "items": {
@@ -264,17 +236,10 @@
           "type": "integer"
         },
         "start": {
-          "anyOf": [
-            {
-              "format": "date-time",
-              "type": "string"
-            },
-            {
-              "pattern": "^-?[0-9]+$",
-              "type": "string"
-            }
-          ],
-          "title": "Start"
+          "maxLength": 35,
+          "pattern": "^([0-9]{1,19}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z)$",
+          "title": "Start",
+          "type": "string"
         },
         "strategy": {
           "const": "ma_crossover",
@@ -282,37 +247,30 @@
           "type": "string"
         },
         "sweep": {
-          "anyOf": [
-            {
-              "additionalProperties": {
-                "items": {
-                  "type": "number"
-                },
-                "maxItems": 200,
-                "minItems": 1,
-                "type": "array"
-              },
-              "maxProperties": 3,
-              "minProperties": 1,
-              "type": "object"
+          "additionalProperties": {
+            "items": {
+              "type": "number"
             },
-            {
-              "type": "null"
-            }
-          ],
+            "maxItems": 200,
+            "minItems": 1,
+            "type": "array"
+          },
           "default": null,
-          "title": "Sweep"
+          "maxProperties": 3,
+          "minProperties": 1,
+          "title": "Sweep",
+          "type": "object"
         }
       },
       "required": [
-        "params",
         "interval",
         "start",
         "end",
         "costs",
         "seed",
         "strategy",
-        "instrument_ids"
+        "instrument_ids",
+        "params"
       ],
       "title": "MaCrossoverRequest",
       "type": "object"
@@ -353,17 +311,10 @@
           "$ref": "#/$defs/BacktestCosts"
         },
         "end": {
-          "anyOf": [
-            {
-              "format": "date-time",
-              "type": "string"
-            },
-            {
-              "pattern": "^-?[0-9]+$",
-              "type": "string"
-            }
-          ],
-          "title": "End"
+          "maxLength": 35,
+          "pattern": "^([0-9]{1,19}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z)$",
+          "title": "End",
+          "type": "string"
         },
         "instrument_ids": {
           "items": {
@@ -393,17 +344,10 @@
           "type": "integer"
         },
         "start": {
-          "anyOf": [
-            {
-              "format": "date-time",
-              "type": "string"
-            },
-            {
-              "pattern": "^-?[0-9]+$",
-              "type": "string"
-            }
-          ],
-          "title": "Start"
+          "maxLength": 35,
+          "pattern": "^([0-9]{1,19}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z)$",
+          "title": "Start",
+          "type": "string"
         },
         "strategy": {
           "const": "mean_reversion",
@@ -411,37 +355,30 @@
           "type": "string"
         },
         "sweep": {
-          "anyOf": [
-            {
-              "additionalProperties": {
-                "items": {
-                  "type": "number"
-                },
-                "maxItems": 200,
-                "minItems": 1,
-                "type": "array"
-              },
-              "maxProperties": 3,
-              "minProperties": 1,
-              "type": "object"
+          "additionalProperties": {
+            "items": {
+              "type": "number"
             },
-            {
-              "type": "null"
-            }
-          ],
+            "maxItems": 200,
+            "minItems": 1,
+            "type": "array"
+          },
           "default": null,
-          "title": "Sweep"
+          "maxProperties": 3,
+          "minProperties": 1,
+          "title": "Sweep",
+          "type": "object"
         }
       },
       "required": [
-        "params",
         "interval",
         "start",
         "end",
         "costs",
         "seed",
         "strategy",
-        "instrument_ids"
+        "instrument_ids",
+        "params"
       ],
       "title": "MeanReversionRequest",
       "type": "object"

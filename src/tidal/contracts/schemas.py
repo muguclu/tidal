@@ -119,28 +119,31 @@ class ParquetEncoding(StrEnum):
     DELTA_BINARY_PACKED = "DELTA_BINARY_PACKED"
     BYTE_STREAM_SPLIT = "BYTE_STREAM_SPLIT"
     RLE_DICTIONARY = "RLE_DICTIONARY"
-    RLE = "RLE"
 
 
-def _encodings(schema: pa.Schema, **explicit: ParquetEncoding) -> dict[str, ParquetEncoding]:
-    """Apply storage-layout §3 rules: ``*_ns`` delta, floats BSS, dictionaries RLE_DICTIONARY."""
+def _encodings(schema: pa.Schema) -> dict[str, ParquetEncoding]:
+    """data-contracts §2 rules: ``*_ns`` delta, floats BSS, small ints/dictionaries RLE_DICTIONARY.
+
+    Columns not covered (``trade_count``) are absent and use the writer default.
+    """
     out: dict[str, ParquetEncoding] = {}
     for f in schema:
+        t = f.type
         if f.name.endswith("_ns"):
             out[f.name] = ParquetEncoding.DELTA_BINARY_PACKED
-        elif pa.types.is_floating(f.type):
+        elif pa.types.is_floating(t):
             out[f.name] = ParquetEncoding.BYTE_STREAM_SPLIT
-        elif pa.types.is_dictionary(f.type) or f.name == "instrument_id":
+        elif (
+            pa.types.is_dictionary(t)
+            or pa.types.is_int8(t)
+            or pa.types.is_int16(t)
+            or f.name == "instrument_id"  # plain string in BT_TRADES_V1; dictionary on (§3)
+        ):
             out[f.name] = ParquetEncoding.RLE_DICTIONARY
-    return out | explicit
+    return out
 
 
-_RLE = ParquetEncoding.RLE
-#: Per-schema column -> encoding intent. Columns absent here use the writer default
-#: (BAR_V1 ``trade_count`` is not specified by the contract).
+#: Per-schema column -> encoding intent (storage-layout §3, data-contracts §2).
 PARQUET_ENCODINGS: Final[dict[str, dict[str, ParquetEncoding]]] = {
-    "TICK_V1": _encodings(TICK_V1, side=_RLE, quality=_RLE, version=_RLE),
-    "BAR_V1": _encodings(BAR_V1, quality=_RLE, version=_RLE),
-    "BT_EQUITY_V1": _encodings(BT_EQUITY_V1),
-    "BT_TRADES_V1": _encodings(BT_TRADES_V1),
+    name: _encodings(schema) for name, schema in SCHEMAS.items()
 }
