@@ -88,6 +88,10 @@ CI fails if FastAPI's generated OpenAPI differs from it (`oasdiff breaking`).
   "equity_url": "backtests/bt_01J.../equity.parquet",
   "trades_url": "backtests/bt_01J.../trades.parquet",
   "result_sha256": "…" }
+// Metrics are nullable: a value with no mathematical definition is null, never NaN/inf/error —
+// e.g. hit_rate with 0 closed trades, sharpe/ann_vol with < 2 returns or zero volatility.
+// job_id = "bt_" + ULID (Crockford base32, 26 chars, first char 0–7). Time fields accept ISO-8601 UTC
+// or an epoch-ns integer string (§1); serialised as ts_ns.
 ```
 
 ## 4. Status codes

@@ -33,10 +33,20 @@ Stored in Azure SQL `ref.instrument` (with a surrogate `instrument_key SMALLINT`
 | `EIA.HH.SPOT` | EIA `RNGWHHD` | gas | spot | USD/MMBtu | USD | America/Chicago | 1d |
 | `EIA.HH.FUT1` … `EIA.HH.FUT4` | EIA `RNGC1`…`RNGC4` | gas | future | USD/MMBtu | USD | America/New_York | 1d |
 | `FRED.EURUSD.FX` | FRED `DEXUSEU` | fx | fx | USD/EUR | USD | America/New_York | 1d |
-| `SYN.BRENT.TICK`, `SYN.WTI.TICK`, `SYN.HH.TICK`, `SYN.NBP.TICK`, `SYN.TTF.TICK`, `SYN.POWER_DE.TICK`, `SYN.POWER_FR.TICK`, `SYN.GASOIL.TICK`, `SYN.RBOB.TICK`, `SYN.EURUSD.TICK` | generator | per name | spot | per name | per name | per name | tick |
+| `SYN.BRENT.TICK` | generator | crude | spot | USD/bbl | USD | Europe/London | tick |
+| `SYN.WTI.TICK` | generator | crude | spot | USD/bbl | USD | America/Chicago | tick |
+| `SYN.HH.TICK` | generator | gas | spot | USD/MMBtu | USD | America/Chicago | tick |
+| `SYN.NBP.TICK` | generator | gas | spot | GBp/therm | GBP | Europe/London | tick |
+| `SYN.TTF.TICK` | generator | gas | spot | EUR/MWh | EUR | Europe/Amsterdam | tick |
+| `SYN.POWER_DE.TICK` | generator | power | spot | EUR/MWh | EUR | Europe/Berlin | tick |
+| `SYN.POWER_FR.TICK` | generator | power | spot | EUR/MWh | EUR | Europe/Paris | tick |
+| `SYN.GASOIL.TICK` | generator | refined | spot | USD/t | USD | Europe/London | tick |
+| `SYN.RBOB.TICK` | generator | refined | spot | USD/gal | USD | America/New_York | tick |
+| `SYN.EURUSD.TICK` | generator | fx | fx | USD/EUR | USD | America/New_York | tick |
 
 `FUTn` = EIA "contract n" series (n-th nearby, no roll adjustment → `kind=future`, `roll_method=null`).
 They make M1–M2 calendar spreads possible from free data. S scale uses the first three `SYN.*` rows.
+`description` (not in this table) is generated as `<source> <series or name>, <kind>, <unit>`.
 EIA series IDs are verified by T-102 against the live API; a mismatch is a CHANGE-REQUESTS entry.
 
 ## 2. Tick (arrow schema `TICK_V1`)
@@ -47,12 +57,17 @@ EIA series IDs are verified by T-102 against the live API; a mismatch is a CHANG
 | `instrument_id` | dictionary<int16, string> | RLE_DICTIONARY | one value per file in cold storage |
 | `price` | float64 | BYTE_STREAM_SPLIT | may be negative; NaN not allowed |
 | `size` | float32 | BYTE_STREAM_SPLIT | ≥ 0; 0 for quotes |
-| `side` | int8 | RLE | 0=trade, 1=bid, 2=ask |
-| `quality` | int8 | RLE | bit flags, see §5 |
+| `side` | int8 | RLE_DICTIONARY | 0=trade, 1=bid, 2=ask |
+| `quality` | int8 | RLE_DICTIONARY | bit flags, see §5 |
 | `ingested_at_ns` | int64 | DELTA_BINARY_PACKED | knowledge time |
-| `version` | int16 | RLE | 1 for first write, +1 per restatement |
+| `version` | int16 | RLE_DICTIONARY | 1 for first write, +1 per restatement |
 
 Primary key: (`instrument_id`, `ts_ns`, `side`, `version`).
+
+`RLE_DICTIONARY` for low-cardinality ints: Parquet's plain RLE encoding is boolean/levels-only in
+pyarrow, so dictionary + RLE indices is how these columns get run-length compressed. Bars (§3) use the
+same rules: `ts_ns`/`ingested_at_ns` DELTA_BINARY_PACKED, floats BYTE_STREAM_SPLIT, small ints and
+dictionary columns RLE_DICTIONARY, `trade_count` writer default.
 
 ## 3. Bar (arrow schema `BAR_V1`)
 

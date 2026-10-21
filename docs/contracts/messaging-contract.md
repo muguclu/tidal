@@ -57,4 +57,5 @@ application property `schema` = `<name>/v<major>`.
   terminal state is not counted again (conditional `UPDATE ... WHERE status NOT IN (terminal)`).
 - **Poison handling:** after max delivery → DLQ; `tidal dlq inspect` CLI lists and can resubmit.
 - **Spot eviction:** SIGTERM handler abandons the message (not dead-letter) so it is redelivered.
-- Messages > 200 KB are not allowed; large inputs go to Blob and the message carries a URL.
+- Messages > 200 KiB (204,800 bytes, serialised body) are not allowed; producers check before sending;
+  large inputs go to Blob and the message carries a URL.

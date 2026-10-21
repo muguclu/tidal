@@ -53,8 +53,8 @@ hooks: ## run all pre-commit hooks on all files
 
 ## ---- contracts & api -----------------------------------------------------------------------
 .PHONY: contracts
-contracts: ## regenerate docs/contracts/schemas/*.json from src/tidal/contracts (stub)
-	$(call stub,T-003)
+contracts: ## regenerate docs/contracts/schemas/*.json from src/tidal/contracts
+	$(UV) run python -m tidal.contracts.export
 
 .PHONY: openapi-diff
 openapi-diff: ## oasdiff breaking, both directions (stub)
