@@ -39,6 +39,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | T-104 | Synthetic generator | T-101 | `src/tidal/ingest/sources/synthetic*.py`, `synthetic_params.yaml` +tests | SPEC-01 §4 criteria; determinism hash test; L-scale perf note | todo |
 | T-106 | Parquet writer, layout, SQL repo | T-003 | `src/tidal/storage/{layout,parquet_writer,sql_repo}.py`, `sql/migrations/**` +tests | writer settings = storage-layout §3 (asserted via pyarrow metadata); SQL DDL = data-contracts §6 | todo |
 | T-107 | Tick → bar aggregation | T-104, T-106 | `src/tidal/storage/aggregate.py` +tests | data-contracts §3.2; property test: bars from ticks == naive groupby; streams monthly | todo |
+| T-108 | Calibrate synthetic params to real data | T-105 | `src/tidal/ingest/sources/synthetic_params.yaml`, `scripts/calibrate_synthetic.py` +tests | Brent/HH daily realised vol per regime from ingested EIA history; params within ±10 %; method documented | todo |
 | T-105 | Normaliser, router, ingest CLI | T-102, T-104, T-106, T-107 | `src/tidal/ingest/{normalise,router,cli}.py` +tests | backfill 20+ yrs local (spot + FUT1–4 + FX); WTI negative golden test; idempotent daily run; injected clock | todo |
 
 ### Lane B — infra (infra-engineer)
