@@ -1,0 +1,253 @@
+name: iac
+
+# Always triggered (no `paths:` filter) so the `iac` check reports on every PR and can be a
+# required status check. Path scoping happens inside the `changes` job; when nothing under
+# infra/** (or this file) changed, the heavy jobs are skipped and `iac` still goes green.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  TF_VERSION: "1.17.0"
+  TFLINT_VERSION: v0.64.0
+  TF_IN_AUTOMATION: "1"
+  TF_INPUT: "0"
+
+jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read # paths-filter lists PR files through the API
+    outputs:
+      infra: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.infra }}
+      matrix: ${{ steps.discover.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            infra:
+              - 'infra/**'
+              - '.github/workflows/iac.yml'
+      - name: Discover Terraform roots
+        id: discover
+        env:
+          TF_ROOT: infra/terraform
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A root is a directory that can be `terraform init`-ed on its own: bootstrap/,
+          # every modules/*/examples/*, and (once they exist) envs/*.
+          # Each entry also carries the nearest .tflint.hcl found walking up to $TF_ROOT.
+          entries=""
+          for dir in "$TF_ROOT/bootstrap" "$TF_ROOT"/modules/*/examples/* "$TF_ROOT"/envs/*; do
+            [ -d "$dir" ] || continue
+            compgen -G "$dir/*.tf" > /dev/null || continue
+            cfg=""
+            probe="$dir"
+            while :; do
+              if [ -f "$probe/.tflint.hcl" ]; then cfg="$probe/.tflint.hcl"; break; fi
+              [ "$probe" = "$TF_ROOT" ] && break
+              probe="$(dirname "$probe")"
+            done
+            if [ -z "$cfg" ]; then
+              echo "::error::no .tflint.hcl found for $dir (looked up to $TF_ROOT)"
+              exit 1
+            fi
+            entries+="$(jq -nc --arg root "${dir#"$TF_ROOT"/}" --arg path "$dir" --arg cfg "$cfg" \
+              '{root: $root, path: $path, tflint_config: $cfg}')"$'\n'
+          done
+          if [ -z "$entries" ]; then
+            echo "::error::no Terraform roots found under $TF_ROOT"
+            exit 1
+          fi
+          matrix="$(printf '%s' "$entries" | jq -sc '{include: .}')"
+          echo "$matrix"
+          echo "matrix=$matrix" >> "${GITHUB_OUTPUT:-/dev/stdout}"
+
+  fmt:
+    name: fmt
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff infra/terraform
+
+  roots:
+    name: terraform (${{ matrix.root }})
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - name: terraform init (no backend, locked providers)
+        working-directory: ${{ matrix.path }}
+        run: terraform init -backend=false -lockfile=readonly
+      - name: terraform validate
+        working-directory: ${{ matrix.path }}
+        run: terraform validate
+      - uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
+        with:
+          tflint_version: ${{ env.TFLINT_VERSION }}
+      - name: tflint
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # built-in job token; avoids API rate limits when fetching plugins
+          TFLINT_CONFIG: ${{ github.workspace }}/${{ matrix.tflint_config }}
+          ROOT_PATH: ${{ matrix.path }}
+        run: |
+          tflint --init --config "$TFLINT_CONFIG"
+          tflint --config "$TFLINT_CONFIG" --chdir "$ROOT_PATH" --format compact
+      # Scan the roots, not the bare module directories. Module sources of the form
+      # `source = "../.."` are resolved by checkov, so an example root scans the module's resources.
+      - name: checkov
+        # CLI pinned via pipx (preinstalled on ubuntu runners); the action's output_format input
+        # does not accept multiple formats, the CLI does (-o repeated).
+        env:
+          ROOT_PATH: ${{ matrix.path }}
+        run: |
+          pipx run --spec checkov==3.3.30 checkov -d "$ROOT_PATH" --framework terraform --quiet --compact             -o cli -o json --output-file-path console,checkov-results
+      - name: checkov coverage note
+        if: always()
+        run: |
+          f=checkov-results/results_json.json
+          [ -f "$f" ] || { echo "::warning::no checkov JSON output found"; exit 0; }
+          python3 - "$f" <<'PY'
+          import json, sys
+          data = json.load(open(sys.argv[1]))
+          data = data if isinstance(data, list) else [data]
+          for d in data:
+              s = d["summary"]
+              print(f"checkov: passed={s['passed']} failed={s['failed']} skipped={s['skipped']} resource_count={s['resource_count']}")
+              if s["resource_count"] == 0:
+                  # Not a parsing problem: checkov ships no policies for these azurerm resource types
+                  # (resource group, user-assigned identity, log analytics, app insights).
+                  print("::notice::checkov evaluated 0 resources here: it has no checks for the resource types in this root")
+          PY
+
+  # Single, stable status context for branch protection. Succeeds when every matrix leg passed,
+  # or when nothing under infra/** changed and the legs were skipped on purpose.
+  iac:
+    name: iac
+    needs: [changes, fmt, roots]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Aggregate
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          FMT_RESULT: ${{ needs.fmt.result }}
+          ROOTS_RESULT: ${{ needs.roots.result }}
+          INFRA_CHANGED: ${{ needs.changes.outputs.infra }}
+        run: |
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "::error::change detection result: $CHANGES_RESULT"
+            exit 1
+          fi
+          if [ "$INFRA_CHANGED" != "true" ]; then
+            echo "::notice::no infra/** changes; terraform checks skipped"
+            exit 0
+          fi
+          if [ "$FMT_RESULT" != "success" ]; then
+            echo "::error::terraform fmt result: $FMT_RESULT"
+            exit 1
+          fi
+          if [ "$ROOTS_RESULT" != "success" ]; then
+            echo "::error::terraform matrix result: $ROOTS_RESULT"
+            exit 1
+          fi
+
+  # Security: sp-tidal-ci-plan must hold federated credentials ONLY for subject
+  # `ref:refs/heads/main` and `pull_request`, and only the Reader + Storage Blob Data Reader roles.
+  # Never grant it write roles or an environment subject. See docs/runbooks/bootstrap.md.
+  # NEEDS-CLOUD: inactive until the repo variable AZURE_PLAN_CLIENT_ID is set (client id of the
+  # read-only sp-tidal-ci-plan app, see docs/runbooks/bootstrap.md). Plan only; never apply.
+  plan:
+    name: plan (envs/dev)
+    needs: [changes, iac]
+    if: >-
+      vars.AZURE_PLAN_CLIENT_ID != '' &&
+      needs.changes.outputs.infra == 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write # OIDC token for azure/login; granted to this job only
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_PLAN_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check for envs/dev
+        id: env
+        run: |
+          if compgen -G "infra/terraform/envs/dev/*.tf" > /dev/null; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::infra/terraform/envs/dev does not exist yet; nothing to plan"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        if: steps.env.outputs.present == 'true'
+        with:
+          client-id: ${{ vars.AZURE_PLAN_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        if: steps.env.outputs.present == 'true'
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - name: terraform plan (read-only, no state lock)
+        if: steps.env.outputs.present == 'true'
+        working-directory: infra/terraform/envs/dev
+        shell: bash # bash -e -o pipefail: a failed plan must fail the job despite `| tee`
+        run: |
+          terraform init -lockfile=readonly
+          terraform plan -lock=false -no-color -out=tfplan | tee plan.txt
+          {
+            echo '### terraform plan (envs/dev)'
+            echo '```'
+            tail -c 60000 plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

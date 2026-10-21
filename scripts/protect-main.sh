@@ -16,8 +16,8 @@
 # - enforce_admins = true: protection applies to the owner too. The owner/orchestrator still merges
 #   green PRs normally (0 approvals needed). Recovery from a broken CI/protection state stays possible
 #   via a deliberate protection change through the API (e.g. DELETE/PUT on the protection endpoint).
-# - `iac` and `image-scan` (SPEC-08 §3) are not required yet: their workflows do not exist, and
-#   conditional checks that never report would block every PR. Add them when T-127/T-308 land.
+# - `iac` (iac.yml, T-127) always reports, so it is required. `image-scan` (SPEC-08 §3) is not
+#   required yet: images.yml does not exist (added with T-308).
 # - Required checks are pinned to GitHub Actions (app_id 15368) so only Actions results count.
 # - Signed commits are NOT required: agent commits on the dev box are unsigned. This deviates from
 #   SPEC-08 §1 ("signed commits"); revisit once commit signing is set up.
@@ -39,7 +39,7 @@ done
 
 command -v gh >/dev/null || { echo "gh not found" >&2; exit 1; }
 # Check names must match `name:` of jobs in ci.yml / review-checklist.yml.
-CHECKS=(lint types tests coverage secrets-scan contracts openapi-diff review-checklist)
+CHECKS=(lint types tests coverage secrets-scan contracts openapi-diff review-checklist iac)
 CHECKS_JSON=$(printf '{"context":"%s","app_id":15368},' "${CHECKS[@]}")
 CHECKS_JSON="[${CHECKS_JSON%,}]"
 
