@@ -1,0 +1,49 @@
+# log_analytics
+
+Log Analytics workspace (`PerGB2018`, daily cap 0.2 GB, 30 d retention; SPEC-07 section 2) and a
+workspace-based Application Insights component.
+
+- Cost control: `daily_quota_gb` (validated > 0, unlimited is not allowed) is the hard ceiling. Data above the cap is dropped until the daily reset, so alerting on the cap being hit belongs in the budget/observability tasks.
+- Sampling: `sampling_percentage` (default 100) is service-side ingestion sampling. The preferred lever is SDK-side sampling in the OpenTelemetry exporter; lower this value only if the cap is regularly hit.
+- Local (connection string) authentication stays enabled because the SPEC-06 identities hold no Monitoring Metrics Publisher role. Revisit in T-403.
+- The connection string output is sensitive. Store it in Key Vault rather than in config.
+
+Usage: see `examples/basic`.
+
+<!-- BEGIN_TF_DOCS -->
+## Requirements
+
+| Name | Version |
+|------|---------|
+| terraform | >= 1.9.0 |
+| azurerm | ~> 4.0 |
+
+## Resources
+
+| Name | Type |
+|------|------|
+| `azurerm_log_analytics_workspace.this` | resource |
+| `azurerm_application_insights.this` | resource |
+
+## Inputs
+
+| Name | Description | Type | Default | Required |
+|------|-------------|------|---------|:--------:|
+| `env` | Environment name; used in resource names. | `string` | `"dev"` | no |
+| `resource_group_name` | Resource group that holds the workspace and Application Insights. | `string` | n/a | yes |
+| `location` | Azure region. | `string` | `"westeurope"` | no |
+| `daily_quota_gb` | Workspace daily ingestion cap in GB (must be > 0). | `number` | `0.2` | no |
+| `retention_in_days` | Retention in days (30-730). | `number` | `30` | no |
+| `sampling_percentage` | Application Insights ingestion sampling percentage (0, 100]. | `number` | `100` | no |
+| `tags` | Complete tag map with the six mandatory keys. | `map(string)` | n/a | yes |
+
+## Outputs
+
+| Name | Description |
+|------|-------------|
+| `workspace_id` | Log Analytics workspace resource ID. |
+| `workspace_name` | Log Analytics workspace name. |
+| `workspace_customer_id` | Workspace (customer) ID GUID. |
+| `app_insights_id` | Application Insights resource ID. |
+| `app_insights_connection_string` | Connection string (sensitive). |
+<!-- END_TF_DOCS -->
