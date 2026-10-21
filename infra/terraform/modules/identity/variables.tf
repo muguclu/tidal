@@ -26,16 +26,33 @@ variable "identity_names" {
 
   validation {
     condition     = length(var.identity_names) > 0 && alltrue([for n in var.identity_names : can(regex("^id-[a-z0-9-]{1,60}$", n))])
-    error_message = "identity_names must be a non-empty set of names matching ^id-[a-z0-9-]+$ (for example id-api)."
+    error_message = "identity_names must be a non-empty set of names matching ^id-[a-z0-9-]+$ e.g. id-api."
   }
 }
 
 variable "tags" {
-  description = "Complete tag map for this resource. Must contain the mandatory keys project, env, owner, cost_center, component, park (pass module.resource_group.tags). The component tag is set to the identity name per resource."
+  description = "Tag map from module.resource_group.tags. Must contain project, env, owner, cost_center, component, park (non-empty), park must be true or false, project must be tidal. The component tag is overridden per resource from var.component."
   type        = map(string)
 
   validation {
-    condition     = alltrue([for k in ["project", "env", "owner", "cost_center", "component", "park"] : contains(keys(var.tags), k) && length(trimspace(var.tags[k])) > 0])
-    error_message = "tags must contain non-empty values for: project, env, owner, cost_center, component, park."
+    condition = alltrue([
+      for k in ["project", "env", "owner", "cost_center", "component", "park"] :
+      contains(keys(var.tags), k) && length(trimspace(var.tags[k])) > 0
+      ]) && (
+      !contains(keys(var.tags), "park") ? false : contains(["true", "false"], var.tags["park"])
+      ) && (
+      !contains(keys(var.tags), "project") ? false : var.tags["project"] == "tidal"
+    )
+    error_message = "tags must contain non-empty project, env, owner, cost_center, component, park; park must be \"true\" or \"false\"; project must be \"tidal\"."
+  }
+}
+
+variable "component" {
+  description = "Value of the component tag for the resources in this module (for example observability); merged over tags[\"component\"] inside the module."
+  type        = string
+
+  validation {
+    condition     = length(trimspace(var.component)) > 0
+    error_message = "component must not be empty."
   }
 }

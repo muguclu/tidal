@@ -29,7 +29,8 @@ Usage: see `examples/basic`.
 | `resource_group_name` | Resource group that holds the identities. | `string` | n/a | yes |
 | `location` | Azure region. | `string` | `"westeurope"` | no |
 | `identity_names` | Identity names to create; must match `^id-[a-z0-9-]+$`. | `set(string)` | six SPEC-06 names | no |
-| `tags` | Complete tag map with the six mandatory keys; `component` is set per identity. | `map(string)` | n/a | yes |
+| `tags` | Tag map from `module.resource_group.tags` (validated: six keys, park true/false, project tidal). | `map(string)` | n/a | yes |
+| `component` | Component tag value, merged over `tags` in the module. | `string` | n/a | yes |
 
 ## Outputs
 

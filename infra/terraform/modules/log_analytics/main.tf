@@ -1,3 +1,7 @@
+locals {
+  tags = merge(var.tags, { component = var.component })
+}
+
 resource "azurerm_log_analytics_workspace" "this" {
   name                = "log-tidal-${var.env}"
   resource_group_name = var.resource_group_name
@@ -6,7 +10,15 @@ resource "azurerm_log_analytics_workspace" "this" {
   retention_in_days   = var.retention_in_days
   daily_quota_gb      = var.daily_quota_gb
 
-  tags = var.tags
+  # Local (shared key) auth off: access is Entra only.
+  local_authentication_enabled = false
+
+  # Public endpoints stay on. Azure Monitor Private Link Scope (AMPLS) is skipped for cost reasons;
+  # the private networking flag is Phase 4.
+  internet_ingestion_enabled = true
+  internet_query_enabled     = true
+
+  tags = local.tags
 }
 
 # Workspace-based Application Insights (classic standalone components are retired).
@@ -22,9 +34,9 @@ resource "azurerm_application_insights" "this" {
   retention_in_days   = var.retention_in_days
   sampling_percentage = var.sampling_percentage
 
-  # Kept enabled: workload identities hold no Monitoring Metrics Publisher role (SPEC-06 section 2),
-  # so connection-string ingestion must keep working. Revisit with T-403.
+  # Kept enabled for now: the workload identities hold no Monitoring Metrics Publisher role yet.
+  # T-403 grants Monitoring Metrics Publisher and then disables local authentication here.
   local_authentication_enabled = true
 
-  tags = var.tags
+  tags = local.tags
 }

@@ -24,7 +24,7 @@ module "resource_group" {
   source = "../../../resource_group"
 
   env   = "dev"
-  owner = "guclu.muge@gmail.com"
+  owner = "platform-team"
 }
 
 module "log_analytics" {
@@ -33,7 +33,8 @@ module "log_analytics" {
   env                 = "dev"
   resource_group_name = module.resource_group.name
   location            = module.resource_group.location
-  tags                = merge(module.resource_group.tags, { component = "observability" })
+  tags                = module.resource_group.tags
+  component           = "observability"
 }
 
 output "workspace_id" {

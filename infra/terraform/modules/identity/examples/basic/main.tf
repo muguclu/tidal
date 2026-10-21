@@ -24,7 +24,7 @@ module "resource_group" {
   source = "../../../resource_group"
 
   env   = "dev"
-  owner = "guclu.muge@gmail.com"
+  owner = "platform-team"
 }
 
 module "identity" {
@@ -33,6 +33,7 @@ module "identity" {
   resource_group_name = module.resource_group.name
   location            = module.resource_group.location
   tags                = module.resource_group.tags
+  component           = "identity"
 }
 
 output "identities" {

@@ -24,7 +24,7 @@ module "resource_group" {
   source = "../.."
 
   env   = "dev"
-  owner = "guclu.muge@gmail.com"
+  owner = "platform-team"
 }
 
 output "name" {
