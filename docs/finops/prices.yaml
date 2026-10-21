@@ -1,0 +1,492 @@
+# Pinned Azure Retail Prices snapshot (T-501). GENERATED - do not edit by hand.
+# Regenerate: uv run python -m tidal.finops.fetch_prices --out docs/finops/prices.yaml
+captured_at: '2026-10-21'
+currency: EUR
+prices:
+- effectiveStartDate: '2018-01-01T00:00:00Z'
+  key: acr_basic_registry_day
+  meterId: 5c9e7a65-5784-494c-9718-7749d4075dd9
+  meterName: Basic Registry Unit
+  productName: Container Registry
+  skuName: Basic
+  tierMinimumUnits: 0.0
+  unit: 1/Day
+  unitPrice: 0.1466
+- effectiveStartDate: '2018-02-20T00:00:00Z'
+  key: acr_basic_storage_gb_month
+  meterId: 6331e61c-1b44-4a10-9fb1-e9c0b470c4d5
+  meterName: Data Stored
+  note: Basic includes 10 GiB in the registry unit
+  productName: Container Registry
+  skuName: Basic
+  tierMinimumUnits: 0.0
+  unit: 1 GB/Month
+  unitPrice: 0.088
+- effectiveStartDate: '2019-06-01T00:00:00Z'
+  key: appservice_b1_linux_hour
+  meterId: e08d4be1-d8c1-49ba-a814-6369d6f14c34
+  meterName: B1
+  note: per plan-hour; month = x730
+  productName: Azure App Service Basic Plan - Linux
+  skuName: B1
+  tierMinimumUnits: 0.0
+  unit: 1 Hour
+  unitPrice: 0.0158
+- effectiveStartDate: '2019-06-01T00:00:00Z'
+  key: appservice_b2_linux_hour
+  meterId: 953d62f6-b048-4311-8ea6-a4ccf5a50e5d
+  meterName: B2
+  note: per plan-hour; month = x730; C5 always-on baseline (see spec comment)
+  productName: Azure App Service Basic Plan - Linux
+  skuName: B2
+  tierMinimumUnits: 0.0
+  unit: 1 Hour
+  unitPrice: 0.0317
+- effectiveStartDate: '2019-06-01T00:00:00Z'
+  key: blob_archive_early_delete_gb
+  meterId: 7875f211-196f-4bf7-9a20-d8981af69540
+  meterName: Archive LRS Early Delete
+  note: 180-day minimum
+  productName: Blob Storage
+  skuName: Archive LRS
+  tierMinimumUnits: 0.0
+  unit: 1 GB
+  unitPrice: 0.0016
+- effectiveStartDate: '2018-03-01T00:00:00Z'
+  key: blob_archive_read_10k
+  meterId: e93805ef-b011-440f-8da9-2001569c6d60
+  meterName: Archive Read Operations
+  productName: Blob Storage
+  skuName: Archive LRS
+  tierMinimumUnits: 0.0
+  unit: 10K
+  unitPrice: 5.2798
+- effectiveStartDate: '2018-03-01T00:00:00Z'
+  key: blob_archive_retrieval_gb
+  meterId: 8b692d5a-8e7a-41ee-a507-27fc6763cef0
+  meterName: Archive Data Retrieval
+  productName: Blob Storage
+  skuName: Archive LRS
+  tierMinimumUnits: 0.0
+  unit: 1 GB
+  unitPrice: 0.0211
+- effectiveStartDate: '2019-06-01T00:00:00Z'
+  key: blob_archive_stored_gb_month
+  meterId: 7d07cbf5-5686-4123-9ebe-36ca3e461c43
+  meterName: Archive LRS Data Stored
+  productName: Blob Storage
+  skuName: Archive LRS
+  tierMinimumUnits: 0.0
+  unit: 1 GB/Month
+  unitPrice: 0.0016
+- effectiveStartDate: '2018-03-01T00:00:00Z'
+  key: blob_archive_write_10k
+  meterId: 58817362-8351-41ce-8c50-8a2cc3442dbe
+  meterName: Archive LRS Write Operations
+  productName: Blob Storage
+  skuName: Archive LRS
+  tierMinimumUnits: 0.0
+  unit: 10K
+  unitPrice: 0.1056
+- effectiveStartDate: '2023-05-01T00:00:00Z'
+  key: blob_cold_early_delete_gb
+  meterId: bb4cc73e-d9d7-54b0-8d9d-7f82a450ac7a
+  meterName: Cold LRS Early Delete
+  note: 90-day minimum
+  productName: Blob Storage
+  skuName: Cold LRS
+  tierMinimumUnits: 0.0
+  unit: 1 GB
+  unitPrice: 0.004
+- effectiveStartDate: '2023-05-01T00:00:00Z'
+  key: blob_cold_read_10k
+  meterId: a099a9e8-34d5-53cf-8c66-dfbf024d9d17
+  meterName: Cold LRS Read Operations
+  productName: Blob Storage
+  skuName: Cold LRS
+  tierMinimumUnits: 0.0
+  unit: 10K
+  unitPrice: 0.088
+- effectiveStartDate: '2023-05-01T00:00:00Z'
+  key: blob_cold_retrieval_gb
+  meterId: 59a586e0-26ec-5a7d-8967-c36fa62bbf04
+  meterName: Cold LRS Data Retrieval
+  productName: Blob Storage
+  skuName: Cold LRS
+  tierMinimumUnits: 0.0
+  unit: 1 GB
+  unitPrice: 0.0264
+- effectiveStartDate: '2023-05-01T00:00:00Z'
+  key: blob_cold_stored_gb_month
+  meterId: 2c9fffbd-56cc-5874-8bad-8a0e1ea9f142
+  meterName: Cold LRS Data Stored
+  productName: Blob Storage
+  skuName: Cold LRS
+  tierMinimumUnits: 0.0
+  unit: 1 GB/Month
+  unitPrice: 0.004
+- effectiveStartDate: '2023-05-01T00:00:00Z'
+  key: blob_cold_write_10k
+  meterId: f2481a61-6196-568b-aacf-2bf313ccba81
+  meterName: Cold LRS Write Operations
+  productName: Blob Storage
+  skuName: Cold LRS
+  tierMinimumUnits: 0.0
+  unit: 10K
+  unitPrice: 0.1584
+- effectiveStartDate: '2016-05-09T00:00:00Z'
+  key: blob_cool_read_10k
+  meterId: c9711c6c-2fb5-4ff1-ad23-17e9beab62ba
+  meterName: Cool Read Operations
+  productName: Blob Storage
+  skuName: Cool LRS
+  tierMinimumUnits: 0.0
+  unit: 10K
+  unitPrice: 0.0088
+- effectiveStartDate: '2016-05-09T00:00:00Z'
+  key: blob_cool_retrieval_gb
+  meterId: 34013683-6f3f-4b90-b235-aa579b1f2881
+  meterName: Cool Data Retrieval
+  productName: Blob Storage
+  skuName: Cool LRS
+  tierMinimumUnits: 0.0
+  unit: 1 GB
+  unitPrice: 0.0088
+- effectiveStartDate: '2016-10-01T00:00:00Z'
+  key: blob_cool_stored_gb_month
+  meterId: 8bf84600-37ce-42ab-a6d7-0c322aed8182
+  meterName: Cool LRS Data Stored
+  productName: Blob Storage
+  skuName: Cool LRS
+  tierMinimumUnits: 0.0
+  unit: 1 GB/Month
+  unitPrice: 0.0088
+- effectiveStartDate: '2016-05-09T00:00:00Z'
+  key: blob_cool_write_10k
+  meterId: 2a87c94a-471c-46e5-931a-f7310f143322
+  meterName: Cool LRS Write Operations
+  productName: Blob Storage
+  skuName: Cool LRS
+  tierMinimumUnits: 0.0
+  unit: 10K
+  unitPrice: 0.088
+- effectiveStartDate: '2016-05-09T00:00:00Z'
+  key: blob_cool_write_gb
+  meterId: 4eea396d-b680-47c7-a1f5-3d9f5cd4d998
+  meterName: Cool LRS Data Write
+  note: per GB written into Cool
+  productName: Blob Storage
+  skuName: Cool LRS
+  tierMinimumUnits: 0.0
+  unit: 1 GB
+  unitPrice: 0.0022
+- effectiveStartDate: '2017-10-01T00:00:00Z'
+  key: blob_hot_other_10k
+  meterId: 3e3981ec-a567-4790-9b06-484295b9b3dc
+  meterName: All Other Operations
+  productName: Blob Storage
+  skuName: Hot LRS
+  tierMinimumUnits: 0.0
+  unit: 10K
+  unitPrice: 0.0038
+- effectiveStartDate: '2016-05-09T00:00:00Z'
+  key: blob_hot_read_10k
+  meterId: 36c961e5-3c53-4481-b339-a10c6fe0f491
+  meterName: Hot Read Operations
+  productName: Blob Storage
+  skuName: Hot LRS
+  tierMinimumUnits: 0.0
+  unit: 10K
+  unitPrice: 0.0038
+- effectiveStartDate: '2017-02-03T00:00:00Z'
+  key: blob_hot_stored_gb_month
+  meterId: 10e5ee74-8fd6-4972-909f-65a83f92f0ce
+  meterName: Hot LRS Data Stored
+  productName: Blob Storage
+  skuName: Hot LRS
+  tierMinimumUnits: 0.0
+  unit: 1 GB/Month
+  unitPrice: 0.0172
+- effectiveStartDate: '2016-05-09T00:00:00Z'
+  key: blob_hot_write_10k
+  meterId: 15adff7b-0dab-4c00-889d-caa6d4fb31bb
+  meterName: Hot LRS Write Operations
+  productName: Blob Storage
+  skuName: Hot LRS
+  tierMinimumUnits: 0.0
+  unit: 10K
+  unitPrice: 0.0475
+- effectiveStartDate: '2022-06-01T00:00:00Z'
+  key: containerapps_memory_active_gib_second
+  meterId: 3ba64b1c-cb46-5ee0-b086-a68736392ac0
+  meterName: Standard Memory Active Usage
+  note: per GiB-second; API rounds to 0.0000, C5 is MEASURED from the cost export; free grant 360k GiB-s/month
+  precision_limited: true
+  productName: Azure Container Apps
+  skuName: Standard
+  tierMinimumUnits: 0.0
+  unit: 1 GiB Second
+  unitPrice: 0.0
+- effectiveStartDate: '2022-06-01T00:00:00Z'
+  key: containerapps_memory_idle_gib_second
+  meterId: cea8b5c0-c6fe-59cf-baa7-123dbc4c6bb8
+  meterName: Standard Memory Idle Usage
+  note: per second; API rounds to 0.0000, C5 is MEASURED from the cost export
+  precision_limited: true
+  productName: Azure Container Apps
+  skuName: Standard
+  tierMinimumUnits: 0.0
+  unit: 1 GiB Second
+  unitPrice: 0.0
+- effectiveStartDate: '2022-06-01T00:00:00Z'
+  key: containerapps_requests_1m
+  meterId: b110d175-46b6-5bbc-adde-cf3438ed87f0
+  meterName: Standard Requests
+  note: per 1M requests; first 2M requests/month free (grant not in API)
+  productName: Azure Container Apps
+  skuName: Standard
+  tierMinimumUnits: 0.0
+  unit: 1M
+  unitPrice: 0.4928
+- effectiveStartDate: '2022-06-01T00:00:00Z'
+  key: containerapps_vcpu_active_second
+  meterId: 0426badc-b719-5201-b141-b2d5c4943b7d
+  meterName: Standard vCPU Active Usage
+  note: per vCPU-second; API rounds to 0.0000, C5 is MEASURED from the cost export; free grant 180k vCPU-s/month
+  precision_limited: true
+  productName: Azure Container Apps
+  skuName: Standard
+  tierMinimumUnits: 0.0
+  unit: 1 Second
+  unitPrice: 0.0
+- effectiveStartDate: '2022-06-01T00:00:00Z'
+  key: containerapps_vcpu_idle_second
+  meterId: 7b7747f8-2c0b-5b6b-a6d9-d998e92f6bcc
+  meterName: Standard vCPU Idle Usage
+  note: per second; API rounds to 0.0000, C5 is MEASURED from the cost export
+  precision_limited: true
+  productName: Azure Container Apps
+  skuName: Standard
+  tierMinimumUnits: 0.0
+  unit: 1 Second
+  unitPrice: 0.0
+- effectiveStartDate: '2018-05-01T00:00:00Z'
+  key: disk_premium_p10_month
+  meterId: 137d3f72-fe0e-4a78-b5d0-92d704aa3cac
+  meterName: P10 LRS Disk
+  productName: Premium SSD Managed Disks
+  skuName: P10 LRS
+  tierMinimumUnits: 0.0
+  unit: 1/Month
+  unitPrice: 19.0778
+- effectiveStartDate: '2018-05-01T00:00:00Z'
+  key: disk_premium_p4_month
+  meterId: e95ada38-f1f7-4bb7-a2ab-dc7c429b4a7c
+  meterName: P4 LRS Disk
+  productName: Premium SSD Managed Disks
+  skuName: P4 LRS
+  tierMinimumUnits: 0.0
+  unit: 1/Month
+  unitPrice: 5.1102
+- effectiveStartDate: '2019-01-01T00:00:00Z'
+  key: disk_standard_ssd_e4_month
+  meterId: 775e5810-2052-4002-9e12-c157326e79ea
+  meterName: E4 LRS Disk
+  productName: Standard SSD Managed Disks
+  skuName: E4 LRS
+  tierMinimumUnits: 0.0
+  unit: 1/Month
+  unitPrice: 2.1119
+- effectiveStartDate: '2022-05-01T00:00:00Z'
+  key: egress_first_tier_gb
+  meterId: 9995d93a-7d35-4d3f-9c69-7a7fea447ef4
+  meterName: Standard Data Transfer Out
+  note: per GB from 100 GB up to 10,335 GB/month; next tier starts at 10,335 GB
+  productName: 'Rtn Preference: MGN'
+  skuName: Standard
+  tierMinimumUnits: 100.0
+  unit: 1 GB
+  unitPrice: 0.0766
+- effectiveStartDate: '2022-05-01T00:00:00Z'
+  key: egress_free_gb
+  meterId: 9995d93a-7d35-4d3f-9c69-7a7fea447ef4
+  meterName: Standard Data Transfer Out
+  note: per GB; tier 0 = first 100 GB/month free (boundary 0-100 GB)
+  productName: 'Rtn Preference: MGN'
+  skuName: Standard
+  tierMinimumUnits: 0.0
+  unit: 1 GB
+  unitPrice: 0.0
+- effectiveStartDate: '2015-08-01T00:00:00Z'
+  key: keyvault_standard_ops_10k
+  meterId: 0f824807-2376-435c-95c9-f992b67a07b0
+  meterName: Operations
+  productName: Key Vault
+  skuName: Standard
+  tierMinimumUnits: 0.0
+  unit: 10K
+  unitPrice: 0.0264
+- effectiveStartDate: '2018-04-11T00:00:00Z'
+  key: lb_standard_rules_hour
+  meterId: 27827eb0-7f60-4928-940b-f5fe15e7a4cb
+  meterName: Standard Included LB Rules and Outbound Rules
+  note: per hour while the LB exists (first 5 rules); month = x730; region Global
+  productName: Load Balancer
+  skuName: Standard
+  tierMinimumUnits: 0.0
+  unit: 1 Hour
+  unitPrice: 0.022
+- effectiveStartDate: '2022-10-01T00:00:00Z'
+  key: loganalytics_basic_ingestion_gb
+  meterId: 93e3dffa-2088-59ec-ac65-7a2dab3e47a2
+  meterName: Basic Logs Data Ingestion
+  note: per GB ingested into Basic Logs tables; queries are billed extra, not snapshotted
+  productName: Azure Monitor
+  skuName: Basic Logs
+  tierMinimumUnits: 0.0
+  unit: 1 GB
+  unitPrice: 0.572
+- effectiveStartDate: '2018-02-01T00:00:00Z'
+  key: loganalytics_ingestion_free_gb
+  meterId: e5626349-2f1f-4563-babc-dc9219884716
+  meterName: Analytics Logs Data Ingestion
+  note: per GB; tier 0 = first 5 GB/month per billing account
+  productName: Log Analytics
+  skuName: Analytics Logs
+  tierMinimumUnits: 0.0
+  unit: 1 GB
+  unitPrice: 0.0
+- effectiveStartDate: '2018-02-01T00:00:00Z'
+  key: loganalytics_ingestion_gb
+  meterId: e5626349-2f1f-4563-babc-dc9219884716
+  meterName: Analytics Logs Data Ingestion
+  note: per GB; paid price above the 5 GB/month free tier
+  productName: Log Analytics
+  skuName: Analytics Logs
+  tierMinimumUnits: 5.0
+  unit: 1 GB
+  unitPrice: 2.6311
+- effectiveStartDate: '2018-02-01T00:00:00Z'
+  key: loganalytics_retention_gb_month
+  meterId: 127fa4bc-00f0-4ffe-b884-f3fcc5e62790
+  meterName: Analytics Logs Data Retention
+  note: per GB-month beyond the 31 days included
+  productName: Log Analytics
+  skuName: Analytics Logs
+  tierMinimumUnits: 0.0
+  unit: 1 GB/Month
+  unitPrice: 0.1144
+- effectiveStartDate: '2021-06-01T00:00:00Z'
+  key: logicapp_consumption_builtin_action_free_tier
+  meterId: 155afecf-5804-4ca4-ae3d-2cff595ab8d4
+  meterName: Consumption Built-in Actions
+  note: FREE TIER row (tier 0, first 4,000 built-in actions/month); API rounds the paid price to 0.0000,
+    so this is not the price beyond the free tier
+  precision_limited: true
+  productName: Logic Apps
+  skuName: Consumption
+  tierMinimumUnits: 0.0
+  unit: '1'
+  unitPrice: 0.0
+- effectiveStartDate: '2017-11-01T00:00:00Z'
+  key: logicapp_consumption_standard_connector_action
+  meterId: 3d2036fb-cad3-47cf-98cb-0a66f53be6cd
+  meterName: Consumption Standard Connector Actions
+  note: per action; API rounds to 4 decimals, true price differs from the shown value
+  precision_limited: true
+  productName: Logic Apps
+  skuName: Consumption
+  tierMinimumUnits: 0.0
+  unit: '1'
+  unitPrice: 0.0001
+- effectiveStartDate: '2018-06-01T00:00:00Z'
+  key: publicip_standard_static_hour
+  meterId: 9c150bf9-2bad-430e-a53c-c213804f49ef
+  meterName: Standard IPv4 Static Public IP
+  note: per hour; month = x730
+  productName: IP Addresses
+  skuName: Standard
+  tierMinimumUnits: 0.0
+  unit: 1 Hour
+  unitPrice: 0.0044
+- effectiveStartDate: '2014-11-01T00:00:00Z'
+  key: servicebus_basic_ops_1m
+  meterId: 3c5657c6-28c7-49f0-9456-9a165161954d
+  meterName: Basic Messaging Operations
+  productName: Service Bus
+  skuName: Basic
+  tierMinimumUnits: 0.0
+  unit: 1M
+  unitPrice: 0.044
+- effectiveStartDate: '2025-06-01T00:00:00Z'
+  key: sql_gp_provisioned_vcore_hour
+  meterId: 1cd4ee5b-2b55-4dd9-b3d9-ae1b22af74b0
+  meterName: vCore
+  note: 'per vCore-hour, 1 vCore: multiply by vCores x 730 h/month. The API publishes no separate SQL
+    licence meter; this rate is far below the serverless rate, so it may exclude the licence (Hybrid Benefit
+    style). Treat the C2/C6 baseline as a lower bound and cross-check against the Cost Management export'
+  productName: SQL Database Single/Elastic Pool General Purpose - Compute Gen5
+  skuName: 1 vCore
+  tierMinimumUnits: 0.0
+  unit: 1 Hour
+  unitPrice: 0.1473
+- effectiveStartDate: '2024-02-01T00:00:00Z'
+  key: sql_gp_serverless_vcore_hour
+  meterId: 76ba5cef-d9c0-5dd5-b6a3-070a0fe7e6a8
+  meterName: vCore
+  note: per vCore-hour; vCore-second = unitPrice / 3600; billed per second of use
+  productName: SQL Database General Purpose - Serverless - Compute Gen5
+  skuName: 1 vCore
+  tierMinimumUnits: 0.0
+  unit: 1 Hour
+  unitPrice: 0.505
+- effectiveStartDate: '2018-08-01T00:00:00Z'
+  key: sql_gp_storage_gb_month
+  meterId: 62abdcb7-13bf-4ab6-98af-d22be94f9081
+  meterName: General Purpose Data Stored
+  note: per GB-month
+  productName: SQL Database Single/Elastic Pool General Purpose - Storage
+  skuName: General Purpose
+  tierMinimumUnits: 0.0
+  unit: 1 GB/Month
+  unitPrice: 0.1204
+- effectiveStartDate: '2025-10-01T00:00:00Z'
+  key: vm_b1s_hour
+  meterId: 13bb8ce7-f82e-4463-84f9-ab3ae7e3cdb2
+  meterName: B1s
+  productName: Virtual Machines BS Series
+  skuName: B1s
+  tierMinimumUnits: 0.0
+  unit: 1 Hour
+  unitPrice: 0.0106
+- effectiveStartDate: '2025-10-01T00:00:00Z'
+  key: vm_b2s_hour
+  meterId: 15a6938e-e86b-4b1b-9a76-7cce5581553a
+  meterName: B2s
+  productName: Virtual Machines BS Series
+  skuName: B2s
+  tierMinimumUnits: 0.0
+  unit: 1 Hour
+  unitPrice: 0.0422
+- effectiveStartDate: '2021-11-01T00:00:00Z'
+  key: vm_d4as_v5_hour
+  meterId: b69c5dbc-6df2-5b78-8822-fb32b72f3d64
+  meterName: D4as v5
+  note: per hour; on-demand; the Cloud Services row of the same name is a different product
+  productName: Virtual Machines Dasv5 Series
+  skuName: Standard_D4as_v5
+  tierMinimumUnits: 0.0
+  unit: 1 Hour
+  unitPrice: 0.183
+- effectiveStartDate: '2026-07-01T00:00:00Z'
+  key: vm_d4as_v5_spot_hour
+  meterId: 985003a6-73b4-5a89-a783-4f4bcd2f9c60
+  meterName: D4as v5 Spot
+  note: per hour; list spot price; real spot price varies with capacity, evictions possible
+  productName: Virtual Machines Dasv5 Series
+  skuName: Standard_D4as_v5 Spot
+  tierMinimumUnits: 0.0
+  unit: 1 Hour
+  unitPrice: 0.0338
+region: westeurope
+source: https://prices.azure.com/api/retail/prices
