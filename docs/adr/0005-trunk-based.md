@@ -30,8 +30,8 @@ Option 1, because short-lived branches into one protected trunk keep parallel ag
 match a single-environment continuous-delivery setup.
 
 ## Consequences
-- Required checks on `main`: lint, types, tests, coverage, contracts, openapi-diff, secrets-scan, plus iac
-  and image-scan when those areas change (SPEC-08 §3).
+- Required checks on `main`: lint, types, tests, coverage, contracts, openapi-diff, secrets-scan,
+  review-checklist, plus iac and image-scan when those areas change (SPEC-08 §3).
 - The orchestrator pushes branches, opens PRs and squash-merges them in the fixed wave order once CI is
   green and reviews have no open `blocking:` findings (owner decision 2026-10-21). Subagents never merge.
 - Solo developer: GitHub does not allow self-approval, so the review mechanism (second account or

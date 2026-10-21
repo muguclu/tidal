@@ -1,4 +1,4 @@
-# ADR-0004: Epoch Parquet on flat-namespace Blob, tiering by data age, no Archive for market data
+# ADR-0004: Epoch Parquet on flat-namespace Blob, tiering by data age via index tags, no Archive for market data
 
 - Status: Accepted
 - Date: 2026-10-22
@@ -18,7 +18,8 @@ version.
 ## Options
 1. **All history in Azure SQL.**
    - Pros: one store; simple queries. Cons: SQL storage and compute grow with history; free offer is 32 GB.
-   - € impact: SQL €5–20 list price for 32 GB (cost-model); full-history baseline measured in T-503 (C2).
+   - € impact: today's serverless hot window (0.5–2 vCore, 32 GB) is €5–20 list price (cost-model); the
+     C2 baseline (all history in SQL GP 2 vCore, SPEC-09 C2) is measured in T-503.
 2. **Epoch Parquet on Blob, lifecycle by last-modified.**
    - Pros: built-in lifecycle rules, no extra job. Cons: backfilled old data stays Hot.
    - € impact: to be measured in T-503 (C3).

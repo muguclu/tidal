@@ -15,8 +15,8 @@ Premium tier.
 
 ## Options
 Infrastructure-as-code tool:
-1. **Bicep.** Pros: Azure-native, no state file. Cons: Entra app registrations need extra tooling outside
-   Bicep. € impact: none.
+1. **Bicep.** Pros: Azure-native, no state file. Cons: Entra app registrations need extra tooling (the
+   Microsoft Graph Bicep extension). € impact: none.
 2. **Terraform (azurerm + azuread).** Pros: one tool for Azure resources and Entra objects; widely used in
    enterprises; `plan` output reviewable on PRs. Cons: remote state must be bootstrapped and protected.
    € impact: state storage account cost to be measured in T-502.
