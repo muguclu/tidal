@@ -4,7 +4,7 @@
 # (distroless/slim digest pin, read-only rootfs, healthcheck, size budget) to this same file.
 # Build context is the repository root.
 
-FROM ghcr.io/astral-sh/uv:0.11 AS uv
+FROM ghcr.io/astral-sh/uv:0.11.16 AS uv
 
 # ---- builder: resolve and install locked dependencies into /app/.venv -----------------------
 FROM python:3.12-slim-bookworm AS builder

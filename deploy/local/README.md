@@ -29,9 +29,8 @@ Azurite data lives in `./.data/azurite` (git-ignored); SQL data in the named vol
 ## SQL `sa` password
 
 The password comes from `TIDAL_SQL__PASSWORD` in your local `.env`, which is git-ignored and must never be
-committed. Compose refuses to start without it. `.env.example` ships the placeholder `change-me-locally`,
-which does **not** satisfy SQL Server's password policy (at least 8 characters, 3 of 4 classes: upper,
-lower, digit, symbol), so choose your own value. The same variable is passed to the Service Bus emulator.
+committed. Compose refuses to start without it. `.env.example` ships the fake placeholder `Local-Only-Change-Me-1`
+(it meets SQL Server's policy: at least 8 characters, 3 of 4 classes) which is public, so change it. The same variable is passed to the Service Bus emulator.
 Changing it after the first start requires `docker compose down -v` because the password is baked into the
 SQL data volume.
 
@@ -64,7 +63,7 @@ JSON cannot carry comments, so notes live here.
 | `backtest-results` | PT1M (default) | 5 | yes | default |
 | `tiering-jobs` | PT1M (default) | 3 | default (off) | default |
 
-Known deviation: the emulator schema caps `DefaultMessageTimeToLive` at PT1H (min PT5M), so the 24 h TTL of
+Known deviation: the local `backtest-jobs` TTL is PT1H because the emulator caps it; Azure uses 24 h per the contract. The emulator schema caps `DefaultMessageTimeToLive` at PT1H (min PT5M), so the 24 h TTL of
 the contract cannot be reproduced locally; the real TTL is set by Terraform. Max-delivery-driven dead-lettering
 is always on in Service Bus. The emulator does not support duplicate detection (the contract does not need it).
 Topic `ingest-events` is optional (Phase 5) and not defined.

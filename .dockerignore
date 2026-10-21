@@ -3,9 +3,10 @@
 .github
 .venv
 .data
-.env
-.env.*
-!.env.example
+**/.env*
+**/.data
+**/*.pem
+scripts
 **/__pycache__
 .mypy_cache
 .ruff_cache

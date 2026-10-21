@@ -3,6 +3,7 @@
     "Namespaces": [
       {
         "Name": "sbemulatorns",
+        "Topics": [],
         "Queues": [
           {
             "Name": "backtest-jobs",
