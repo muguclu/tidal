@@ -1,0 +1,4 @@
+# Copy to ../dev.auto.tfvars (or pass with -var-file). Contains no secrets.
+subscription_id    = "00000000-0000-0000-0000-000000000000"
+state_account_name = "sttidaltfstateab12" # must be globally unique
+owner              = "your-name"
