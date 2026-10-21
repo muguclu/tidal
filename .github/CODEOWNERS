@@ -1,0 +1,6 @@
+# Replace @muguclu-reviewer with your second review account (see SPEC-08 §1 solo note)
+*                       @muguclu
+/docs/contracts/        @muguclu @muguclu-reviewer
+/infra/                 @muguclu @muguclu-reviewer
+/.github/workflows/     @muguclu @muguclu-reviewer
+/src/tidal/api/auth.py  @muguclu @muguclu-reviewer

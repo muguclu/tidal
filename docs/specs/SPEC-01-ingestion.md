@@ -1,0 +1,50 @@
+# SPEC-01 — Ingestion (real + synthetic)
+
+Owner agent: `data-engineer` · Contracts: data-contracts §1–5, storage-layout §2, config-contract
+Tasks: T-101 … T-106
+
+## 1. Purpose
+Load 20+ years of daily energy/FX history from EIA & FRED and generate large, realistic synthetic
+tick data, normalise both into `TICK_V1` / `BAR_V1`, validate, and write to the hot store (SQL) and
+cold store (Parquet) according to age.
+
+## 2. Components
+
+| Module | Responsibility |
+|---|---|
+| `ingest/sources/base.py` | `Source` protocol: `fetch(instrument, start, end) -> Iterator[RawChunk]` |
+| `ingest/sources/eia.py` | EIA v2 API client: pagination, retry w/ exponential backoff + jitter, raw response saved to `raw/eia/{series}/{yyyymmdd}.json.gz` |
+| `ingest/sources/fred.py` | FRED client, same pattern |
+| `ingest/sources/synthetic.py` | Generator (§4) |
+| `ingest/normalise.py` | Raw → arrow table in contract schema, UTC epoch ns |
+| `ingest/validate.py` | Sets quality flags; rejects only schema violations (never business-valid oddities) |
+| `ingest/router.py` | Splits rows by age: `ts ≥ now − hot_window` → SQL, else → Parquet |
+| `ingest/cli.py` | `tidal ingest backfill --source eia --from 1986-01-01`, `tidal ingest daily`, `tidal synth --scale L` |
+
+## 3. Behaviour
+- **Backfill** is resumable: progress checkpoint in `ops.ingest_checkpoint` (source, instrument, last_ts_ns).
+- **Daily** run (Container Apps Job, cron `15 22 * * 1-5` UTC) fetches last 10 days to catch restatements; rows
+  identical to stored are skipped, changed rows written as `version+1` with `RESTATED` flag.
+- Raw responses are stored before normalisation (audit + replay without hitting the API).
+- Writes go through `storage.parquet_writer` and `storage.sql_repo` only.
+
+## 4. Synthetic generator
+- Per instrument: GBM with regime switching (2–3 Markov regimes: calm / stressed / crisis), Merton
+  jumps, intraday seasonality (U-shaped activity), ticks arrive as a Poisson process with time-varying
+  intensity. Power instrument allows negative prices (shifted process).
+- Calibrated: daily realised vol per regime matched to real Brent/HH history (±10 %); calibration
+  parameters in `ingest/sources/synthetic_params.yaml`.
+- Injects 0.01 % outliers and 0.1 % gaps (documented, flagged `SYNTHETIC`).
+- **Deterministic:** `numpy.random.Generator(PCG64(seed))`, one child stream per (instrument, year) via
+  `SeedSequence.spawn` ⇒ years can be generated **in parallel** and still be reproducible.
+- Streams output in monthly chunks; memory bounded (< 2 GB at L scale).
+
+## 5. Acceptance criteria
+- [ ] Backfill EIA Brent, WTI, Henry Hub and FRED EUR/USD from first available date; row counts logged
+      and asserted against source totals.
+- [ ] WTI 2020-04-20 stored as negative with `NEGATIVE` flag (golden test).
+- [ ] `tidal synth --scale S --seed 1` twice ⇒ identical file hashes.
+- [ ] Generating L scale on 8 cores finishes < 60 min locally; peak RSS < 2 GB.
+- [ ] Re-running daily ingest with unchanged source writes 0 rows.
+- [ ] Restated value produces version 2 and `as_of` query returns version 1 for earlier knowledge time.
+- [ ] Unit test coverage ≥ 90 % for `ingest/`.

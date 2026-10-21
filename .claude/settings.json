@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run:*)",
+      "Bash(uv sync:*)",
+      "Bash(make check:*)",
+      "Bash(make test:*)",
+      "Bash(make contracts:*)",
+      "Bash(make openapi-diff:*)",
+      "Bash(terraform fmt:*)",
+      "Bash(terraform validate:*)",
+      "Bash(tflint:*)",
+      "Bash(checkov:*)",
+      "Bash(helm lint:*)",
+      "Bash(helm template:*)",
+      "Bash(docker build:*)",
+      "Bash(docker compose:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git worktree:*)"
+    ],
+    "deny": [
+      "Bash(terraform apply:*)",
+      "Bash(terraform destroy:*)",
+      "Bash(helm upgrade:*)",
+      "Bash(helm install:*)",
+      "Bash(kubectl apply:*)",
+      "Bash(kubectl delete:*)",
+      "Bash(az * create:*)",
+      "Bash(az * delete:*)",
+      "Bash(git push origin main:*)",
+      "Bash(git push --force:*)",
+      "Read(.env.local)",
+      "Read(**/*.tfstate)"
+    ]
+  }
+}

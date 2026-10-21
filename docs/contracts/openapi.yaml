@@ -1,0 +1,120 @@
+openapi: 3.1.0
+info:
+  title: Tidal API
+  version: 1.0.0
+  description: >
+    Starter contract. T-004 completes every endpoint listed in api-contract.md.
+    This file is the source of truth; FastAPI output is diffed against it in CI.
+servers:
+  - url: https://api.tidal.example/v1
+security:
+  - entra: []
+components:
+  securitySchemes:
+    entra:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize
+          tokenUrl: https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token
+          scopes:
+            api://tidal/.default: Access Tidal
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status, correlation_id]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        correlation_id: { type: string }
+    Bar:
+      type: object
+      required: [ts, ts_ns, open, high, low, close, quality, version]
+      properties:
+        ts: { type: string, format: date-time }
+        ts_ns: { type: integer, format: int64 }
+        open: { type: number }
+        high: { type: number }
+        low: { type: number }
+        close: { type: number }
+        volume: { type: [number, "null"] }
+        quality: { type: integer, minimum: 0, maximum: 31 }
+        version: { type: integer, minimum: 1 }
+    BarsResponse:
+      type: object
+      required: [instrument_id, interval, tier, rows]
+      properties:
+        instrument_id: { type: string }
+        interval: { type: string, enum: ["1s", "1m", "1h", "1d"] }
+        tier: { type: string, enum: [hot, cold, mixed] }
+        rows: { type: array, items: { $ref: "#/components/schemas/Bar" } }
+        next_cursor: { type: [string, "null"] }
+    BacktestRequest:
+      type: object
+      required: [strategy, instrument_ids, interval, start, end, params, costs, seed]
+      properties:
+        strategy: { type: string, enum: [ma_crossover, mean_reversion, calendar_spread] }
+        instrument_ids: { type: array, minItems: 1, maxItems: 2, items: { type: string } }
+        interval: { type: string, enum: ["1m", "1h", "1d"] }
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+        params: { type: object, additionalProperties: { type: number } }
+        costs:
+          type: object
+          required: [fee_bps, slippage_bps]
+          properties:
+            fee_bps: { type: number, minimum: 0 }
+            slippage_bps: { type: number, minimum: 0 }
+        seed: { type: integer }
+        sweep:
+          type: object
+          additionalProperties: { type: array, items: { type: number }, maxItems: 20 }
+    BacktestAccepted:
+      type: object
+      required: [job_id, status]
+      properties:
+        job_id: { type: string, pattern: "^bt_[0-9A-HJKMNP-TV-Z]{26}$" }
+        status: { type: string, enum: [queued] }
+paths:
+  /health/live:
+    get:
+      security: []
+      responses: { "200": { description: alive } }
+  /bars:
+    get:
+      parameters:
+        - { name: instrument_id, in: query, required: true, schema: { type: string } }
+        - { name: interval, in: query, required: true, schema: { type: string, enum: ["1s", "1m", "1h", "1d"] } }
+        - { name: start, in: query, required: true, schema: { type: string } }
+        - { name: end, in: query, required: true, schema: { type: string } }
+        - { name: fill, in: query, schema: { type: string, enum: [none, ffill], default: none } }
+        - { name: as_of, in: query, schema: { type: string } }
+        - { name: format, in: query, schema: { type: string, enum: [json, arrow, parquet], default: json } }
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, maximum: 100000, default: 10000 } }
+      responses:
+        "200":
+          description: bars
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/BarsResponse" } }
+        "4XX":
+          description: error
+          content:
+            application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } }
+  /backtests:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: "#/components/schemas/BacktestRequest" } }
+      responses:
+        "202":
+          description: accepted
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/BacktestAccepted" } }
+        "4XX":
+          description: error
+          content:
+            application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } }
