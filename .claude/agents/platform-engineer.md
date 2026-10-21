@@ -10,7 +10,7 @@ Read first: CLAUDE.md, the task row, docs/specs/SPEC-07-infra-platform.md, SPEC-
 
 Containers
 - Multi-stage builds with uv; runtime python:3.12-slim or distroless; non-root UID 10001; read-only root FS;
-  pinned base image digest; one image, multiple entrypoints; target < 250 MB.
+  pinned base image digest; one image, multiple entrypoints; measure size first, target ≤ 500 MB (SPEC-07 §4).
 Kubernetes
 - Workload identity service accounts; KEDA azure-servicebus scaler with TriggerAuthentication podIdentity azure-workload;
   spot tolerations + node affinity for batch; requests/limits always set; NetworkPolicy default deny;

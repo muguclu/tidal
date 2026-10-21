@@ -8,7 +8,8 @@ Turn "cost optimisation" from a claim into evidence. Every optimisation has a **
 
 ## 2. Measurement sources
 1. **Azure Cost Management exports** (daily, amortised) to `bench/cost-exports/` via Terraform
-   `azurerm_subscription_cost_management_export`; analysed by `finops/cost_report.py`.
+   `azurerm_resource_group_cost_management_export` (RG scope, no subscription rights needed);
+   analysed by `finops/cost_report.py`.
 2. **Resource tags** (`component`, `lane`) for attribution.
 3. **Metrics** (Azure Monitor): SQL vCore seconds, storage used capacity per tier, AKS node hours by pool,
    Container Apps replica seconds, Service Bus operations.

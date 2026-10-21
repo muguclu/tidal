@@ -18,7 +18,8 @@ cold store (Parquet) according to age.
 | `ingest/sources/synthetic.py` | Generator (§4) |
 | `ingest/normalise.py` | Raw → arrow table in contract schema, UTC epoch ns |
 | `ingest/validate.py` | Sets quality flags; rejects only schema violations (never business-valid oddities) |
-| `ingest/router.py` | Splits rows by age: `ts ≥ now − hot_window` → SQL, else → Parquet |
+| `ingest/router.py` | Splits rows by age: `ts ≥ clock.now() − hot_window` → SQL, else → Parquet (clock injected; `TIDAL_CLOCK__NOW` freezes it for synthetic demos) |
+| `storage/aggregate.py` | Ticks → `bars_1s/1m/1h` (data-contracts §3.2), T-107 |
 | `ingest/cli.py` | `tidal ingest backfill --source eia --from 1986-01-01`, `tidal ingest daily`, `tidal synth --scale L` |
 
 ## 3. Behaviour
@@ -35,6 +36,9 @@ cold store (Parquet) according to age.
 - Calibrated: daily realised vol per regime matched to real Brent/HH history (±10 %); calibration
   parameters in `ingest/sources/synthetic_params.yaml`.
 - Injects 0.01 % outliers and 0.1 % gaps (documented, flagged `SYNTHETIC`).
+- Date range from `TIDAL_SYNTH__START/END` (default 2005-01-01 … 2025-12-31). The range is part of the
+  determinism key. Because synthetic data ends before "today", hot-window demos run with
+  `TIDAL_CLOCK__NOW` set inside the range (e.g. `2025-12-31T23:59:59Z`).
 - **Deterministic:** `numpy.random.Generator(PCG64(seed))`, one child stream per (instrument, year) via
   `SeedSequence.spawn` ⇒ years can be generated **in parallel** and still be reproducible.
 - Streams output in monthly chunks; memory bounded (< 2 GB at L scale).

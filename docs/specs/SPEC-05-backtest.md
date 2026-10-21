@@ -11,7 +11,8 @@ The "model running over 20+ years of data" requirement in a form that is easy to
 - Vectorised with polars; no Python loops over bars.
 - Strategies (pure functions `signals(bars, params) -> position series ∈ [-1, 1]`):
   - `ma_crossover(fast, slow)` · `mean_reversion(lookback, z_entry, z_exit)` ·
-    `calendar_spread(leg_a, leg_b, lookback, z_entry)` (two instruments, spread series).
+    `calendar_spread(lookback, z_entry, z_exit)` on the spread `instrument_ids[0] − instrument_ids[1]`
+    (e.g. `EIA.WTI.FUT1 − EIA.WTI.FUT2`, data-contracts §1.1).
 - Execution: position decided at close `t`, filled at open `t+1` (daily EIA bars: next close, documented).
 - Costs: `fee_bps` and `slippage_bps` applied to traded notional.
 
@@ -38,4 +39,6 @@ Golden tests with hand-computed fixtures (10-bar series) lock these.
 - [ ] Same request + seed ⇒ identical `result_sha256` across runs and machines (CI matrix).
 - [ ] 26 yrs daily Brent `ma_crossover` < 2 s; 10 yrs 1-minute synthetic < 60 s per pod.
 - [ ] 100-job sweep on AKS: scale 0 → ≥ 20 pods → 0, total wall time and € recorded (SPEC-09).
+      Needs PAYG + vCPU quota (PLANNING §7); if quota is refused, record the max reached and model the rest.
+- [ ] Locally (kind/k3d) the same 0 → N → 0 is demonstrated with a 20-job sweep (LOCAL-DEV §1).
 - [ ] Forced pod deletion mid-job ⇒ message redelivered, job completes once (no duplicate result rows).

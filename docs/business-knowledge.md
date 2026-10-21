@@ -37,7 +37,7 @@ scanned in bulk occasionally (model training, backtests, regulatory look-backs).
 
 | Reality | Example | Rule in Tidal |
 |---|---|---|
-| Negative prices | WTI front-month settled at −$37.63 on 2020-04-20 | Never clamp or reject negatives; validator flags as `anomaly`, keeps value |
+| Negative prices | WTI front-month settled at −$37.63 on 2020-04-20 | Never clamp or reject negatives; validator sets the `NEGATIVE` quality flag, keeps value |
 | Missing days | Holidays, exchange closures, source gaps | No forward-fill in storage; fill only in query layer if requested (`fill=ffill`) |
 | Restatements | Source corrects a past value | Append new version with later `ingested_at`; latest wins unless `as_of` given |
 | Time zones / DST | Exchange local time vs UTC | Store UTC epoch ns; keep `exchange_tz` in instrument metadata |
@@ -49,6 +49,7 @@ scanned in bulk occasionally (model training, backtests, regulatory look-backs).
 | Source | Series | History | Notes |
 |---|---|---|---|
 | EIA Open Data API v2 | Brent spot (RBRTE), WTI spot (RWTC), Henry Hub (RNGWHHD) | WTI 1986→, Brent 1987→, HH 1997→ | Free API key; daily |
+| EIA Open Data API v2 | WTI futures contract 1–4 (RCLC1–4), Henry Hub futures 1–4 (RNGC1–4) | WTI 1983→, HH 1994→ | Nearby series, no roll adjustment; enable M1–M2 calendar spreads |
 | FRED | EUR/USD (DEXUSEU), other macro | 1999→ | Free API key |
 | Synthetic generator | ~10 instruments, ticks/1s bars | Configurable, default 2005–2025 | GBM + jumps + regime switching, calibrated to real daily vol; seeded |
 

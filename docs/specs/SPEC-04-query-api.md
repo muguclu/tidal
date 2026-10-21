@@ -7,8 +7,10 @@ Tasks: T-110, T-111, T-209, T-210
 Secure, contract-exact HTTP API for traders, quants and admins. Two deployables from one codebase:
 - **`tidal-api`** on **App Service** (Linux, container): auth, routing, backtest submission, small queries.
 - **`tidal-query`** on **Container Apps** (scale 0→N on HTTP concurrency): heavy cold-store scans,
-  called by `tidal-api` over internal ingress with managed-identity auth. Shows serverless containers
-  next to a classic PaaS host.
+  called by `tidal-api` with an Entra token from `id-api` (audience `TIDAL_QUERY__AUDIENCE`, validated by
+  `tidal-query`). Ingress: **external + token validation** while `enable_private_networking=false`
+  (App Service cannot reach internal ingress without VNet integration); **internal** when the flag is on.
+  Shows serverless containers next to a classic PaaS host.
 
 ## 2. Structure
 ```
@@ -30,10 +32,11 @@ api/streaming.py      arrow / parquet streaming responses
   in `ops.backtest_job`, send messages in **batches** (`ServiceBusMessageBatch`), return `202`.
 
 ## 4. Acceptance criteria
-- [ ] `oasdiff breaking docs/contracts/openapi.yaml <generated>` reports nothing.
+- [ ] `oasdiff breaking` reports nothing in **either** direction (contract→generated, generated→contract);
+      cosmetic differences of FastAPI's 3.1 output (e.g. `anyOf` vs type arrays) are allowed.
 - [ ] Contract tests: schemathesis run against the app with fakes, 0 failures.
-- [ ] Auth tests: missing token 401, wrong audience 401, missing role 403, correct role 200 (tokens minted
-      by a local test JWKS).
+- [ ] Auth tests: missing token 401, wrong audience 401, missing role 403, correct role 200, role
+      hierarchy per api-contract §1.1 (tokens minted by the local test JWKS from `scripts/dev-token.py`).
 - [ ] `/bars` for 20 yrs daily Brent returns < 300 ms p95 (warm) on App Service B1.
 - [ ] `format=arrow` streams 10M rows with RSS < 500 MB.
 - [ ] Sweep of 6×5 params creates 30 messages and one parent job.

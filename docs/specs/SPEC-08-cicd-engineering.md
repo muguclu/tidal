@@ -25,7 +25,7 @@ Tasks: T-001 … T-008, T-311, T-312 · See also `docs/engineering-practices.md`
 | `integration.yml` | PR label `integration`, nightly | docker compose up → integration tests (Azurite, SQL Server container, SB emulator) |
 | `iac.yml` | PR touching `infra/**` | fmt, validate, tflint, checkov, `terraform plan` (OIDC) → plan posted as PR comment |
 | `images.yml` | push main, tags | build, trivy, syft SBOM, push to ACR (`sha-*`, `vX.Y.Z`) |
-| `deploy.yml` | release tag, manual | environment `dev` (required reviewer) → terraform apply → helm upgrade → az webapp/containerapp update → smoke tests |
+| `deploy.yml` | release tag, manual | environment `dev` (required reviewer) → helm upgrade → az webapp/containerapp update → smoke tests. **No `terraform apply`**: infra is applied by a human (CLAUDE.md, KICKOFF §3) |
 | `bench.yml` | manual | run storage benchmark at S scale, upload results artefact |
 | `cost.yml` | weekly cron | export last 7 d cost by tag → commit `docs/finops/results/weekly-*.md` via PR |
 

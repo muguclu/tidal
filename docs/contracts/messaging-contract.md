@@ -52,6 +52,9 @@ application property `schema` = `<name>/v<major>`.
 
 - **Idempotent:** a worker that sees an existing `output_prefix/_SUCCESS` marker completes the
   message without recomputing.
+- **No broker de-duplication:** Basic SKU has no duplicate detection, and `backtest-results` is
+  delivered up to 5 times. The result aggregator is idempotent on `job_id`: a child already in a
+  terminal state is not counted again (conditional `UPDATE ... WHERE status NOT IN (terminal)`).
 - **Poison handling:** after max delivery → DLQ; `tidal dlq inspect` CLI lists and can resubmit.
 - **Spot eviction:** SIGTERM handler abandons the message (not dead-letter) so it is redelivered.
 - Messages > 200 KB are not allowed; large inputs go to Blob and the message carries a URL.

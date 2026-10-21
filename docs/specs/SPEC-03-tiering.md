@@ -5,14 +5,15 @@ messaging-contract `tiering.job/v1`, data-contracts §6 · Tasks: T-205 … T-20
 
 ## 1. Purpose
 Keep only the **hot window** (default 90 days) in Azure SQL; move older rows to epoch Parquet on Blob;
-let Blob lifecycle push old partitions down to Cool → Cold → Archive by **data age**. Demonstrates
+let Blob lifecycle push old partitions down to Cool → Cold by **data age** (Archive only for `raw/`). Demonstrates
 "moving data from structured relational DB to object storage" and "optimise storage costs".
 
 ## 2. Migration job (`storage/tiering.py`, run as Container Apps Job)
 1. Acquire `sp_getapplock('tiering:' + table, 'Exclusive')`; exit if held.
 2. Read watermark from `ops.migration_watermark`.
-3. Select rows with `ts_ns < now − hot_window` and `ts_ns ≥ watermark`, in **monthly batches**
-   (`batch_rows` cap), ordered by `instrument_key, ts_ns`.
+3. Select rows (**all versions**) with `ts_ns < clock.now() − hot_window` and `ts_ns ≥ watermark`, in
+   **monthly batches** (`batch_rows` cap), ordered by `instrument_key, ts_ns, version`. Daily bars append
+   one part per month to their yearly partition (storage-layout §2).
 4. Write Parquet via `parquet_writer` to the layout path; write `_manifest.json` (row count, min/max ts,
    sha256 of file).
 5. **Verify**: re-read the written file, compare row count + checksum of (ts_ns, close) with the SQL batch.
@@ -28,6 +29,10 @@ skips the write, only deleting/advancing. Property test: kill the job at each st
 ## 3. Yearly re-tagging
 `tidal tiering retag` recomputes `age_band` for all blobs once per year (Jan 2) so lifecycle rules move
 data that "aged" across a band boundary.
+
+## 3.1 Compaction
+`tidal tiering compact --dataset bars_1d` merges the parts of a partition into one file keeping every
+version (storage-layout §2). Runs yearly after retag, and is crash-safe the same way as migration.
 
 ## 4. Lifecycle policy (Terraform `modules/storage`)
 
@@ -46,7 +51,8 @@ modelled in the cost model.
 ## 5. Unified reader (`query/reader.py`)
 - `read_bars(instrument, interval, start, end, as_of=None)` splits the range at the watermark:
   cold part via duckdb `read_parquet('az://md/v1/...', hive_partitioning=1)` with filter pushdown,
-  hot part via SQL; concatenates with polars; de-duplicates by key keeping max version ≤ as_of.
+  hot part via SQL; concatenates with polars; resolves versions per data-contracts §7 (latest, or
+  max version with `ingested_at_ns ≤ as_of`).
 - Returns tier used (`hot|cold|mixed`) for the `X-Tidal-Tier` header.
 
 ## 6. Acceptance criteria

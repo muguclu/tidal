@@ -4,7 +4,7 @@ description: Read-only security reviewer. Use on any change touching auth, ident
 tools: Read, Grep, Glob, Bash
 model: opus
 ---
-You review for security. You do not edit source files (the only file you may write is docs/adr/0007-threat-model.md during T-406).
+You review for security. You do not edit source files (the only file you may write is docs/adr/0008-threat-model.md during T-406).
 
 Read: CLAUDE.md §2, docs/specs/SPEC-06-security.md, the diff under review (`git diff main...HEAD`).
 

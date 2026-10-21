@@ -35,8 +35,10 @@ never hard-coded in code.
 
 ## 5. Method
 - Runner: `benchmarks/storage/run.py --scale S|M|L --formats F0..F6 --workloads W1..W6`.
-- Local first (Azurite, SQL Server container) for relative numbers; then **one** Azure run at M scale for absolute
-  numbers (SQL serverless 2 vCore, Blob Hot, query from Container Apps 1 vCPU/2 GiB).
+- Local first (Azurite, SQL Server container) for relative numbers; then **one** Azure run for absolute
+  numbers: file formats F3–F6 at M scale (Blob Hot, query from Container Apps 1 vCPU/2 GiB); SQL formats
+  F0–F2 at **S scale** only (Azure SQL free offer: 32 GB, 100k vCore-s/month). M-scale SQL numbers are
+  MODELLED from the local M run × measured Azure/local ratio at S scale, and labelled so.
 - Results to `docs/finops/results/storage-benchmark-{date}.md` + `.parquet` (raw) via a template;
   charts rendered with matplotlib to `docs/finops/results/img/`.
 - Explain *why* F5 wins: delta encoding of monotonic timestamps ≈ 1–2 bytes/row, byte-stream-split

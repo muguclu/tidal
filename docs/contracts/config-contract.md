@@ -7,13 +7,19 @@ Every service reads only these keys. Unknown `TIDAL_*` keys fail startup (catche
 |---|---|---|---|---|
 | `TIDAL_ENV` | `local\|dev\|prod` | `local` | no | app setting |
 | `TIDAL_LOG_LEVEL` | str | `INFO` | no | app setting |
+| `TIDAL_SERVICE_NAME` | `api\|query\|worker\|ingest\|tiering\|legacy` | `api` | no | set per entrypoint/deployment |
 | `TIDAL_STORAGE__ACCOUNT_URL` | url | Azurite URL | no | Terraform output |
 | `TIDAL_STORAGE__USE_MANAGED_IDENTITY` | bool | `false` | no | `true` in Azure |
+| `TIDAL_STORAGE__CONNECTION_STRING` | secret | — | **yes** | local only (Azurite well-known key); never set in Azure |
 | `TIDAL_SQL__SERVER` | str | `localhost` | no | Terraform output |
 | `TIDAL_SQL__DATABASE` | str | `tidal` | no | |
 | `TIDAL_SQL__AUTH` | `entra_mi\|sql_password` | `sql_password` | no | `entra_mi` in Azure |
+| `TIDAL_SQL__USER` | str | `sa` | no | local only |
 | `TIDAL_SQL__PASSWORD` | secret | — | **yes** | local only; never set in Azure |
-| `TIDAL_SERVICEBUS__FQDN` | str | emulator | no | Terraform output |
+| `TIDAL_SERVICEBUS__FQDN` | str | `localhost` | no | Terraform output |
+| `TIDAL_SERVICEBUS__CONNECTION_STRING` | secret | — | **yes** | local only (emulator, `UseDevelopmentEmulator=true`); never set in Azure |
+| `TIDAL_QUERY__BASE_URL` | url | `http://query:8000` | no | Container Apps FQDN (Terraform output) |
+| `TIDAL_QUERY__AUDIENCE` | str | `api://tidal-query` | no | Entra audience `tidal-api` requests a token for |
 | `TIDAL_AUTH__TENANT_ID` | uuid | — | no | |
 | `TIDAL_AUTH__AUDIENCE` | str | `api://tidal` | no | |
 | `TIDAL_AUTH__DISABLED` | bool | `false` | no | `true` only when `TIDAL_ENV=local` (startup asserts) |
@@ -22,9 +28,17 @@ Every service reads only these keys. Unknown `TIDAL_*` keys fail startup (catche
 | `TIDAL_HOT_WINDOW_DAYS` | int | `90` | no | |
 | `TIDAL_SYNTH__SCALE` | `S\|M\|L` | `S` | no | |
 | `TIDAL_SYNTH__SEED` | int | `20261021` | no | |
+| `TIDAL_SYNTH__START` | date | `2005-01-01` | no | first synthetic day (UTC) |
+| `TIDAL_SYNTH__END` | date | `2025-12-31` | no | last synthetic day; part of the determinism key |
+| `TIDAL_CLOCK__NOW` | datetime | — | no | local/test only: freezes "now" for the router and tiering (hot-window demos on synthetic data) |
 | `TIDAL_OTEL__CONNECTION_STRING` | secret | — | **yes** | Key Vault reference |
 
 Rules:
+- `AZURE_CLIENT_ID` (user-assigned managed identity) is read by `DefaultAzureCredential`, not by
+  Tidal settings; it is outside the `TIDAL_` namespace and therefore not subject to the unknown-key rule.
+- `*_CONNECTION_STRING` and `TIDAL_SQL__PASSWORD` set while `TIDAL_ENV != local` fail startup.
+- "Now" comes from an injected clock (`tidal.common.timeutil.Clock`) everywhere; only the clock reads
+  wall time or `TIDAL_CLOCK__NOW`.
 - Secrets in Azure are **Key Vault references** (`@Microsoft.KeyVault(SecretUri=…)`) in App Service /
   Container Apps, and **CSI Secrets Store driver** (workload identity) on AKS.
 - `Settings.__repr__` masks secret fields (`SecretStr`).

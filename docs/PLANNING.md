@@ -24,7 +24,7 @@ Build a portfolio-grade platform that proves, with code and measured numbers, th
 - Synthetic tick/1-second data for ~10 instruments × 20 years, configurable scale (S/M/L).
 - Storage benchmark: row-store SQL vs CSV vs naive Parquet vs **epoch-optimised Parquet**.
 - Hot/cold tiering with automated migration and lifecycle management.
-- Query API (bars, ticks, curves-lite, as-of) with auth and RBAC.
+- Query API (bars, ticks, spreads incl. M1–M2 from EIA futures contracts 1–4, as-of) with auth and RBAC.
 - Backtest jobs: deterministic strategies (moving-average crossover, mean reversion, calendar
   spread) over full history, fan-out on AKS.
 - FinOps: cost model, measured results, budget alerts, a written report.
@@ -44,7 +44,7 @@ synthetic ▶ (normalise,  │              ▼
             validate)    │      ┌───────────────┐   migrate > 90d   ┌─────────────────────────┐
           └──────────────┘      │ Azure SQL     │ ───────────────▶ │ Blob: epoch Parquet     │
                                 │ serverless    │                   │ hot → cool → cold →     │
-                                │ (hot window)  │                   │ archive (lifecycle)     │
+                                │ (hot window)  │                   │ (no Archive for md/)    │
                                 └──────┬────────┘                   └───────────┬─────────────┘
                                        │ unified reader (SQL ∪ Parquet via duckdb)
                                        ▼                                         │
@@ -66,11 +66,15 @@ phase's wave starts. Waves and parallel lanes are detailed in `PARALLELISM.md`.
 
 ### Phase 0 — Foundation (Wave 0, mostly sequential)
 Repo scaffold, tooling, CI skeleton, contracts v1 frozen, ADR-0001..0005, Terraform backend.
+Items marked `NEEDS-CLOUD` are written and validated locally in their phase but only *executed* in
+the cloud window (`LOCAL-DEV.md` §2); `/gate` reports them as NEEDS-CLOUD, which does not block the gate.
+
 **Gate G0**
 - [ ] `uv sync && pre-commit && pytest` green in CI on an empty skeleton
 - [ ] All contracts in `docs/contracts/` reviewed and tagged `contracts-v1`
 - [ ] `src/tidal/contracts/` models generated & contract tests pass
 - [ ] Branch protection + CODEOWNERS + PR template active on `main`
+- [ ] Terraform bootstrap + OIDC module `terraform validate` clean (`NEEDS-CLOUD`: state account applied, OIDC login works)
 
 ### Phase 1 — Data core & infra base (Wave 1, 3 parallel lanes)
 Lane A data: synthetic generator, EIA/FRED sources, normaliser, epoch Parquet writer, layout.
@@ -79,8 +83,8 @@ Lane C api: FastAPI skeleton against contract with in-memory fake repository.
 **Gate G1**
 - [ ] 20+ years of real daily data ingested locally into Parquet + SQL Server container
 - [ ] Synthetic S-scale (≈ 50M rows) generated reproducibly from a seed
-- [ ] `terraform plan` clean for `envs/dev`; applied once by a human; outputs recorded
-- [ ] API returns contract-valid responses from fakes; OpenAPI diff vs contract = 0
+- [ ] `terraform validate` + tflint + checkov clean for `envs/dev` (`NEEDS-CLOUD`: plan clean, applied once by a human, outputs recorded)
+- [ ] API returns contract-valid responses from fakes; `oasdiff breaking` reports nothing in either direction
 
 ### Phase 2 — Storage strategy & query (Wave 2, 3 lanes)
 Lane A: storage benchmark (4 formats) + results. Lane B: tiering/migration job + lifecycle
@@ -128,8 +132,9 @@ README, architecture diagram, runbooks, demo script, 3-minute video, LinkedIn po
 | 9 | P5 | Cost report |
 | 10 | P6 | Public launch |
 
-A **"minimum hireable"** cut exists after P2 + the AKS part of P3: if time runs short, ship that
-with the cost report for what exists.
+The plan has ~75 tasks; at ~10 h/week the 10-week timeline is optimistic (plan-review 2026-10-21 #31).
+The **"minimum hireable"** cut — P0–P2 + the AKS part of P3 + a cost report for what exists — is the
+primary target; P4–P6 are stretch. Re-plan at every gate using actual velocity.
 
 ## 6. Budget guardrails (personal subscription)
 
@@ -148,6 +153,8 @@ account credit) for evidence — see `docs/LOCAL-DEV.md`.
 | Risk | Impact | Mitigation |
 |---|---|---|
 | AKS cost overruns | € | Free tier control plane, B-series system node, spot user pool min 0, `make park` |
+| Free-trial vCPU quota (≈ 4 vCPU/region, no spot) blocks the 0→20-pod demo | G3 not provable | Upgrade to PAYG and request quota (DASv5 + spot ≥ 24 vCPU) **before** cloud-window day 11; budget alerts on (LOCAL-DEV §2) |
+| Azure SQL free offer (32 GB, 100k vCore-s/month) too small for M-scale SQL benchmark | Benchmark incomplete | Azure SQL formats run at S scale; M-scale SQL numbers are MODELLED from local runs (SPEC-02 §5) |
 | Spot eviction mid-backtest | Jobs fail | Jobs are idempotent & checkpointed; KEDA retries; DLQ after 3 attempts |
 | Free API rate limits (EIA/FRED) | Slow ingest | Cache raw responses in Blob `raw/`; backoff; one-time backfill |
 | Synthetic data looks fake | Credibility | Calibrate GBM + jumps + regime switches to real daily vol; document it |

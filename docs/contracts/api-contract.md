@@ -8,12 +8,26 @@ CI fails if FastAPI's generated OpenAPI differs from it (`oasdiff breaking`).
 - Auth: `Authorization: Bearer <Entra ID access token>`; audience `api://tidal`; roles claim.
 - Time parameters accept ISO-8601 UTC (`2020-04-20T00:00:00Z`) **or** epoch ns integers.
   Responses always return `ts` as ISO-8601 **and** `ts_ns` as integer.
-- Pagination: cursor-based (`next_cursor`), `limit` default 10 000, max 100 000 rows.
+- Pagination: cursor-based (`next_cursor`), `limit` default 10 000, max 100 000 rows — for
+  `format=json` only. `arrow`/`parquet` stream the whole range (bounded by the range limits in SPEC-04 §3).
 - Large results: `format=json|arrow|parquet` (`application/vnd.apache.arrow.stream` for arrow).
 - Errors: RFC 7807 `application/problem+json` with `type`, `title`, `status`, `detail`,
   `correlation_id`.
-- Every response carries `X-Correlation-Id` and `X-Tidal-Tier` (`hot`, `cold`, `mixed`) — used in
-  FinOps to attribute query cost to tiers.
+- Every response carries `X-Correlation-Id`. Every market-data response (`/bars`, `/ticks`, `/latest`,
+  `/spreads`) also carries `X-Tidal-Tier` (`hot`, `cold`, `mixed`) — used in FinOps to attribute
+  query cost to tiers.
+
+### 1.1 Roles (Entra app roles, cumulative)
+`Tidal.Reader` ⊂ `Tidal.Trader` ⊂ `Tidal.Quant`; `Tidal.Admin` is separate and grants only `/admin/*`
+(an operator also given Quant gets both). The **Role** column below is the minimum role.
+
+| Endpoint group | Reader | Trader | Quant | Admin |
+|---|---|---|---|---|
+| health | ✓ (no auth) | ✓ | ✓ | ✓ |
+| instruments, bars, latest | ✓ | ✓ | ✓ | — |
+| ticks, spreads | — | ✓ | ✓ | — |
+| backtests (submit/read own) | — | — | ✓ | — |
+| admin | — | — | — | ✓ |
 
 ## 2. Endpoints
 
@@ -54,6 +68,10 @@ CI fails if FastAPI's generated OpenAPI differs from it (`oasdiff breaking`).
   "seed": 42,
   "sweep": { "fast": [10, 20, 50], "slow": [100, 200] }   // optional → fan-out N child jobs
 }
+// calendar_spread: instrument_ids = [leg_a, leg_b] (exactly 2, e.g. EIA.WTI.FUT1, EIA.WTI.FUT2);
+// params = { lookback, z_entry, z_exit }. All other strategies take exactly 1 instrument.
+// seed: strategies v1 are fully deterministic; seed is recorded and hashed for future stochastic
+// strategies (e.g. bootstrap), so the result hash already covers it.
 
 // BacktestStatus
 { "job_id": "bt_01J...", "status": "queued|running|succeeded|failed|partial",

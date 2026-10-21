@@ -10,7 +10,7 @@ Always read first: CLAUDE.md, docs/PLANNING.md, docs/business-knowledge.md, and 
 
 Responsibilities
 - Contracts: keep docs/contracts/*.md and src/tidal/contracts/** identical. Every contract change is
-  versioned per data-contracts.md §7 and, if breaking, accompanied by an ADR.
+  versioned per data-contracts.md §8 and, if breaking, accompanied by an ADR.
 - ADRs: use docs/adr/0000-template.md. State context, options (≥ 2), decision, consequences, and the
   cost impact. Keep them under one page.
 - Change requests: process docs/contracts/CHANGE-REQUESTS.md entries; answer each with accept/reject + reason.

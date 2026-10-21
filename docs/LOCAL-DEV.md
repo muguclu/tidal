@@ -23,8 +23,10 @@ Azure free account (new customers): **USD 200 credit valid 30 days**, plus 12-mo
 always-free services. After 30 days, upgrade to pay-as-you-go or the account is disabled.
 
 Important constraints:
-- Free credit **cannot be used for Spot VMs** → during the credit period run the AKS user pool
-  on-demand with KEDA min 0; enable spot only after upgrading to PAYG (budget alert on).
+- Free credit **cannot be used for Spot VMs**, and free-trial vCPU quota is tiny (≈ 4 vCPU per region,
+  not raisable). The 0→20-pod KEDA demo is therefore impossible on the trial. **Decision:** upgrade to
+  PAYG (credit is kept) and request quota (Standard DASv5 family ≥ 24 vCPU, spot ≥ 24 vCPU) on day 1,
+  so it is approved before day 11. Without approval: run the demo at the quota maximum and model the rest.
 - **Azure SQL Database free offer**: up to 10 free GP serverless DBs per subscription, 100,000 vCore-seconds
   + 32 GB each per month, lifetime of the subscription; set "auto-pause until next month" on limit.
   Use it for `tidal` DB → SQL cost ≈ €0 (note in cost report as a dev-only lever).

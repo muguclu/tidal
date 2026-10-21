@@ -6,6 +6,6 @@ labels: contract-change
 ---
 **Contract & section:**
 **Change:**
-**Breaking?** yes/no (see data-contracts §7)
+**Breaking?** yes/no (see data-contracts §8)
 **Why / which task needs it:**
 **Alternatives considered:**

@@ -27,17 +27,23 @@ md/v1/{dataset}/instrument={instrument_id}/year={YYYY}/month={MM}/part-{seq:05d}
 ```
 
 - Hive-style partitions so duckdb/polars prune by instrument & time.
-- Daily bars: one file per instrument per **year** (`month=00`) — tiny data, avoid small files.
-- Target file size **64–256 MB**; writer rolls files at 1M rows (ticks) or by month.
-- Files are **immutable**. Restatements write a new `part-` with higher `version` rows; compaction
-  job merges and keeps latest version per key (`compacted=true` tag).
+- Daily bars: partition per instrument per **year** (`month=00`) — tiny data, avoid small files.
+  Backfill writes one part per year; tiering appends one small part per migrated month, so a
+  year accumulates ≤ 12 extra parts until compaction.
+- Ticks and intraday bars: one file per instrument per **month** (roll to a new `part-` only above
+  10M rows). Epoch Parquet is ~5–10 bytes/tick, so a month is typically 5–60 MB; bigger targets
+  would need multi-month files and break monthly pruning.
+- Files are **immutable**. Restatements write a new `part-` containing the higher-`version` rows.
+  Compaction merges the parts of one partition into one file **keeping every version** (as-of needs
+  them, data-contracts §7), writes it, verifies row count + checksum, then deletes the old parts and
+  tags the new file `compacted=true`.
 
 ## 3. Parquet writer settings (normative)
 
 | Setting | Value |
 |---|---|
 | compression | `zstd`, level 6 (benchmarked vs 3/9 in SPEC-02) |
-| row group size | 1,000,000 rows |
+| row group size | 1,000,000 rows (a file holds ≥ 1 row group) |
 | data page size | 1 MiB |
 | `ts_ns` encoding | `DELTA_BINARY_PACKED` |
 | float encodings | `BYTE_STREAM_SPLIT` (+ zstd) |

@@ -13,25 +13,32 @@ tasks, spawns subagents, reviews their output, merges in order and checks gates.
 5. **Merge order is fixed per wave** (below). Rebase the next branch after each merge; re-run CI.
 6. **Subagents never:** merge, push to `main`, `terraform apply`, `helm upgrade` against Azure, change
    `docs/contracts/**` (except T-003/T-004), or edit CLAUDE.md.
+7. **Shared files are orchestrator-only after T-001:** `pyproject.toml`, `uv.lock`, `Makefile`,
+   `tests/conftest.py`, `docs/finops/cost-model.md`. T-001 installs the full ADR-0007 dependency set so
+   lanes never need to touch them. A lane that needs a change reports it; the orchestrator applies it
+   on `main` between merges and the lane rebases. Azure-resource tasks write `docs/finops/deltas/T-xxx.md`;
+   the orchestrator folds deltas into the cost model at the end of each wave.
+8. **The main session implements only T-001** (the scaffold everything needs) and orchestrator-only
+   shared-file edits; all other tasks go to subagents.
 
 ## 2. Wave plan
 
 ```
-W0a  T-001 ─────────────────────────────────────────────── (sequential)
-W0b  L1 platform: T-002 → T-007        L2 architect: T-003 → T-005
-     L3 api: T-004                     L4 architect: T-006      L5 infra: T-008
+W0a  T-001 ─────────────────────────────────────────────── (sequential, main session)
+W0b  L1 architect: T-003 → T-005      L2 api: T-004      L3 platform: T-002 → T-007
+W0c  L1 architect: T-006              L2 infra: T-008    (≤ 3 implementing agents at once)
      ── G0: contracts-v1 ──
-W1   A data:  T-101 → {T-102 → T-103, T-104} ; T-106 (parallel) → T-105
-     B infra: T-120 → {T-121, T-122, T-123, T-124, T-125} → T-126
-     C api:   T-110 → T-111       (+ T-112 platform, independent)
+W1   A data:  T-101 → {T-102 → T-103, T-104} ; T-106 (parallel) → T-107 → T-105
+     B infra: T-120 → {T-121, T-122, T-123, T-124, T-125} → T-126 ; T-127
+     C api:   T-113 → T-110 → T-111       (+ T-112 platform, + T-501 finops — both independent)
      ── G1 ──
-W2   A bench: T-201 → {T-202, T-203} → T-204   (T-501 early, finops)
+W2   A bench: T-201 → {T-202, T-203} → T-204   (T-301 engine can start here, pure code)
      B tier:  T-205 → T-206 ; T-207 ; T-208 (T-208 can start at W2 day 1)
      C api:   waits for T-208 → T-209 → T-210
      ── G2 ──
-W3   A bt:    T-301 → {T-302, T-303} → T-304
+W3   A bt:    T-301 (if not done) → {T-302, T-303} → T-304
      B aks:   T-305 → T-306 → T-307 → T-308
-     C paas:  T-309, T-310 (parallel) ; then T-311, T-312
+     C paas:  T-309, T-310 (parallel) ; then T-311, T-312, T-313
      ── G3 ──
 W4   L1 infra: T-401 → T-403 → T-404    L2 api: T-402 (after T-401)    L3 platform: T-405
      review: T-406 (security-reviewer, after all)
@@ -46,6 +53,7 @@ Cross-lane dependency inside a wave (e.g. T-209 needs T-208): the dependent lane
 another task until the dependency merges; never imports from an unmerged branch.
 
 ## 3. Merge order per wave
+- W0b: L1 (contracts) → L2 (OpenAPI) → L3 (CI). W0c: any order.
 - W1: B (infra, no code deps) → A (data) → C (api).
 - W2: B (T-208 reader first) → C → A (benchmark last, it only reads).
 - W3: A (engine/worker) → B (images/helm) → C (deploy pipelines last).

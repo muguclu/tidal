@@ -4,7 +4,9 @@
 - GitHub repo `tidal` (public), second GitHub account for reviews (SPEC-08 §1 solo note).
 - Azure subscription with a budget; `az login`; Terraform ≥ 1.9; Docker; uv; Node (for oasdiff/redocly via npx).
 - Free API keys: EIA (eia.gov/opendata), FRED (fred.stlouisfed.org).
-- Copy this folder into the repo root, commit as `chore: planning docs (T-000)`.
+- This folder is the repo root (`git init -b main`), first commit `chore: planning docs (T-000)`.
+- Windows: `winget install ezwinports.make Hashicorp.Terraform Microsoft.AzureCLI` (make is needed
+  for the Makefile targets; CI runs on Linux).
 
 ## 1. First session — review the plan (no code)
 ```
@@ -22,7 +24,7 @@ Implement T-001 in the main session (it is the scaffold everything else needs). 
 ```
 /wave 0
 ```
-This proposes T-002/T-003/T-004/T-006/T-008 in parallel lanes. Confirm, let agents run, read reviews,
+This proposes W0b (T-003/T-004/T-002) and then W0c (T-006/T-008) — at most 3 lanes at once. Confirm, let agents run, read reviews,
 open PRs, merge in order. Then:
 ```
 /gate G0

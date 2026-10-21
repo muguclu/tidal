@@ -8,6 +8,7 @@
 | 0004 | Epoch Parquet on flat-namespace Blob, tiering by data age via index tags, no Archive for md | Proposed |
 | 0005 | Trunk-based development with short-lived branches | Proposed |
 | 0006 | Terraform over Bicep; no Service Bus private endpoint (Premium cost) | Proposed |
-| 0007 | Threat model (STRIDE) | written in T-406 |
+| 0007 | Baseline dependency set (declared up-front in T-001) | Proposed |
+| 0008 | Threat model (STRIDE) | written in T-406 |
 
-T-006 turns 0001–0006 from the stubs below into full ADRs using 0000-template.md.
+T-006 turns 0001–0007 from the stubs below into full ADRs using 0000-template.md.

@@ -26,7 +26,8 @@ be **backed by a number in `docs/finops/`**. "It's cheaper" without a benchmark 
 4. **Everything is IaC.** If it exists in Azure, it exists in `infra/terraform/`. No portal clicks
    except reading Cost Management.
 5. **Cost is a feature.** Every new Azure resource needs: SKU justification, scale-to-zero or
-   auto-pause plan, and a line in `docs/finops/cost-model.md`.
+   auto-pause plan, and a cost line — in `docs/finops/deltas/T-xxx.md`, which the orchestrator folds
+   into `docs/finops/cost-model.md` at the end of the wave.
 6. **Small PRs.** One task ID per branch, < ~400 changed lines excluding generated files/tests.
 7. **Tests are part of done.** Unit + contract tests for every task; integration tests where a
    boundary is touched.
@@ -47,6 +48,9 @@ be **backed by a number in `docs/finops/`**. "It's cheaper" without a benchmark 
 | Orchestration | AKS + **KEDA**, Helm 3; Azure Container Apps; App Service; 1 legacy VM |
 | IaC | **Terraform** (azurerm ~> 4.x), remote state in Azure Storage |
 | CI/CD | GitHub Actions with OIDC → Azure |
+
+The full baseline set (incl. numpy, pyyaml, httpx, PyJWT[crypto], python-ulid, azure-monitor-opentelemetry,
+schemathesis, vcrpy, matplotlib, locust) is fixed in ADR-0007 and installed by T-001. Anything else needs a new ADR.
 
 ## 4. Repository layout
 

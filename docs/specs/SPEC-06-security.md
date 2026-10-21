@@ -18,12 +18,12 @@ Owner agents: `infra-engineer`, `api-engineer`; reviewer: `security-reviewer` ·
 |---|---|---|---|---|---|---|
 | id-api | Blob Data Reader | Blob Data Reader | db_datareader + exec on `ops` procs | Data Sender (`backtest-jobs`, `tiering-jobs`), Data Receiver (`backtest-results`) | Secrets User | — |
 | id-query | Blob Data Reader | — | db_datareader | — | Secrets User | — |
-| id-worker | Blob Data Reader | Blob Data Contributor | — | Data Receiver (`backtest-jobs`), Data Sender (`backtest-results`) | — | — |
-| id-ingest | Blob Data Contributor (`raw`,`md`) | — | db_datawriter on `md` | — | Secrets User | — |
-| id-tiering | Blob Data Contributor + Tag Contributor (`md`) | — | db_datareader/writer + delete on `md`, `ops` | Data Receiver (`tiering-jobs`) | — | — |
-| id-legacy-vm | Blob Data Contributor (`exports`) | — | db_datareader | — | — | — |
+| id-worker | Blob Data Reader | Blob Data Contributor | db_datareader on `md`, `ref` (unified reader reads the hot window) | Data Receiver (`backtest-jobs`), Data Sender (`backtest-results`) | — | — |
+| id-ingest | Blob Data Contributor (`raw`,`md`,`reference`) | — | db_datareader + db_datawriter on `md`, `ref`, `ops` (checkpoints, instrument first/last ts) | — | Secrets User | — |
+| id-tiering | Blob Data Owner on container `md` (blob index tags need `tags/write`; the ARM "Tag Contributor" role does **not** cover blob tags; T-403 checks whether Blob Data Contributor + a custom `tags/write` role is tighter) | — | db_datareader/writer + delete on `md`, `ops` | Data Receiver (`tiering-jobs`) | — | — |
+| id-legacy-vm | Blob Data Contributor (`exports`) | — | db_datareader | — | — | — (plus custom role `vm-self-deallocate`: `deallocate/action` on its own VM only) |
 | AKS kubelet | — | — | — | — | — | AcrPull |
-| sp-tidal-ci | — | — | — | — | — | AcrPush; Contributor on RG `rg-tidal-dev` only |
+| sp-tidal-ci | — | — | — | — | — | AcrPush; Contributor on RG `rg-tidal-dev` only (enough for image push and app updates; **not** for `terraform apply`, which needs role-assignment and Graph rights and stays human-only) |
 
 SQL: Entra-only authentication (`azuread_authentication_only = true`), identities mapped with
 `CREATE USER [id-api] FROM EXTERNAL PROVIDER`. No SQL logins.
@@ -49,7 +49,7 @@ SQL: Entra-only authentication (`azuread_authentication_only = true`), identitie
 - ACR: Basic SKU, admin user **disabled**, pulls only via managed identity.
 
 ## 6. Threat model
-STRIDE table in `docs/adr/0007-threat-model.md` (owned by `security-reviewer`).
+STRIDE table in `docs/adr/0008-threat-model.md` (owned by `security-reviewer`).
 
 ## 7. Acceptance checklist (security-reviewer sign-off)
 - [ ] Zero secrets in repo, image layers, app settings (except KV references).
