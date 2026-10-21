@@ -1,9 +1,10 @@
 """Pydantic API models == docs/contracts/openapi.yaml components (T-003 vs T-004 drift guard).
 
-Compares, per component and recursively into object properties / array items: the property set,
-the required set, nullability, enum values and ``additionalProperties: false``. Cosmetic JSON
-Schema differences (``anyOf`` vs type arrays, titles, formats, descriptions) are ignored on purpose
-(SPEC-04 §4).
+Compares, per component and recursively into object properties / array items / map values: the
+property set, the required set, nullability, ``type`` (null branches and ``anyOf`` vs type arrays
+normalised), enum values, numeric/string/array/object bounds, ``pattern`` and
+``additionalProperties: false``. Only cosmetic keys (description, title, format, examples) are
+ignored (SPEC-04 §4).
 """
 
 import json
@@ -74,6 +75,14 @@ class Side:
             return merged
         return schema
 
+    def types(self, schema: Schema) -> frozenset[str]:
+        """JSON types without ``null`` (``allOf``/``properties`` imply ``object``)."""
+        core = self.core(schema)
+        declared = core.get("type")
+        if declared is None:
+            return frozenset({"object"}) if "properties" in core else frozenset()
+        return frozenset({declared} if isinstance(declared, str) else declared) - {"null"}
+
     def enum(self, schema: Schema) -> set[Any] | None:
         schema = self.core(schema)
         if "const" in schema:
@@ -87,6 +96,17 @@ Y = Side(YAML_DEFS, "#/components/schemas/")
 P = Side(PYD_DEFS, "#/$defs/")
 
 
+#: (path, keyword) where code is deliberately stricter than openapi.yaml, with the contract reason.
+#: Each entry must still be a real difference (``test_known_differences_are_real``).
+KNOWN_DIFFERENCES: dict[tuple[str, str], str] = {
+    ("Bar.volume", "minimum"): "data-contracts §3: volume >= 0; openapi.yaml Bar.volume lacks it",
+}
+CONSTRAINTS = (
+    "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "pattern", "minLength",
+    "maxLength", "minItems", "maxItems", "minProperties", "maxProperties",
+)  # fmt: skip
+
+
 def compare(ys: Schema, ps: Schema, path: str, *, top: bool = False) -> None:
     """Assert structural equality of two schemas; object components are compared by name only
     below the top level (each is checked once by its own parametrised test)."""
@@ -94,10 +114,15 @@ def compare(ys: Schema, ps: Schema, path: str, *, top: bool = False) -> None:
         assert Y.object_ref(ys) == P.object_ref(ps), f"{path}: $ref"
         return
     y, p = Y.core(ys), P.core(ps)
-    if y.get("type") == "array" or p.get("type") == "array":
-        assert y.get("type") == p.get("type") == "array", path
+    assert Y.types(ys) == P.types(ps), f"{path}: type"
+    for key in CONSTRAINTS:
+        if (path, key) not in KNOWN_DIFFERENCES:
+            assert y.get(key) == p.get(key), f"{path}: {key}"
+    if "array" in Y.types(ys):
         compare(y["items"], p["items"], f"{path}[]")
         return
+    if isinstance(y.get("additionalProperties"), dict):
+        compare(y["additionalProperties"], p["additionalProperties"], f"{path}{{}}")
     if "properties" not in y:
         assert Y.enum(y) == P.enum(p), f"{path}: enum"
         return
@@ -111,11 +136,23 @@ def compare(ys: Schema, ps: Schema, path: str, *, top: bool = False) -> None:
         compare(y_prop, p_prop, f"{path}.{name}")
 
 
-OBJECT_COMPONENTS = sorted(
-    name
-    for name, schema in YAML_DEFS.items()
-    if name in PYD_DEFS and ("properties" in schema or "allOf" in schema)
-)
+YAML_OBJECTS = {n for n, s in YAML_DEFS.items() if {"properties", "allOf", "oneOf"} & set(s)}
+#: openapi object components deliberately without a pydantic model (name -> why). Empty today.
+NOT_MODELLED: dict[str, str] = {}
+OBJECT_COMPONENTS = sorted(n for n in YAML_OBJECTS if n in PYD_DEFS and "oneOf" not in YAML_DEFS[n])
+
+
+def test_known_differences_are_real() -> None:
+    for (path, key), _reason in KNOWN_DIFFERENCES.items():
+        component, *props = path.split(".")
+        y, p = YAML_DEFS[component], PYD_DEFS[component]
+        for prop in props:
+            y, p = Y.core(y)["properties"][prop], P.core(p)["properties"][prop]
+        assert Y.core(y).get(key) != P.core(p).get(key), f"stale KNOWN_DIFFERENCES entry {path}"
+
+
+def test_every_openapi_object_component_is_modelled_or_allowlisted() -> None:
+    assert YAML_OBJECTS - set(PYD_DEFS) == set(NOT_MODELLED)
 
 
 def test_every_api_component_is_compared() -> None:
@@ -187,6 +224,18 @@ def test_compare_detects_drift() -> None:
     del bar["properties"]["volume"]
     with pytest.raises(AssertionError, match="properties"):
         compare(YAML_DEFS["Bar"], bar, "Bar", top=True)
+    ts_as_string = json.loads(json.dumps(PYD_DEFS["Bar"]))
+    ts_as_string["properties"]["ts_ns"] = {"type": "string"}
+    with pytest.raises(AssertionError, match="ts_ns: type"):
+        compare(YAML_DEFS["Bar"], ts_as_string, "Bar", top=True)
+    costs = json.loads(json.dumps(PYD_DEFS["BacktestCosts"]))
+    costs["properties"]["fee_bps"]["minimum"] = 1
+    with pytest.raises(AssertionError, match="fee_bps: minimum"):
+        compare(YAML_DEFS["BacktestCosts"], costs, "BacktestCosts", top=True)
+    sweep = json.loads(json.dumps(PYD_DEFS["BacktestRequestBase"]))
+    sweep["properties"]["sweep"]["additionalProperties"]["maxItems"] = 20
+    with pytest.raises(AssertionError, match=r"sweep\{\}: maxItems"):
+        compare(YAML_DEFS["BacktestRequestBase"], sweep, "BacktestRequestBase", top=True)
     status = json.loads(json.dumps(PYD_DEFS["BacktestStatus"]))
     status["properties"]["children"] = {"$ref": "#/$defs/BacktestResult"}
     with pytest.raises(AssertionError, match=r"\$ref"):

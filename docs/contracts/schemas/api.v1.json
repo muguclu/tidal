@@ -599,18 +599,16 @@
           "$ref": "#/$defs/AssetClass"
         },
         "currency": {
-          "pattern": "^[A-Z]{3}$",
+          "maxLength": 3,
+          "minLength": 3,
           "title": "Currency",
           "type": "string"
         },
         "description": {
-          "maxLength": 256,
           "title": "Description",
           "type": "string"
         },
         "exchange_tz": {
-          "maxLength": 64,
-          "minLength": 1,
           "title": "Exchange Tz",
           "type": "string"
         },
@@ -665,8 +663,6 @@
           "$ref": "#/$defs/Source"
         },
         "unit": {
-          "maxLength": 16,
-          "minLength": 1,
           "title": "Unit",
           "type": "string"
         }

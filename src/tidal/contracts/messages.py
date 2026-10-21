@@ -40,16 +40,24 @@ class BacktestJob(_Model):
 
     job_id: JobId
     parent_job_id: JobId | None = None
-    child_index: int | None = Field(default=None, ge=0)
+    child_index: int | None = Field(default=None, ge=0, le=9999)
     request: AnyBacktestRequest
-    output_prefix: str = Field(
-        pattern=r"^backtests/bt_[0-7][0-9A-HJKMNP-TV-Z]{25}/(child-[0-9]{4}/)?$"
-    )
+    output_prefix: str = Field(pattern=OUTPUT_PREFIX_PATTERN)
 
     @model_validator(mode="after")
-    def _no_sweep(self) -> Self:
+    def _check(self) -> Self:
         if self.request.sweep is not None:
             msg = "backtest.job/v1 carries a resolved request: sweep must be null"
+            raise ValueError(msg)
+        if (self.parent_job_id is None) != (self.child_index is None):
+            msg = "parent_job_id and child_index must be both set or both null"
+            raise ValueError(msg)
+        if self.parent_job_id is None:
+            expected = f"backtests/{self.job_id}/"
+        else:
+            expected = f"backtests/{self.parent_job_id}/child-{self.child_index:04d}/"
+        if self.output_prefix != expected:
+            msg = f"output_prefix must be {expected!r}"
             raise ValueError(msg)
         return self
 

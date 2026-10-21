@@ -29,6 +29,7 @@
         "child_index": {
           "anyOf": [
             {
+              "maximum": 9999,
               "minimum": 0,
               "type": "integer"
             },

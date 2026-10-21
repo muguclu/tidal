@@ -19,6 +19,8 @@ from tidal.contracts.messages import (
     TieringJobMessage,
 )
 from tidal.contracts.models import (
+    INT64_MAX,
+    INT64_MIN,
     MAX_SWEEP_CHILDREN,
     TIME_PARAM_MAX_LENGTH,
     TIME_PARAM_PATTERN,
@@ -159,7 +161,7 @@ def test_instrument_rules() -> None:
     )
     assert cont.roll_method == "ratio"
     with pytest.raises(ValidationError):
-        Instrument.model_validate(instrument("EIA.BRENT.SPOT", currency="usd"))
+        Instrument.model_validate(instrument("EIA.BRENT.SPOT", currency="USDX"))
     assert all(INSTRUMENT_ID_RE.fullmatch(e.instrument_id) for e in CATALOGUE_V1)
 
 
@@ -282,12 +284,17 @@ def test_time_parameters_outside_time_param_rejected(bad: object) -> None:
         to_ts_ns(bad)
 
 
-@given(st.datetimes())
+EPOCH_NAIVE = datetime(1970, 1, 1)  # noqa: DTZ001 - naive on purpose, mirrors naive inputs
+INT64_DATES = st.datetimes(  # whole range representable as int64 ns
+    min_value=EPOCH_NAIVE.replace(year=1678), max_value=EPOCH_NAIVE.replace(year=2262)
+)
+
+
+@given(INT64_DATES)
 def test_to_ts_ns_is_exact(naive: datetime) -> None:
     ns = to_ts_ns(naive.isoformat() + "Z")
     assert ns % 1000 == 0
-    epoch = datetime(1970, 1, 1)  # noqa: DTZ001 - naive on purpose, mirrors the naive input
-    assert epoch + timedelta(microseconds=ns // 1000) == naive
+    assert EPOCH_NAIVE + timedelta(microseconds=ns // 1000) == naive
 
 
 @given(st.text(alphabet="0123456789-T:.Zz+ ", max_size=40))
@@ -333,9 +340,19 @@ ENVELOPE = {"message_id": "m-1", "correlation_id": "c-1", "produced_at": TS,
 
 
 def job_message(**payload_over: Any) -> dict[str, Any]:
-    payload = {"job_id": JOB_ID, "parent_job_id": None, "child_index": 3, "request": bt()}
-    payload |= {"output_prefix": f"backtests/{JOB_ID}/child-0003/"} | payload_over
+    payload = {"job_id": JOB_ID, "parent_job_id": None, "child_index": None, "request": bt()}
+    payload |= {"output_prefix": f"backtests/{JOB_ID}/"} | payload_over
     return ENVELOPE | {"schema": "backtest.job/v1", "payload": payload}
+
+
+PARENT_ID = "bt_01J9Z3K4M5N6P7Q8R9S0T1V2W4"
+
+
+def test_child_job_message() -> None:
+    child = job_message(
+        parent_job_id=PARENT_ID, child_index=3, output_prefix=f"backtests/{PARENT_ID}/child-0003/"
+    )
+    assert BacktestJobMessage.model_validate(child).payload.child_index == 3
 
 
 def test_backtest_job_message_round_trip() -> None:
@@ -353,6 +370,17 @@ def test_backtest_job_message_round_trip() -> None:
         job_message() | {"schema": "backtest.job/v2"},
         job_message(request=bt(sweep={"fast": [1, 2]})),
         job_message(output_prefix="md/v1/ticks/"),
+        job_message(output_prefix=f"backtests/{JOB_ID}/child-0003/"),  # no parent
+        job_message(child_index=3),  # child_index without parent
+        job_message(parent_job_id=PARENT_ID, output_prefix=f"backtests/{PARENT_ID}/"),
+        job_message(
+            parent_job_id=PARENT_ID,
+            child_index=3,
+            output_prefix=f"backtests/{PARENT_ID}/child-0004/",
+        ),
+        job_message(
+            parent_job_id=PARENT_ID, child_index=3, output_prefix=f"backtests/{JOB_ID}/child-0003/"
+        ),
         job_message() | {"produced_at": "2026-10-21T10:00:00"},
         job_message() | {"extra": 1},
     ],
@@ -455,3 +483,53 @@ def test_optional_non_nullable_fields_dump_without_null() -> None:
     assert "detail" not in problem.model_dump(exclude_none=True)
     req = BacktestRequest.model_validate(bt())
     assert "sweep" not in req.model_dump(mode="json", exclude_none=True)
+
+
+# --- int64 range and ts/ts_ns consistency -----------------------------------------------------
+
+MAX_ISO, MIN_ISO = "2262-04-11T23:47:16.854775807Z", "1677-09-21T00:12:43.145224192Z"
+
+
+def test_time_param_int64_edges_accepted() -> None:
+    assert to_ts_ns(str(INT64_MAX)) == INT64_MAX
+    assert to_ts_ns(MAX_ISO) == INT64_MAX
+    assert to_ts_ns(MIN_ISO) == INT64_MIN
+    assert to_ts_ns(INT64_MAX) == INT64_MAX
+    assert to_ts_ns(INT64_MIN) == INT64_MIN
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        str(INT64_MAX + 1),
+        "9999999999999999999",
+        "2262-04-11T23:47:16.854775808Z",
+        "1677-09-21T00:12:43.145224191Z",
+        "0001-01-01T00:00:00Z",
+        "9999-12-31T23:59:59Z",
+        INT64_MAX + 1,
+        INT64_MIN - 1,
+    ],
+)
+def test_time_param_outside_int64_rejected(bad: object) -> None:
+    with pytest.raises(ValueError, match="int64"):
+        to_ts_ns(bad)
+    with pytest.raises(ValidationError):
+        BacktestRequest.model_validate(bt(start=bad))
+
+
+def test_ts_must_match_ts_ns() -> None:
+    assert Bar.model_validate(bar(ts_ns=TS_NS + 999)).ts_ns == TS_NS + 999  # sub-µs in ts_ns only
+    for bad in (TS_NS + 1_000, TS_NS - 1):
+        with pytest.raises(ValidationError, match="different instants"):
+            Bar.model_validate(bar(ts_ns=bad))
+        with pytest.raises(ValidationError, match="different instants"):
+            Tick.model_validate(bar_tick(ts_ns=bad))
+        with pytest.raises(ValidationError, match="different instants"):
+            SpreadPoint.model_validate(
+                {"ts": TS, "ts_ns": bad, "leg_a": 1.0, "leg_b": 0.5, "spread": 0.5}
+            )
+    early = Tick.model_validate(
+        bar_tick(ts="1969-12-31T23:59:59.999999Z", ts_ns=-1_000)
+    )  # floor before the epoch
+    assert early.ts_ns == -1_000

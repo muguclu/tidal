@@ -2,10 +2,12 @@
 
 import re
 from pathlib import Path
-from typing import get_args
+from typing import Any, get_args
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
+from pydantic import BaseModel
 
 from tidal.contracts import messages
 from tidal.contracts.instruments import (
@@ -19,12 +21,14 @@ from tidal.contracts.instruments import (
     RollMethod,
     Source,
 )
+from tidal.contracts.messages import BacktestJob, BacktestJobResult, JobError, TieringJob
 from tidal.contracts.schemas import (
     INTERVAL_CODES,
     PARQUET_ENCODINGS,
     QUALITY_RESERVED_MASK,
     SCHEMAS,
     QualityFlag,
+    pyarrow_write_kwargs,
 )
 
 DOCS = Path(__file__).resolve().parents[2] / "docs" / "contracts"
@@ -224,3 +228,69 @@ def test_queue_and_schema_names_match_messaging_doc() -> None:
     assert headings == list(messages.MESSAGE_MODELS)
     for name, model in messages.MESSAGE_MODELS.items():
         assert get_args(model.model_fields["schema_"].annotation) == (name,)
+
+
+def _sample(f: Any) -> Any:  # Any: pyarrow-stubs generics add nothing for a 3-row fixture
+    t = f.type
+    if pa.types.is_dictionary(t):
+        return pa.array(["A", "A", "B"]).dictionary_encode().cast(t)
+    if pa.types.is_string(t):
+        return pa.array(["EIA.WTI.FUT1", "EIA.WTI.FUT1", "EIA.WTI.FUT2"], t)
+    return pa.array([1, 2, 1], t)
+
+
+@pytest.mark.parametrize("name", list(SCHEMAS))
+def test_pyarrow_write_kwargs_produce_contract_encodings(name: str, tmp_path: Path) -> None:
+    schema = SCHEMAS[name]
+    table = pa.table([_sample(f) for f in schema], schema=schema)
+    path = tmp_path / f"{name}.parquet"
+    pq.write_table(table, path, **pyarrow_write_kwargs(name))  # type: ignore[arg-type]
+    assert pq.read_table(path).schema.equals(schema)
+    meta = pq.ParquetFile(path).metadata.row_group(0)
+    written = {meta.column(i).path_in_schema: meta.column(i).encodings for i in range(len(schema))}
+    for column, encoding in PARQUET_ENCODINGS[name].items():
+        assert encoding in written[column], (column, written[column])
+        if encoding != "RLE_DICTIONARY":
+            assert "RLE_DICTIONARY" not in written[column], column
+    for column in set(schema.names) - set(PARQUET_ENCODINGS[name]):  # writer default, no dict
+        assert "RLE_DICTIONARY" not in written[column], column
+
+
+def _top_level_keys(block: str) -> set[str]:
+    """Keys at brace depth 1 of a jsonc object (nested objects skipped)."""
+    keys, depth = set(), 0
+    for match in re.finditer(r'[{}]|"(\w+)"\s*:', block):
+        if match.group(0) == "{":
+            depth += 1
+        elif match.group(0) == "}":
+            depth -= 1
+        elif depth == 1:
+            keys.add(match.group(1))
+    return keys
+
+
+def _jsonc(heading: str) -> str:
+    match = re.search(r"```jsonc\n(.*?)```", section(MESSAGING_MD, heading), re.S)
+    assert match, heading
+    return match.group(1)
+
+
+@pytest.mark.parametrize(
+    ("heading", "model"),
+    [
+        ("`backtest.job/v1`", BacktestJob),
+        ("`backtest.result/v1`", BacktestJobResult),
+        ("`tiering.job/v1`", TieringJob),
+    ],
+)
+def test_message_payload_fields_match_doc(heading: str, model: type[BaseModel]) -> None:
+    assert _top_level_keys(_jsonc(heading)) == set(model.model_fields)
+
+
+def test_envelope_and_error_fields_match_doc() -> None:
+    for envelope in messages.MESSAGE_MODELS.values():
+        fields = {f.alias or name for name, f in envelope.model_fields.items()}
+        assert _top_level_keys(_jsonc("2. Envelope")) == fields
+    error = re.search(r'"error": (\{[^}]*\})', _jsonc("`backtest.result/v1`"))
+    assert error
+    assert _top_level_keys(error.group(1)) == set(JobError.model_fields)

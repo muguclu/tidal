@@ -68,14 +68,14 @@ class Instrument(BaseModel):
     source: Source
     asset_class: AssetClass
     kind: InstrumentKind
-    unit: str = Field(min_length=1, max_length=16)
-    currency: str = Field(pattern=r"^[A-Z]{3}$")
-    exchange_tz: str = Field(min_length=1, max_length=64)
+    unit: str
+    currency: str = Field(min_length=3, max_length=3)  # ISO 4217 code
+    exchange_tz: str
     granularity: Granularity
     roll_method: RollMethod | None = None
     first_ts_ns: int | None = None
     last_ts_ns: int | None = None
-    description: str = Field(max_length=256)
+    description: str
 
     @model_validator(mode="after")
     def _roll_method_for_continuous(self) -> Self:

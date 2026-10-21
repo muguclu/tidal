@@ -147,3 +147,20 @@ def _encodings(schema: pa.Schema) -> dict[str, ParquetEncoding]:
 PARQUET_ENCODINGS: Final[dict[str, dict[str, ParquetEncoding]]] = {
     name: _encodings(schema) for name, schema in SCHEMAS.items()
 }
+
+
+def pyarrow_write_kwargs(schema_name: str) -> dict[str, object]:
+    """``pyarrow.parquet.write_table`` kwargs realising ``PARQUET_ENCODINGS[schema_name]``.
+
+    Dictionary columns go to ``use_dictionary`` (all others have dictionary off); the remaining
+    encodings go to ``column_encoding``. Compression, row-group size etc. are T-106's writer.
+    """
+    encodings = PARQUET_ENCODINGS[schema_name]
+    dictionary = [c for c, e in encodings.items() if e is ParquetEncoding.RLE_DICTIONARY]
+    return {
+        "use_dictionary": dictionary,
+        "column_encoding": {
+            c: str(e) for c, e in encodings.items() if e is not ParquetEncoding.RLE_DICTIONARY
+        },
+        "use_byte_stream_split": False,  # BSS is set per column via column_encoding
+    }

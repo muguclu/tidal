@@ -1,4 +1,9 @@
-"""Pydantic v2 API models mirroring api-contract.md §3; shapes and names follow openapi.yaml."""
+"""Pydantic v2 API models mirroring api-contract.md §3; shapes and names follow openapi.yaml.
+
+Time parameters (``TsNs``) are string-only in the JSON contract (openapi ``TimeParam``). They are
+held as int64 ``ts_ns``; the int input path exists only so that a dumped model can be re-validated
+(e.g. a ``backtest.job/v1`` request), it is not part of the API contract.
+"""
 
 import math
 import re
@@ -31,6 +36,8 @@ SHA256_PATTERN: Final = r"^[0-9a-f]{64}$"
 MAX_SWEEP_CHILDREN: Final = 200
 MAX_SWEEP_KEYS: Final = 3
 _EPOCH: Final = datetime(1970, 1, 1, tzinfo=UTC)
+INT64_MIN: Final = -(2**63)
+INT64_MAX: Final = 2**63 - 1
 #: openapi ``TimeParam``; validation accepts exactly these strings (when they are real dates).
 TIME_PARAM_PATTERN: Final = r"^([0-9]{1,19}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z)$"
 TIME_PARAM_MAX_LENGTH: Final = 35
@@ -46,32 +53,45 @@ Sha256 = Annotated[str, Field(pattern=SHA256_PATTERN)]
 Count = Annotated[int, Field(ge=0)]
 
 
-def to_ts_ns(value: object) -> int:
-    """Normalise a ``TimeParam`` (ISO-8601 UTC with ``Z``, or epoch-ns digits) to ``ts_ns``.
+def datetime_to_ns(value: datetime) -> int:
+    """Exact epoch nanoseconds of an aware ``datetime`` (integer arithmetic, no float rounding)."""
+    delta = value - _EPOCH
+    return ((delta.days * 86_400 + delta.seconds) * 1_000_000 + delta.microseconds) * 1_000
 
-    Integers pass through (already ``ts_ns``, e.g. when re-validating a dumped model). Fractions are
-    kept to the nanosecond.
+
+def _parse_time_param(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value  # re-validation of a dumped model only (module docstring)
+    if not isinstance(value, str) or len(value) > TIME_PARAM_MAX_LENGTH:
+        return None
+    if re.fullmatch(r"[0-9]{1,19}", value):
+        return int(value)
+    if (m := _ISO_UTC.fullmatch(value)) and re.fullmatch(TIME_PARAM_PATTERN, value):
+        try:
+            base = datetime.fromisoformat(m[1]).replace(tzinfo=UTC)
+        except ValueError:
+            return None
+        return datetime_to_ns(base) + int((m[2] or "").ljust(9, "0"))
+    return None
+
+
+def to_ts_ns(value: object) -> int:
+    """Normalise a ``TimeParam`` (ISO-8601 UTC with ``Z``, or epoch-ns digits) to int64 ``ts_ns``.
+
+    Fractions are kept to the nanosecond. Integers pass through (see module docstring).
 
     Raises:
-        ValueError: if a string does not match ``TIME_PARAM_PATTERN`` or is not a valid date-time.
+        ValueError: if a string does not match ``TIME_PARAM_PATTERN``, is not a valid date-time,
+            or the result is outside the int64 range.
     """
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
-    if isinstance(value, str) and len(value) <= TIME_PARAM_MAX_LENGTH:
-        if re.fullmatch(r"[0-9]{1,19}", value):
-            return int(value)
-        if (m := _ISO_UTC.fullmatch(value)) and re.fullmatch(TIME_PARAM_PATTERN, value):
-            try:
-                base = datetime.fromisoformat(m[1]).replace(tzinfo=UTC)
-            except ValueError:
-                pass
-            else:
-                delta = base - _EPOCH  # exact integer arithmetic, no float rounding
-                return (delta.days * 86_400 + delta.seconds) * 10**9 + int(
-                    (m[2] or "").ljust(9, "0")
-                )
-    msg = "expected an ISO-8601 UTC date-time ending in Z, or epoch nanoseconds as digits"
-    raise ValueError(msg)
+    ns = _parse_time_param(value)
+    if ns is None:
+        msg = "expected an ISO-8601 UTC date-time ending in Z, or epoch nanoseconds as digits"
+        raise ValueError(msg)
+    if not INT64_MIN <= ns <= INT64_MAX:
+        msg = f"{value!r} is outside the int64 epoch-ns range"
+        raise ValueError(msg)
+    return ns
 
 
 #: openapi ``TimeParam``: ISO-8601 UTC or epoch-ns string in; held as ``ts_ns``; JSON out as string.
@@ -137,11 +157,24 @@ class InstrumentList(_Model):
     items: list[Instrument]
 
 
-class Bar(_Model):
-    """One OHLCV bar; ``volume`` is ``null`` when the source has none (data-contracts §3.1)."""
+class _Stamped(_Model):
+    """Row with ``ts`` (ISO, API edge) and ``ts_ns``; both must denote the same instant."""
 
     ts: AwareDatetime
     ts_ns: int
+
+    @model_validator(mode="after")
+    def _ts_matches_ts_ns(self) -> Self:
+        # ``ts`` has microsecond resolution: it must equal ``ts_ns`` floored to the microsecond.
+        if datetime_to_ns(self.ts) != self.ts_ns - self.ts_ns % 1_000:
+            msg = "ts and ts_ns denote different instants"
+            raise ValueError(msg)
+        return self
+
+
+class Bar(_Stamped):
+    """One OHLCV bar; ``volume`` is ``null`` when the source has none (data-contracts §3.1)."""
+
     open: Price
     high: Price
     low: Price
@@ -168,11 +201,9 @@ class BarsResponse(_Model):
     next_cursor: str | None
 
 
-class Tick(_Model):
+class Tick(_Stamped):
     """One tick (data-contracts §2; internal columns omitted)."""
 
-    ts: AwareDatetime
-    ts_ns: int
     price: Price
     size: NonNegative
     side: TickSide
@@ -204,11 +235,9 @@ class LatestResponse(_Model):
     rows: list[LatestBar]
 
 
-class SpreadPoint(_Model):
+class SpreadPoint(_Stamped):
     """One timestamp where both legs have a bar; ``spread = leg_a - leg_b`` (closes)."""
 
-    ts: AwareDatetime
-    ts_ns: int
     leg_a: Price
     leg_b: Price
     spread: Price
