@@ -502,7 +502,7 @@ components:
       examples: [EIA.BRENT.SPOT]
     JobId:
       type: string
-      pattern: "^bt_[0-9A-HJKMNP-TV-Z]{26}$"
+      pattern: "^bt_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
     TimeParam:
       type: string
       description: ISO-8601 UTC timestamp ending in Z, or epoch nanoseconds as a decimal integer string.
@@ -639,32 +639,101 @@ components:
       properties:
         fee_bps: { type: number, minimum: 0 }
         slippage_bps: { type: number, minimum: 0 }
-    BacktestRequest:
+    BacktestRequestBase:
       type: object
-      required: [strategy, instrument_ids, interval, start, end, params, costs, seed]
+      description: Fields shared by every strategy request.
+      required: [interval, start, end, costs, seed]
       properties:
-        strategy: { type: string, enum: [ma_crossover, mean_reversion, calendar_spread] }
-        instrument_ids:
-          type: array
-          minItems: 1
-          maxItems: 2
-          items: { $ref: "#/components/schemas/InstrumentId" }
-          description: Exactly 1 for ma_crossover and mean_reversion; exactly 2 (leg_a, leg_b) for calendar_spread.
-        interval: { type: string, enum: ["1m", "1h", "1d"] }
-        start: { type: string, format: date-time }
-        end: { type: string, format: date-time }
-        params:
-          type: object
-          description: "Strategy parameters, e.g. fast and slow; calendar_spread takes lookback, z_entry, z_exit."
-          additionalProperties: { type: number }
+        interval:
+          type: string
+          enum: ["1m", "1h", "1d"]
+          description: 1s is excluded because a 20-year 1s backtest exceeds the per-pod budget in SPEC-05 section 5.
+        start: { $ref: "#/components/schemas/TimeParam" }
+        end: { $ref: "#/components/schemas/TimeParam" }
         costs: { $ref: "#/components/schemas/BacktestCosts" }
         seed:
           type: integer
           description: Recorded and hashed into result_sha256; v1 strategies are fully deterministic.
         sweep:
           type: object
-          description: Optional; cartesian product fans out to child jobs (max 200 in total).
-          additionalProperties: { type: array, items: { type: number }, maxItems: 20 }
+          minProperties: 1
+          description: >
+            Optional parameter sweep. Keys must be param names of the chosen strategy (enforced at
+            runtime). The cartesian product of the value arrays fans out to child jobs; a product
+            above 200 returns 413.
+          additionalProperties: { type: array, minItems: 1, items: { type: number } }
+    MaCrossoverRequest:
+      allOf:
+        - $ref: "#/components/schemas/BacktestRequestBase"
+        - type: object
+          required: [strategy, instrument_ids, params]
+          properties:
+            strategy: { type: string, enum: [ma_crossover] }
+            instrument_ids:
+              type: array
+              minItems: 1
+              maxItems: 1
+              items: { $ref: "#/components/schemas/InstrumentId" }
+            params:
+              type: object
+              required: [fast, slow]
+              additionalProperties: false
+              properties:
+                fast: { type: integer, minimum: 1 }
+                slow: { type: integer, minimum: 1 }
+    MeanReversionRequest:
+      allOf:
+        - $ref: "#/components/schemas/BacktestRequestBase"
+        - type: object
+          required: [strategy, instrument_ids, params]
+          properties:
+            strategy: { type: string, enum: [mean_reversion] }
+            instrument_ids:
+              type: array
+              minItems: 1
+              maxItems: 1
+              items: { $ref: "#/components/schemas/InstrumentId" }
+            params:
+              type: object
+              required: [lookback, z_entry, z_exit]
+              additionalProperties: false
+              properties:
+                lookback: { type: integer, minimum: 2 }
+                z_entry: { type: number, exclusiveMinimum: 0 }
+                z_exit: { type: number, minimum: 0 }
+    CalendarSpreadRequest:
+      allOf:
+        - $ref: "#/components/schemas/BacktestRequestBase"
+        - type: object
+          required: [strategy, instrument_ids, params]
+          properties:
+            strategy: { type: string, enum: [calendar_spread] }
+            instrument_ids:
+              type: array
+              minItems: 2
+              maxItems: 2
+              items: { $ref: "#/components/schemas/InstrumentId" }
+              description: Exactly [leg_a, leg_b].
+            params:
+              type: object
+              required: [lookback, z_entry, z_exit]
+              additionalProperties: false
+              properties:
+                lookback: { type: integer, minimum: 2 }
+                z_entry: { type: number, exclusiveMinimum: 0 }
+                z_exit: { type: number, minimum: 0 }
+    BacktestRequest:
+      description: Backtest submission, discriminated by `strategy`.
+      oneOf:
+        - $ref: "#/components/schemas/MaCrossoverRequest"
+        - $ref: "#/components/schemas/MeanReversionRequest"
+        - $ref: "#/components/schemas/CalendarSpreadRequest"
+      discriminator:
+        propertyName: strategy
+        mapping:
+          ma_crossover: "#/components/schemas/MaCrossoverRequest"
+          mean_reversion: "#/components/schemas/MeanReversionRequest"
+          calendar_spread: "#/components/schemas/CalendarSpreadRequest"
     BacktestAccepted:
       type: object
       required: [job_id, status]
