@@ -358,7 +358,7 @@ def test_export_openapi_script(tmp_path: Path) -> None:
     script = Path(__file__).parents[3] / "scripts" / "export_openapi.py"
     subprocess.run([sys.executable, str(script), str(out)], check=True)  # noqa: S603
     doc = json.loads(out.read_text(encoding="utf-8"))
-    assert set(doc["paths"]) == {"/v1/health/live", "/v1/health/ready"}
+    assert {"/v1/health/live", "/v1/health/ready"} <= set(doc["paths"])
     assert doc["paths"]["/v1/health/ready"]["get"]["operationId"] == "getHealthReady"
     bad = subprocess.run([sys.executable, str(script)], check=False)  # noqa: S603
     assert bad.returncode == 2

@@ -16,7 +16,8 @@ from tidal.api.errors import (
     register_exception_handlers,
     rename_problem_media_types,
 )
-from tidal.api.routers import health
+from tidal.api.openapi_contract import normalize
+from tidal.api.routers import bars, health, instruments, latest, spreads, ticks
 from tidal.common.config import Settings, get_settings
 from tidal.common.logging import (
     bind_correlation_id,
@@ -114,12 +115,13 @@ def create_app(
     app.state.clock = clock or SystemClock()
     app.add_middleware(CorrelationMiddleware)
     register_exception_handlers(app)
-    app.include_router(health.router)
+    for module in (health, instruments, bars, ticks, latest, spreads):
+        app.include_router(module.router)
     default_openapi = app.openapi
 
     def openapi() -> dict[str, Any]:
         if app.openapi_schema is None:
-            rename_problem_media_types(default_openapi())
+            normalize(rename_problem_media_types(default_openapi()))
         return app.openapi_schema or {}
 
     app.openapi = openapi  # type: ignore[method-assign]  # FastAPI documents this override
