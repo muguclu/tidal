@@ -9,7 +9,9 @@ and the GitHub OIDC CI identity. See `docs/runbooks/bootstrap.md` for the proced
 | Storage account (StorageV2, LRS, Hot) | Shared key disabled, TLS 1.2, no public blob, versioning, 7 d soft delete (blobs and containers) |
 | Container `tfstate` | Remote state for `envs/*` |
 | Entra app + SP `sp-tidal-ci` | CI identity, no client secret |
-| Federated credentials | `repo:<owner>/<repo>:environment:<env>` and `repo:<owner>/<repo>:pull_request` |
+| Federated credential | `repo:<owner>/<repo>:environment:<env>` only. No `pull_request` credential (it would bypass environment protection); T-127 adds a separate app `sp-tidal-ci-plan` with Reader + Storage Blob Data Reader for PR plans |
+| Management lock + `prevent_destroy` | `CanNotDelete` on the state account (see runbook Rollback) |
+| Lifecycle rule | Delete noncurrent blob versions after 30 days |
 | Role assignment | Storage Blob Data Contributor on the `tfstate` container only |
 
 Later tasks add AcrPush and Contributor on `rg-tidal-dev` (SPEC-06 section 2). `terraform apply` for envs stays human-only.
@@ -39,7 +41,6 @@ Provider requirements: Terraform >= 1.9, azurerm ~> 4.0, azuread ~> 3.0.
 
 ## Accepted checkov skips (inline in `main.tf`)
 
-LRS only (`CKV_AZURE_206`), Microsoft-managed keys (`CKV2_AZURE_1`), public network access with Entra-only
-auth (`CKV_AZURE_59`), no private endpoint in dev (`CKV2_AZURE_33`), no queue service (`CKV_AZURE_33`),
+LRS only (`CKV_AZURE_206`), Microsoft-managed keys (`CKV2_AZURE_1`), public network access (`CKV_AZURE_59`; GitHub-hosted runner IPs cannot be allow-listed, access is Entra-only), no private endpoint in dev, tracked behind the Phase 4 flag (`CKV2_AZURE_33`), no queue service (`CKV_AZURE_33`),
 no blob read logging before Log Analytics exists (`CKV2_AZURE_21`).
 <!-- END_TF_DOCS -->

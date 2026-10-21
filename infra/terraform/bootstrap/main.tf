@@ -36,8 +36,8 @@ resource "azurerm_resource_group" "tfstate" {
 resource "azurerm_storage_account" "tfstate" {
   #checkov:skip=CKV_AZURE_206:LRS chosen deliberately (cost); state is versioned and soft-deleted and re-creatable from config
   #checkov:skip=CKV2_AZURE_1:Customer-managed keys not needed for dev state; Microsoft-managed keys plus infrastructure encryption used
-  #checkov:skip=CKV_AZURE_59:Public network access stays enabled so GitHub-hosted runners and the human applier can reach it; protected by Entra-only auth (shared key disabled)
-  #checkov:skip=CKV2_AZURE_33:No private endpoint in dev; private networking is a Phase 4 flag
+  #checkov:skip=CKV_AZURE_59:GitHub-hosted runner IPs cannot be allow-listed (ranges are huge and change), so public network access stays on; access is Entra-only (shared key disabled, no SAS). Private endpoint is tracked behind the Phase 4 flag (see CKV2_AZURE_33)
+  #checkov:skip=CKV2_AZURE_33:No private endpoint in dev; tracked behind the Phase 4 enable_private_networking flag
   #checkov:skip=CKV_AZURE_33:Queue service is not used; no queue logging needed
   name                = var.state_account_name
   resource_group_name = azurerm_resource_group.tfstate.name
@@ -69,6 +69,37 @@ resource "azurerm_storage_account" "tfstate" {
   }
 
   tags = merge(local.tags, { component = "tfstate" })
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "azurerm_management_lock" "tfstate_account" {
+  name       = "lock-tfstate-cannotdelete"
+  scope      = azurerm_storage_account.tfstate.id
+  lock_level = "CanNotDelete"
+  notes      = "Protects Terraform state. Remove this lock first (docs/runbooks/bootstrap.md, Rollback)."
+}
+
+# Lifecycle: noncurrent versions are kept 30 days, then deleted (versioning would otherwise grow without bound).
+resource "azurerm_storage_management_policy" "tfstate" {
+  storage_account_id = azurerm_storage_account.tfstate.id
+
+  rule {
+    name    = "delete-noncurrent-versions-30d"
+    enabled = true
+
+    filters {
+      blob_types = ["blockBlob"]
+    }
+
+    actions {
+      version {
+        delete_after_days_since_creation = 30
+      }
+    }
+  }
 }
 
 resource "azurerm_storage_container" "tfstate" {
@@ -76,6 +107,10 @@ resource "azurerm_storage_container" "tfstate" {
   name                  = "tfstate"
   storage_account_id    = azurerm_storage_account.tfstate.id
   container_access_type = "private"
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # ---------------------------------------------------------------------------
@@ -106,15 +141,8 @@ resource "azuread_application_federated_identity_credential" "github_environment
   subject        = "repo:${local.github_repo_path}:environment:${var.env}"
 }
 
-# Pull-request jobs (read-only terraform plan later, T-127). Roles granted to this identity for PRs must stay read-only.
-resource "azuread_application_federated_identity_credential" "github_pull_request" {
-  application_id = azuread_application.ci.id
-  display_name   = "github-pull-request"
-  description    = "GitHub Actions pull_request workflows (read-only plan)"
-  issuer         = local.github_issuer
-  audiences      = local.github_audiences
-  subject        = "repo:${local.github_repo_path}:pull_request"
-}
+# No pull_request credential on purpose: a PR token would carry every role of sp-tidal-ci and bypass the
+# `environment: dev` protection. T-127 adds a separate app sp-tidal-ci-plan (Reader + Storage Blob Data Reader only).
 
 # ---------------------------------------------------------------------------
 # RBAC: state container only. AcrPush / Contributor on rg-tidal-dev are added in later tasks (SPEC-06 section 2).
