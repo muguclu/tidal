@@ -1,0 +1,204 @@
+{
+  "$defs": {
+    "BacktestJobResult": {
+      "additionalProperties": false,
+      "description": "``backtest.result/v1`` payload.",
+      "properties": {
+        "attempt": {
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "duration_ms": {
+          "minimum": 0,
+          "title": "Duration Ms",
+          "type": "integer"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "job_id": {
+          "pattern": "^bt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "title": "Job Id",
+          "type": "string"
+        },
+        "metrics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BacktestMetrics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "node_pool": {
+          "title": "Node Pool",
+          "type": "string"
+        },
+        "parent_job_id": {
+          "anyOf": [
+            {
+              "pattern": "^bt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Job Id"
+        },
+        "result_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Result Sha256"
+        },
+        "status": {
+          "enum": [
+            "succeeded",
+            "failed"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id",
+        "status",
+        "duration_ms",
+        "node_pool",
+        "attempt"
+      ],
+      "title": "BacktestJobResult",
+      "type": "object"
+    },
+    "BacktestMetrics": {
+      "additionalProperties": false,
+      "description": "Metrics per SPEC-05 §3.",
+      "properties": {
+        "ann_vol": {
+          "title": "Ann Vol",
+          "type": "number"
+        },
+        "cagr": {
+          "title": "Cagr",
+          "type": "number"
+        },
+        "hit_rate": {
+          "title": "Hit Rate",
+          "type": "number"
+        },
+        "max_drawdown": {
+          "title": "Max Drawdown",
+          "type": "number"
+        },
+        "n_trades": {
+          "minimum": 0,
+          "title": "N Trades",
+          "type": "integer"
+        },
+        "sharpe": {
+          "title": "Sharpe",
+          "type": "number"
+        },
+        "turnover": {
+          "title": "Turnover",
+          "type": "number"
+        }
+      },
+      "required": [
+        "cagr",
+        "ann_vol",
+        "sharpe",
+        "max_drawdown",
+        "hit_rate",
+        "turnover",
+        "n_trades"
+      ],
+      "title": "BacktestMetrics",
+      "type": "object"
+    },
+    "JobError": {
+      "additionalProperties": false,
+      "description": "Machine-readable failure of a backtest child.",
+      "properties": {
+        "code": {
+          "maxLength": 32,
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "title": "Code",
+          "type": "string"
+        },
+        "detail": {
+          "title": "Detail",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "detail"
+      ],
+      "title": "JobError",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Envelope carrying ``backtest.result/v1`` on ``backtest-results``.",
+  "properties": {
+    "correlation_id": {
+      "minLength": 1,
+      "title": "Correlation Id",
+      "type": "string"
+    },
+    "message_id": {
+      "minLength": 1,
+      "title": "Message Id",
+      "type": "string"
+    },
+    "payload": {
+      "$ref": "#/$defs/BacktestJobResult"
+    },
+    "produced_at": {
+      "format": "date-time",
+      "title": "Produced At",
+      "type": "string"
+    },
+    "producer": {
+      "pattern": "^[a-z0-9-]+@\\S+$",
+      "title": "Producer",
+      "type": "string"
+    },
+    "schema": {
+      "const": "backtest.result/v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "message_id",
+    "correlation_id",
+    "produced_at",
+    "producer",
+    "schema",
+    "payload"
+  ],
+  "title": "BacktestResultMessage",
+  "type": "object"
+}

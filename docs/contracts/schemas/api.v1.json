@@ -1,0 +1,1310 @@
+{
+  "$defs": {
+    "AssetClass": {
+      "description": "Asset class.",
+      "enum": [
+        "crude",
+        "gas",
+        "power",
+        "fx",
+        "refined"
+      ],
+      "title": "AssetClass",
+      "type": "string"
+    },
+    "BacktestAccepted": {
+      "additionalProperties": false,
+      "description": "``202`` body of ``POST /v1/backtests``.",
+      "properties": {
+        "job_id": {
+          "pattern": "^bt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "title": "Job Id",
+          "type": "string"
+        },
+        "status": {
+          "const": "queued",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id",
+        "status"
+      ],
+      "title": "BacktestAccepted",
+      "type": "object"
+    },
+    "BacktestChildren": {
+      "additionalProperties": false,
+      "description": "Child job counters of a sweep.",
+      "properties": {
+        "failed": {
+          "minimum": 0,
+          "title": "Failed",
+          "type": "integer"
+        },
+        "succeeded": {
+          "minimum": 0,
+          "title": "Succeeded",
+          "type": "integer"
+        },
+        "total": {
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total",
+        "succeeded",
+        "failed"
+      ],
+      "title": "BacktestChildren",
+      "type": "object"
+    },
+    "BacktestCosts": {
+      "additionalProperties": false,
+      "description": "Transaction costs applied to traded notional.",
+      "properties": {
+        "fee_bps": {
+          "minimum": 0,
+          "title": "Fee Bps",
+          "type": "number"
+        },
+        "slippage_bps": {
+          "minimum": 0,
+          "title": "Slippage Bps",
+          "type": "number"
+        }
+      },
+      "required": [
+        "fee_bps",
+        "slippage_bps"
+      ],
+      "title": "BacktestCosts",
+      "type": "object"
+    },
+    "BacktestList": {
+      "additionalProperties": false,
+      "description": "``GET /v1/backtests`` (own jobs).",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/BacktestStatus"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Next Cursor"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "title": "BacktestList",
+      "type": "object"
+    },
+    "BacktestMetrics": {
+      "additionalProperties": false,
+      "description": "Metrics per SPEC-05 §3.",
+      "properties": {
+        "ann_vol": {
+          "title": "Ann Vol",
+          "type": "number"
+        },
+        "cagr": {
+          "title": "Cagr",
+          "type": "number"
+        },
+        "hit_rate": {
+          "title": "Hit Rate",
+          "type": "number"
+        },
+        "max_drawdown": {
+          "title": "Max Drawdown",
+          "type": "number"
+        },
+        "n_trades": {
+          "minimum": 0,
+          "title": "N Trades",
+          "type": "integer"
+        },
+        "sharpe": {
+          "title": "Sharpe",
+          "type": "number"
+        },
+        "turnover": {
+          "title": "Turnover",
+          "type": "number"
+        }
+      },
+      "required": [
+        "cagr",
+        "ann_vol",
+        "sharpe",
+        "max_drawdown",
+        "hit_rate",
+        "turnover",
+        "n_trades"
+      ],
+      "title": "BacktestMetrics",
+      "type": "object"
+    },
+    "BacktestRequest": {
+      "description": "``POST /v1/backtests``; ``sweep`` fans out into the cartesian product of its values.",
+      "discriminator": {
+        "mapping": {
+          "calendar_spread": "#/$defs/CalendarSpreadRequest",
+          "ma_crossover": "#/$defs/MaCrossoverRequest",
+          "mean_reversion": "#/$defs/MeanReversionRequest"
+        },
+        "propertyName": "strategy"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/MaCrossoverRequest"
+        },
+        {
+          "$ref": "#/$defs/MeanReversionRequest"
+        },
+        {
+          "$ref": "#/$defs/CalendarSpreadRequest"
+        }
+      ],
+      "title": "BacktestRequest"
+    },
+    "BacktestResult": {
+      "additionalProperties": false,
+      "description": "Result of a finished backtest.",
+      "properties": {
+        "equity_url": {
+          "title": "Equity Url",
+          "type": "string"
+        },
+        "metrics": {
+          "$ref": "#/$defs/BacktestMetrics"
+        },
+        "result_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Result Sha256",
+          "type": "string"
+        },
+        "trades_url": {
+          "title": "Trades Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "metrics",
+        "equity_url",
+        "trades_url",
+        "result_sha256"
+      ],
+      "title": "BacktestResult",
+      "type": "object"
+    },
+    "BacktestStatus": {
+      "additionalProperties": false,
+      "description": "``GET /v1/backtests/{job_id}``.",
+      "properties": {
+        "children": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BacktestChildren"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "finished_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Finished At"
+        },
+        "job_id": {
+          "pattern": "^bt_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "title": "Job Id",
+          "type": "string"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BacktestResult"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "status": {
+          "$ref": "#/$defs/JobStatus"
+        },
+        "submitted_at": {
+          "format": "date-time",
+          "title": "Submitted At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id",
+        "status",
+        "submitted_at"
+      ],
+      "title": "BacktestStatus",
+      "type": "object"
+    },
+    "Bar": {
+      "additionalProperties": false,
+      "description": "One OHLCV bar; ``volume`` is ``null`` when the source has none (data-contracts §3.1).",
+      "properties": {
+        "close": {
+          "title": "Close",
+          "type": "number"
+        },
+        "high": {
+          "title": "High",
+          "type": "number"
+        },
+        "low": {
+          "title": "Low",
+          "type": "number"
+        },
+        "open": {
+          "title": "Open",
+          "type": "number"
+        },
+        "quality": {
+          "maximum": 31,
+          "minimum": 0,
+          "title": "Quality",
+          "type": "integer"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "ts_ns": {
+          "title": "Ts Ns",
+          "type": "integer"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "volume": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Volume"
+        }
+      },
+      "required": [
+        "ts",
+        "ts_ns",
+        "open",
+        "high",
+        "low",
+        "close",
+        "quality",
+        "version"
+      ],
+      "title": "Bar",
+      "type": "object"
+    },
+    "BarsResponse": {
+      "additionalProperties": false,
+      "description": "``GET /v1/bars``.",
+      "properties": {
+        "instrument_id": {
+          "maxLength": 64,
+          "pattern": "^[A-Z0-9]+\\.[A-Z0-9_]+\\.[A-Z0-9_]+$",
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "interval": {
+          "$ref": "#/$defs/Interval"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Next Cursor"
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/Bar"
+          },
+          "title": "Rows",
+          "type": "array"
+        },
+        "tier": {
+          "$ref": "#/$defs/Tier"
+        }
+      },
+      "required": [
+        "instrument_id",
+        "interval",
+        "tier",
+        "rows"
+      ],
+      "title": "BarsResponse",
+      "type": "object"
+    },
+    "CalendarSpreadRequest": {
+      "additionalProperties": false,
+      "description": "``calendar_spread`` on ``instrument_ids[0] - instrument_ids[1]`` (e.g. WTI FUT1 - FUT2).",
+      "properties": {
+        "costs": {
+          "$ref": "#/$defs/BacktestCosts"
+        },
+        "end": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "pattern": "^-?[0-9]+$",
+              "type": "string"
+            }
+          ],
+          "title": "End"
+        },
+        "instrument_ids": {
+          "items": {
+            "maxLength": 64,
+            "pattern": "^[A-Z0-9]+\\.[A-Z0-9_]+\\.[A-Z0-9_]+$",
+            "type": "string"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "title": "Instrument Ids",
+          "type": "array"
+        },
+        "interval": {
+          "enum": [
+            "1m",
+            "1h",
+            "1d"
+          ],
+          "title": "Interval",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/MeanReversionParams"
+        },
+        "seed": {
+          "title": "Seed",
+          "type": "integer"
+        },
+        "start": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "pattern": "^-?[0-9]+$",
+              "type": "string"
+            }
+          ],
+          "title": "Start"
+        },
+        "strategy": {
+          "const": "calendar_spread",
+          "title": "Strategy",
+          "type": "string"
+        },
+        "sweep": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 200,
+                "minItems": 1,
+                "type": "array"
+              },
+              "maxProperties": 3,
+              "minProperties": 1,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sweep"
+        }
+      },
+      "required": [
+        "params",
+        "interval",
+        "start",
+        "end",
+        "costs",
+        "seed",
+        "strategy",
+        "instrument_ids"
+      ],
+      "title": "CalendarSpreadRequest",
+      "type": "object"
+    },
+    "Granularity": {
+      "description": "Native granularity of an instrument.",
+      "enum": [
+        "tick",
+        "1s",
+        "1m",
+        "1h",
+        "1d"
+      ],
+      "title": "Granularity",
+      "type": "string"
+    },
+    "Instrument": {
+      "additionalProperties": false,
+      "description": "Instrument reference data (data-contracts §1); also the API ``Instrument`` schema.",
+      "properties": {
+        "asset_class": {
+          "$ref": "#/$defs/AssetClass"
+        },
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        },
+        "description": {
+          "maxLength": 256,
+          "title": "Description",
+          "type": "string"
+        },
+        "exchange_tz": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Exchange Tz",
+          "type": "string"
+        },
+        "first_ts_ns": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "First Ts Ns"
+        },
+        "granularity": {
+          "$ref": "#/$defs/Granularity"
+        },
+        "instrument_id": {
+          "maxLength": 64,
+          "pattern": "^[A-Z0-9]+\\.[A-Z0-9_]+\\.[A-Z0-9_]+$",
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/InstrumentKind"
+        },
+        "last_ts_ns": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Ts Ns"
+        },
+        "roll_method": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RollMethod"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "unit": {
+          "maxLength": 16,
+          "minLength": 1,
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instrument_id",
+        "source",
+        "asset_class",
+        "kind",
+        "unit",
+        "currency",
+        "exchange_tz",
+        "granularity",
+        "description"
+      ],
+      "title": "Instrument",
+      "type": "object"
+    },
+    "InstrumentKind": {
+      "description": "Instrument kind.",
+      "enum": [
+        "spot",
+        "future",
+        "continuous",
+        "fx"
+      ],
+      "title": "InstrumentKind",
+      "type": "string"
+    },
+    "InstrumentList": {
+      "additionalProperties": false,
+      "description": "``GET /v1/instruments``.",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Instrument"
+          },
+          "title": "Items",
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "title": "InstrumentList",
+      "type": "object"
+    },
+    "Interval": {
+      "description": "Bar interval (data-contracts §3).",
+      "enum": [
+        "1s",
+        "1m",
+        "1h",
+        "1d"
+      ],
+      "title": "Interval",
+      "type": "string"
+    },
+    "JobStatus": {
+      "description": "Backtest job status (``ops.backtest_job.status``).",
+      "enum": [
+        "queued",
+        "running",
+        "succeeded",
+        "failed",
+        "partial"
+      ],
+      "title": "JobStatus",
+      "type": "string"
+    },
+    "LatestBar": {
+      "additionalProperties": false,
+      "description": "Last bar of one instrument.",
+      "properties": {
+        "close": {
+          "title": "Close",
+          "type": "number"
+        },
+        "high": {
+          "title": "High",
+          "type": "number"
+        },
+        "instrument_id": {
+          "maxLength": 64,
+          "pattern": "^[A-Z0-9]+\\.[A-Z0-9_]+\\.[A-Z0-9_]+$",
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "interval": {
+          "$ref": "#/$defs/Interval"
+        },
+        "low": {
+          "title": "Low",
+          "type": "number"
+        },
+        "open": {
+          "title": "Open",
+          "type": "number"
+        },
+        "quality": {
+          "maximum": 31,
+          "minimum": 0,
+          "title": "Quality",
+          "type": "integer"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "ts_ns": {
+          "title": "Ts Ns",
+          "type": "integer"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "volume": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Volume"
+        }
+      },
+      "required": [
+        "ts",
+        "ts_ns",
+        "open",
+        "high",
+        "low",
+        "close",
+        "quality",
+        "version",
+        "instrument_id",
+        "interval"
+      ],
+      "title": "LatestBar",
+      "type": "object"
+    },
+    "LatestResponse": {
+      "additionalProperties": false,
+      "description": "``GET /v1/latest`` (hot store only).",
+      "properties": {
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/LatestBar"
+          },
+          "title": "Rows",
+          "type": "array"
+        }
+      },
+      "required": [
+        "rows"
+      ],
+      "title": "LatestResponse",
+      "type": "object"
+    },
+    "MaCrossoverParams": {
+      "additionalProperties": false,
+      "description": "``ma_crossover`` parameters (SPEC-05 §2).",
+      "properties": {
+        "fast": {
+          "minimum": 1,
+          "title": "Fast",
+          "type": "integer"
+        },
+        "slow": {
+          "minimum": 1,
+          "title": "Slow",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "fast",
+        "slow"
+      ],
+      "title": "MaCrossoverParams",
+      "type": "object"
+    },
+    "MaCrossoverRequest": {
+      "additionalProperties": false,
+      "description": "``ma_crossover`` on one instrument.",
+      "properties": {
+        "costs": {
+          "$ref": "#/$defs/BacktestCosts"
+        },
+        "end": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "pattern": "^-?[0-9]+$",
+              "type": "string"
+            }
+          ],
+          "title": "End"
+        },
+        "instrument_ids": {
+          "items": {
+            "maxLength": 64,
+            "pattern": "^[A-Z0-9]+\\.[A-Z0-9_]+\\.[A-Z0-9_]+$",
+            "type": "string"
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "title": "Instrument Ids",
+          "type": "array"
+        },
+        "interval": {
+          "enum": [
+            "1m",
+            "1h",
+            "1d"
+          ],
+          "title": "Interval",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/MaCrossoverParams"
+        },
+        "seed": {
+          "title": "Seed",
+          "type": "integer"
+        },
+        "start": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "pattern": "^-?[0-9]+$",
+              "type": "string"
+            }
+          ],
+          "title": "Start"
+        },
+        "strategy": {
+          "const": "ma_crossover",
+          "title": "Strategy",
+          "type": "string"
+        },
+        "sweep": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 200,
+                "minItems": 1,
+                "type": "array"
+              },
+              "maxProperties": 3,
+              "minProperties": 1,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sweep"
+        }
+      },
+      "required": [
+        "params",
+        "interval",
+        "start",
+        "end",
+        "costs",
+        "seed",
+        "strategy",
+        "instrument_ids"
+      ],
+      "title": "MaCrossoverRequest",
+      "type": "object"
+    },
+    "MeanReversionParams": {
+      "additionalProperties": false,
+      "description": "``mean_reversion`` / ``calendar_spread`` parameters (SPEC-05 §2).",
+      "properties": {
+        "lookback": {
+          "minimum": 2,
+          "title": "Lookback",
+          "type": "integer"
+        },
+        "z_entry": {
+          "exclusiveMinimum": 0,
+          "title": "Z Entry",
+          "type": "number"
+        },
+        "z_exit": {
+          "minimum": 0,
+          "title": "Z Exit",
+          "type": "number"
+        }
+      },
+      "required": [
+        "lookback",
+        "z_entry",
+        "z_exit"
+      ],
+      "title": "MeanReversionParams",
+      "type": "object"
+    },
+    "MeanReversionRequest": {
+      "additionalProperties": false,
+      "description": "``mean_reversion`` on one instrument.",
+      "properties": {
+        "costs": {
+          "$ref": "#/$defs/BacktestCosts"
+        },
+        "end": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "pattern": "^-?[0-9]+$",
+              "type": "string"
+            }
+          ],
+          "title": "End"
+        },
+        "instrument_ids": {
+          "items": {
+            "maxLength": 64,
+            "pattern": "^[A-Z0-9]+\\.[A-Z0-9_]+\\.[A-Z0-9_]+$",
+            "type": "string"
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "title": "Instrument Ids",
+          "type": "array"
+        },
+        "interval": {
+          "enum": [
+            "1m",
+            "1h",
+            "1d"
+          ],
+          "title": "Interval",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/MeanReversionParams"
+        },
+        "seed": {
+          "title": "Seed",
+          "type": "integer"
+        },
+        "start": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "pattern": "^-?[0-9]+$",
+              "type": "string"
+            }
+          ],
+          "title": "Start"
+        },
+        "strategy": {
+          "const": "mean_reversion",
+          "title": "Strategy",
+          "type": "string"
+        },
+        "sweep": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 200,
+                "minItems": 1,
+                "type": "array"
+              },
+              "maxProperties": 3,
+              "minProperties": 1,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sweep"
+        }
+      },
+      "required": [
+        "params",
+        "interval",
+        "start",
+        "end",
+        "costs",
+        "seed",
+        "strategy",
+        "instrument_ids"
+      ],
+      "title": "MeanReversionRequest",
+      "type": "object"
+    },
+    "Problem": {
+      "additionalProperties": false,
+      "description": "RFC 7807 problem details.",
+      "properties": {
+        "correlation_id": {
+          "title": "Correlation Id",
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "status": {
+          "title": "Status",
+          "type": "integer"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "type": {
+          "format": "uri",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "title",
+        "status",
+        "correlation_id"
+      ],
+      "title": "Problem",
+      "type": "object"
+    },
+    "RollMethod": {
+      "description": "Roll adjustment of a continuous series.",
+      "enum": [
+        "ratio",
+        "difference",
+        "none"
+      ],
+      "title": "RollMethod",
+      "type": "string"
+    },
+    "Source": {
+      "description": "Data source.",
+      "enum": [
+        "EIA",
+        "FRED",
+        "SYN"
+      ],
+      "title": "Source",
+      "type": "string"
+    },
+    "SpreadPoint": {
+      "additionalProperties": false,
+      "description": "One point of the ``leg_a - leg_b`` series.",
+      "properties": {
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "ts_ns": {
+          "title": "Ts Ns",
+          "type": "integer"
+        },
+        "value": {
+          "title": "Value",
+          "type": "number"
+        }
+      },
+      "required": [
+        "ts",
+        "ts_ns",
+        "value"
+      ],
+      "title": "SpreadPoint",
+      "type": "object"
+    },
+    "SpreadResponse": {
+      "additionalProperties": false,
+      "description": "``GET /v1/spreads``.",
+      "properties": {
+        "interval": {
+          "$ref": "#/$defs/Interval"
+        },
+        "leg_a": {
+          "maxLength": 64,
+          "pattern": "^[A-Z0-9]+\\.[A-Z0-9_]+\\.[A-Z0-9_]+$",
+          "title": "Leg A",
+          "type": "string"
+        },
+        "leg_b": {
+          "maxLength": 64,
+          "pattern": "^[A-Z0-9]+\\.[A-Z0-9_]+\\.[A-Z0-9_]+$",
+          "title": "Leg B",
+          "type": "string"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Next Cursor"
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/SpreadPoint"
+          },
+          "title": "Rows",
+          "type": "array"
+        },
+        "tier": {
+          "$ref": "#/$defs/Tier"
+        }
+      },
+      "required": [
+        "leg_a",
+        "leg_b",
+        "interval",
+        "tier",
+        "rows"
+      ],
+      "title": "SpreadResponse",
+      "type": "object"
+    },
+    "StorageStats": {
+      "additionalProperties": false,
+      "description": "``GET /v1/admin/storage/stats``: rows/bytes per tier from the last stats run.",
+      "properties": {
+        "cold_bytes": {
+          "minimum": 0,
+          "title": "Cold Bytes",
+          "type": "integer"
+        },
+        "cold_rows": {
+          "minimum": 0,
+          "title": "Cold Rows",
+          "type": "integer"
+        },
+        "computed_at": {
+          "format": "date-time",
+          "title": "Computed At",
+          "type": "string"
+        },
+        "hot_bytes": {
+          "minimum": 0,
+          "title": "Hot Bytes",
+          "type": "integer"
+        },
+        "hot_rows": {
+          "minimum": 0,
+          "title": "Hot Rows",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "computed_at",
+        "hot_rows",
+        "hot_bytes",
+        "cold_rows",
+        "cold_bytes"
+      ],
+      "title": "StorageStats",
+      "type": "object"
+    },
+    "Tick": {
+      "additionalProperties": false,
+      "description": "One tick (data-contracts §2).",
+      "properties": {
+        "price": {
+          "title": "Price",
+          "type": "number"
+        },
+        "quality": {
+          "maximum": 31,
+          "minimum": 0,
+          "title": "Quality",
+          "type": "integer"
+        },
+        "side": {
+          "$ref": "#/$defs/TickSide"
+        },
+        "size": {
+          "minimum": 0,
+          "title": "Size",
+          "type": "number"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "ts_ns": {
+          "title": "Ts Ns",
+          "type": "integer"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ts",
+        "ts_ns",
+        "price",
+        "size",
+        "side",
+        "quality",
+        "version"
+      ],
+      "title": "Tick",
+      "type": "object"
+    },
+    "TickSide": {
+      "description": "Tick ``side`` codes stored as int8 (data-contracts §2).",
+      "enum": [
+        0,
+        1,
+        2
+      ],
+      "title": "TickSide",
+      "type": "integer"
+    },
+    "TicksResponse": {
+      "additionalProperties": false,
+      "description": "``GET /v1/ticks``.",
+      "properties": {
+        "instrument_id": {
+          "maxLength": 64,
+          "pattern": "^[A-Z0-9]+\\.[A-Z0-9_]+\\.[A-Z0-9_]+$",
+          "title": "Instrument Id",
+          "type": "string"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Next Cursor"
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/Tick"
+          },
+          "title": "Rows",
+          "type": "array"
+        },
+        "tier": {
+          "$ref": "#/$defs/Tier"
+        }
+      },
+      "required": [
+        "instrument_id",
+        "tier",
+        "rows"
+      ],
+      "title": "TicksResponse",
+      "type": "object"
+    },
+    "Tier": {
+      "description": "Store tier that served a market-data response (``X-Tidal-Tier``).",
+      "enum": [
+        "hot",
+        "cold",
+        "mixed"
+      ],
+      "title": "Tier",
+      "type": "string"
+    },
+    "TieringRunAccepted": {
+      "additionalProperties": false,
+      "description": "``POST /v1/admin/tiering/run``: the ``tiering.job/v1`` message was enqueued.",
+      "properties": {
+        "message_id": {
+          "title": "Message Id",
+          "type": "string"
+        },
+        "status": {
+          "const": "queued",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message_id",
+        "status"
+      ],
+      "title": "TieringRunAccepted",
+      "type": "object"
+    }
+  },
+  "title": "Tidal API v1 components"
+}
