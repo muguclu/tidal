@@ -36,7 +36,7 @@ import sys
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -47,6 +47,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from tidal.common.errors import DependencyUnavailable, TidalError
 from tidal.common.logging import correlation_scope, get_logger
+from tidal.common.timeutil import SystemClock
 
 API_URL = "https://prices.azure.com/api/retail/prices"
 REGION = "westeurope"
@@ -698,7 +699,7 @@ def main(argv: Sequence[str] | None = None, client: httpx.Client | None = None) 
         finally:
             if own:
                 http.close()
-        write_prices(args.out, prices, datetime.now(UTC).date())
+        write_prices(args.out, prices, SystemClock().now().date())
         print(f"wrote {len(prices)} priced meters to {args.out}")  # noqa: T201
     return 0
 

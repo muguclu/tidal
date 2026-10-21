@@ -84,6 +84,9 @@ dictionary columns RLE_DICTIONARY, `trade_count` writer default.
 | `version` | int16 | |
 
 Daily EIA/FRED values are stored as `1d` bars with `open=high=low=close=value`, `volume=NaN`.
+`1d` bar `ts_ns` = **UTC midnight of the trade date** (not exchange-local midnight), so daily bars stay in
+the calendar month/year partition of their trade date (ADR-0009, v1.1 clarification). Intraday bars and
+ticks are true UTC instants.
 
 ### 3.1 Missing-value mapping (normative)
 SQL Server `FLOAT` cannot store NaN. "No value" is therefore represented as:

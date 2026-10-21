@@ -9,7 +9,7 @@ import uvicorn
 from fastapi import FastAPI
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from tidal.api.deps import SystemClock, assert_auth_allowed
+from tidal.api.deps import assert_auth_allowed
 from tidal.api.errors import (
     CORRELATION_HEADER,
     internal_error_response,
@@ -25,6 +25,7 @@ from tidal.common.logging import (
     new_correlation_id,
     reset_correlation_id,
 )
+from tidal.common.timeutil import SystemClock
 from tidal.query.protocols import Bus, Clock, Reader
 
 _VALID_CORRELATION_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")

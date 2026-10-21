@@ -4,7 +4,6 @@ Clients live on ``app.state`` (set by ``create_app``); routers depend only on th
 """
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import Depends, Request
@@ -25,14 +24,6 @@ class Principal:
 
 
 LOCAL_ANONYMOUS = Principal(oid="local-anonymous", roles=ALL_ROLES)
-
-
-class SystemClock:
-    """Wall clock (UTC)."""
-
-    def now(self) -> datetime:
-        """Return the current UTC time."""
-        return datetime.now(UTC)
 
 
 def get_settings(request: Request) -> Settings:
