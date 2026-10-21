@@ -2,36 +2,574 @@ openapi: 3.1.0
 info:
   title: Tidal API
   version: 1.0.0
-  description: >
-    Starter contract. T-004 completes every endpoint listed in api-contract.md.
-    This file is the source of truth; FastAPI output is diffed against it in CI.
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+  description: |
+    Tidal time-series platform API, v1. This file is the source of truth; the generated FastAPI
+    OpenAPI is diffed against it in CI (`oasdiff breaking`). Human-readable counterpart:
+    `api-contract.md` (conventions, role matrix, status codes).
+
+    **Base-path convention.** The `/v1` prefix is part of every *path key* below
+    (e.g. `/v1/bars`) and the server URL is the bare host (`https://api.tidal.example`).
+    This matches the FastAPI router prefix and the paths listed in api-contract.md section 2.
+
+    **Time parameters** (`start`, `end`, `as_of`) accept ISO-8601 UTC (`2020-04-20T00:00:00Z`)
+    or an epoch-nanosecond integer passed as a decimal string (`1587340800000000000`).
+    Responses always carry both `ts` (ISO-8601 UTC) and `ts_ns` (int64 epoch ns).
+
+    **Roles** (Entra app roles, cumulative): Reader < Trader < Quant; Admin is separate and only
+    grants `/v1/admin/*`. Each operation declares the minimum role in `x-tidal-min-role`.
+
+    **Range limits** (SPEC-04 section 3): ticks max 31 days per call; bars with interval `1s`
+    max 7 days; `1d` unlimited. Exceeding a limit returns 413.
 servers:
-  - url: https://api.tidal.example/v1
+  - url: https://api.tidal.example
+    description: Base host; every path already includes the /v1 prefix.
 security:
-  - entra: []
+  - entra: ["api://tidal/.default"]
+tags:
+  - name: health
+    description: Liveness and readiness (no auth).
+  - name: reference
+    description: Instrument reference data.
+  - name: market-data
+    description: Bars, ticks, latest and spreads.
+  - name: backtests
+    description: Backtest submission and results.
+  - name: admin
+    description: Operator endpoints.
+paths:
+  /v1/health/live:
+    get:
+      tags: [health]
+      operationId: getHealthLive
+      summary: Liveness probe
+      security: []
+      x-tidal-min-role: none
+      responses:
+        "200":
+          description: Process is alive.
+          headers: { X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [ok] }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+  /v1/health/ready:
+    get:
+      tags: [health]
+      operationId: getHealthReady
+      summary: Readiness probe (SQL, Blob, Service Bus reachability)
+      security: []
+      x-tidal-min-role: none
+      description: Public body is only the status; dependency details (SQL, Blob, Service Bus) are logged, never returned.
+      responses:
+        "200":
+          description: All dependencies reachable.
+          headers: { X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                additionalProperties: false
+                properties:
+                  status: { type: string, enum: [ready] }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503":
+          description: Not ready.
+          headers: { X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                additionalProperties: false
+                properties:
+                  status: { type: string, enum: [not_ready] }
+  /v1/instruments:
+    get:
+      tags: [reference]
+      operationId: listInstruments
+      summary: List instruments
+      x-tidal-min-role: Tidal.Reader
+      parameters:
+        - name: asset_class
+          in: query
+          schema: { type: string, enum: [crude, gas, power, fx, refined] }
+        - name: source
+          in: query
+          schema: { type: string, enum: [EIA, FRED, SYN] }
+      responses:
+        "200":
+          description: Instruments matching the filters (all if none given).
+          headers: { X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" } }
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/InstrumentList" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /v1/instruments/{id}:
+    get:
+      tags: [reference]
+      operationId: getInstrument
+      summary: Get one instrument
+      x-tidal-min-role: Tidal.Reader
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/InstrumentId" }
+      responses:
+        "200":
+          description: The instrument.
+          headers: { X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" } }
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Instrument" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /v1/bars:
+    get:
+      tags: [market-data]
+      operationId: getBars
+      summary: OHLCV bars for one instrument
+      description: |
+        `fill=ffill` forward-fills gaps in the API layer only (storage never forward-fills).
+        `as_of` returns the data as known at that time (restatement-aware, data-contracts section 7).
+        `cursor` and `limit` apply to `format=json` only; arrow and parquet stream the whole range.
+      x-tidal-min-role: Tidal.Reader
+      parameters:
+        - $ref: "#/components/parameters/InstrumentIdQuery"
+        - name: interval
+          in: query
+          required: true
+          schema: { $ref: "#/components/schemas/BarInterval" }
+        - $ref: "#/components/parameters/Start"
+        - $ref: "#/components/parameters/End"
+        - name: fill
+          in: query
+          schema: { type: string, enum: [none, ffill], default: none }
+        - name: as_of
+          in: query
+          description: Knowledge-time cutoff, ISO-8601 UTC or epoch-ns integer string.
+          schema: { $ref: "#/components/schemas/TimeParam" }
+        - $ref: "#/components/parameters/Format"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Bars in the requested format.
+          headers:
+            X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" }
+            X-Tidal-Tier: { $ref: "#/components/headers/X-Tidal-Tier" }
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/BarsResponse" } }
+            application/vnd.apache.arrow.stream: { schema: { $ref: "#/components/schemas/BinaryStream" } }
+            application/vnd.apache.parquet: { schema: { $ref: "#/components/schemas/BinaryStream" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /v1/ticks:
+    get:
+      tags: [market-data]
+      operationId: getTicks
+      summary: Ticks for one instrument (max 31 days per call)
+      x-tidal-min-role: Tidal.Trader
+      parameters:
+        - $ref: "#/components/parameters/InstrumentIdQuery"
+        - $ref: "#/components/parameters/Start"
+        - $ref: "#/components/parameters/End"
+        - $ref: "#/components/parameters/Format"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Ticks in the requested format.
+          headers:
+            X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" }
+            X-Tidal-Tier: { $ref: "#/components/headers/X-Tidal-Tier" }
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/TicksResponse" } }
+            application/vnd.apache.arrow.stream: { schema: { $ref: "#/components/schemas/BinaryStream" } }
+            application/vnd.apache.parquet: { schema: { $ref: "#/components/schemas/BinaryStream" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /v1/latest:
+    get:
+      tags: [market-data]
+      operationId: getLatest
+      summary: Last bar per instrument (hot store only)
+      x-tidal-min-role: Tidal.Reader
+      x-tidal-open-question: >
+        api-contract.md gives no parameters for /latest. Minimal reading: repeatable
+        `instrument_id` (required, 1..100) plus optional `interval` (default 1d). The response
+        tier is always hot.
+      parameters:
+        - name: instrument_id
+          in: query
+          required: true
+          style: form
+          explode: true
+          schema:
+            type: array
+            minItems: 1
+            maxItems: 100
+            items: { $ref: "#/components/schemas/InstrumentId" }
+        - name: interval
+          in: query
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BarInterval"
+            default: "1d"
+      responses:
+        "200":
+          description: Latest bar per requested instrument; instruments without data are omitted.
+          headers:
+            X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" }
+            X-Tidal-Tier: { $ref: "#/components/headers/X-Tidal-Tier" }
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/LatestResponse" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /v1/spreads:
+    get:
+      tags: [market-data]
+      operationId: getSpreads
+      summary: Spread series leg_a minus leg_b
+      description: Timestamps present in both legs only (inner join); no forward-fill.
+      x-tidal-min-role: Tidal.Trader
+      x-tidal-open-question: >
+        api-contract.md does not define the join semantics, a `format` parameter, or pagination
+        for /spreads. Minimal reading: inner join on ts_ns, JSON only, no pagination; the bars
+        range limits for the given interval apply (413).
+      parameters:
+        - name: leg_a
+          in: query
+          required: true
+          schema: { $ref: "#/components/schemas/InstrumentId" }
+        - name: leg_b
+          in: query
+          required: true
+          schema: { $ref: "#/components/schemas/InstrumentId" }
+        - name: interval
+          in: query
+          required: true
+          schema: { $ref: "#/components/schemas/BarInterval" }
+        - $ref: "#/components/parameters/Start"
+        - $ref: "#/components/parameters/End"
+      responses:
+        "200":
+          description: Spread series.
+          headers:
+            X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" }
+            X-Tidal-Tier: { $ref: "#/components/headers/X-Tidal-Tier" }
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/SpreadResponse" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /v1/backtests:
+    post:
+      tags: [backtests]
+      operationId: submitBacktest
+      summary: Submit a backtest (optionally a parameter sweep)
+      description: |
+        Validates, expands `sweep` into child jobs (cartesian product, max 200), writes the parent
+        job and enqueues children. `calendar_spread` requires exactly 2 instrument_ids
+        (leg_a, leg_b) and params `lookback`, `z_entry`, `z_exit`; other strategies take exactly 1.
+        A sweep that expands to more than 200 children returns 413.
+      x-tidal-min-role: Tidal.Quant
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: "#/components/schemas/BacktestRequest" } }
+      responses:
+        "202":
+          description: Accepted and queued.
+          headers: { X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" } }
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/BacktestAccepted" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+    get:
+      tags: [backtests]
+      operationId: listBacktests
+      summary: List the own backtest jobs of the caller
+      x-tidal-min-role: Tidal.Quant
+      x-tidal-open-question: >
+        api-contract.md gives no parameters for the list. Minimal reading: cursor/limit
+        pagination, newest first, optional status filter.
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/BacktestJobState" }
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: The jobs of the caller, with result set to null (fetch a job for its result).
+          headers: { X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" } }
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/BacktestList" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /v1/backtests/{job_id}:
+    get:
+      tags: [backtests]
+      operationId: getBacktest
+      summary: Backtest status, with the result when done
+      description: Jobs owned by another principal are reported as 404.
+      x-tidal-min-role: Tidal.Quant
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/JobId" }
+      responses:
+        "200":
+          description: Job status.
+          headers: { X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" } }
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/BacktestStatus" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /v1/admin/tiering/run:
+    post:
+      tags: [admin]
+      operationId: runTiering
+      summary: Trigger the hot-to-cold migration job (enqueues)
+      x-tidal-min-role: Tidal.Admin
+      x-tidal-open-question: >
+        api-contract.md defines no request body or response shape. Minimal reading: no body,
+        202 with `run_id` and `status=queued`.
+      responses:
+        "202":
+          description: Migration job enqueued.
+          headers: { X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" } }
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/TieringRunAccepted" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+  /v1/admin/storage/stats:
+    get:
+      tags: [admin]
+      operationId: getStorageStats
+      summary: Rows and bytes per tier, from the last stats run
+      x-tidal-min-role: Tidal.Admin
+      x-tidal-open-question: >
+        api-contract.md defines no response shape. Minimal reading: rows and bytes for hot and
+        cold plus the timestamp of the stats run.
+      responses:
+        "200":
+          description: Storage statistics.
+          headers: { X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" } }
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/StorageStats" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 components:
   securitySchemes:
     entra:
       type: oauth2
+      description: Entra ID access token, audience api://tidal, roles in the `roles` claim.
       flows:
         authorizationCode:
           authorizationUrl: https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize
           tokenUrl: https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token
           scopes:
             api://tidal/.default: Access Tidal
+  headers:
+    X-Correlation-Id:
+      description: Request correlation id; echoed from the request if supplied, else generated.
+      required: true
+      schema: { type: string }
+    X-Tidal-Tier:
+      description: Storage tier(s) that served the query (used for FinOps cost attribution).
+      required: true
+      schema: { type: string, enum: [hot, cold, mixed] }
+    Retry-After:
+      description: Seconds to wait before retrying.
+      required: true
+      schema: { type: integer, minimum: 1 }
+  parameters:
+    InstrumentIdQuery:
+      name: instrument_id
+      in: query
+      required: true
+      schema: { $ref: "#/components/schemas/InstrumentId" }
+    Start:
+      name: start
+      in: query
+      required: true
+      description: Inclusive range start, ISO-8601 UTC or epoch-ns integer string.
+      schema: { $ref: "#/components/schemas/TimeParam" }
+    End:
+      name: end
+      in: query
+      required: true
+      description: Exclusive range end, ISO-8601 UTC or epoch-ns integer string.
+      schema: { $ref: "#/components/schemas/TimeParam" }
+    Format:
+      name: format
+      in: query
+      schema: { type: string, enum: [json, arrow, parquet], default: json }
+    Cursor:
+      name: cursor
+      in: query
+      description: >
+        Opaque cursor from `next_cursor`; format=json only. HMAC-signed by the server and bound
+        to the principal and the query; a tampered cursor returns 400.
+      schema: { type: string, maxLength: 512 }
+    Limit:
+      name: limit
+      in: query
+      description: Rows per page; format=json only.
+      schema: { type: integer, minimum: 1, maximum: 100000, default: 10000 }
+  responses:
+    BadRequest:
+      description: Validation error (400).
+      headers: { X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" } }
+      content:
+        application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } }
+    Unauthorized:
+      description: Missing or invalid token (401).
+      headers: { X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" } }
+      content:
+        application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } }
+    Forbidden:
+      description: Required role missing (403).
+      headers: { X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" } }
+      content:
+        application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } }
+    NotFound:
+      description: Unknown instrument or job (404).
+      headers: { X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" } }
+      content:
+        application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } }
+    PayloadTooLarge:
+      description: Requested range or sweep too large (413).
+      headers: { X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" } }
+      content:
+        application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } }
+    TooManyRequests:
+      description: Rate limited (429), 60 requests per minute per principal.
+      headers:
+        X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" }
+        Retry-After: { $ref: "#/components/headers/Retry-After" }
+      content:
+        application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } }
+    ServiceUnavailable:
+      description: A dependency is down (503).
+      headers: { X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" } }
+      content:
+        application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } }
   schemas:
+    InstrumentId:
+      type: string
+      maxLength: 64
+      pattern: "^[A-Z0-9]+\\.[A-Z0-9_]+\\.[A-Z0-9_]+$"
+      examples: [EIA.BRENT.SPOT]
+    JobId:
+      type: string
+      pattern: "^bt_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+    TimeParam:
+      type: string
+      maxLength: 35
+      description: ISO-8601 UTC timestamp ending in Z, or epoch nanoseconds as a decimal integer string.
+      pattern: "^([0-9]{1,19}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z)$"
+      examples: ["2020-04-20T00:00:00Z", "1587340800000000000"]
+    BarInterval:
+      type: string
+      enum: ["1s", "1m", "1h", "1d"]
+    BinaryStream:
+      type: string
+      format: binary
+      description: Streamed Arrow IPC stream or Parquet file; never fully materialised server-side.
+    BacktestJobState:
+      type: string
+      enum: [queued, running, succeeded, failed, partial]
     Problem:
       type: object
+      description: RFC 7807 problem details.
       required: [type, title, status, correlation_id]
+      additionalProperties: false
       properties:
         type: { type: string, format: uri }
         title: { type: string }
         status: { type: integer }
-        detail: { type: string }
+        detail: { type: string, description: "Human-readable; never contains exception text, SQL or stack traces." }
         correlation_id: { type: string }
+    Instrument:
+      type: object
+      description: Reference data, data-contracts section 1.
+      required: [instrument_id, source, asset_class, kind, unit, currency, exchange_tz, granularity, description]
+      properties:
+        instrument_id: { $ref: "#/components/schemas/InstrumentId" }
+        source: { type: string, enum: [EIA, FRED, SYN] }
+        asset_class: { type: string, enum: [crude, gas, power, fx, refined] }
+        kind: { type: string, enum: [spot, future, continuous, fx] }
+        unit: { type: string }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        exchange_tz: { type: string }
+        granularity: { type: string, enum: [tick, "1s", "1m", "1h", "1d"] }
+        roll_method:
+          type: [string, "null"]
+          enum: [ratio, difference, none, null]
+          description: Required when kind is continuous.
+        first_ts_ns: { type: [integer, "null"], format: int64 }
+        last_ts_ns: { type: [integer, "null"], format: int64 }
+        description: { type: string }
+    InstrumentList:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Instrument" } }
     Bar:
       type: object
-      required: [ts, ts_ns, open, high, low, close, quality, version]
+      required: [ts, ts_ns, open, high, low, close, volume, quality, version]
       properties:
         ts: { type: string, format: date-time }
         ts_ns: { type: integer, format: int64 }
@@ -39,82 +577,252 @@ components:
         high: { type: number }
         low: { type: number }
         close: { type: number }
-        volume: { type: [number, "null"] }
-        quality: { type: integer, minimum: 0, maximum: 31 }
+        volume:
+          type: [number, "null"]
+          description: Null when the source has no volume (NaN to null, data-contracts section 3.1).
+        quality:
+          type: integer
+          minimum: 0
+          maximum: 31
+          description: Bit flags, data-contracts section 5 (bits 0-4).
         version: { type: integer, minimum: 1 }
     BarsResponse:
       type: object
-      required: [instrument_id, interval, tier, rows]
+      required: [instrument_id, interval, tier, rows, next_cursor]
       properties:
-        instrument_id: { type: string }
-        interval: { type: string, enum: ["1s", "1m", "1h", "1d"] }
+        instrument_id: { $ref: "#/components/schemas/InstrumentId" }
+        interval: { $ref: "#/components/schemas/BarInterval" }
         tier: { type: string, enum: [hot, cold, mixed] }
         rows: { type: array, items: { $ref: "#/components/schemas/Bar" } }
         next_cursor: { type: [string, "null"] }
-    BacktestRequest:
+    Tick:
       type: object
-      required: [strategy, instrument_ids, interval, start, end, params, costs, seed]
+      description: data-contracts section 2 (internal columns omitted).
+      required: [ts, ts_ns, price, size, side, quality, version]
       properties:
-        strategy: { type: string, enum: [ma_crossover, mean_reversion, calendar_spread] }
-        instrument_ids: { type: array, minItems: 1, maxItems: 2, items: { type: string } }
-        interval: { type: string, enum: ["1m", "1h", "1d"] }
-        start: { type: string, format: date-time }
-        end: { type: string, format: date-time }
-        params: { type: object, additionalProperties: { type: number } }
-        costs:
-          type: object
-          required: [fee_bps, slippage_bps]
-          properties:
-            fee_bps: { type: number, minimum: 0 }
-            slippage_bps: { type: number, minimum: 0 }
-        seed: { type: integer }
+        ts: { type: string, format: date-time }
+        ts_ns: { type: integer, format: int64 }
+        price: { type: number }
+        size: { type: number, minimum: 0 }
+        side: { type: integer, enum: [0, 1, 2], description: "0=trade, 1=bid, 2=ask" }
+        quality: { type: integer, minimum: 0, maximum: 31 }
+        version: { type: integer, minimum: 1 }
+    TicksResponse:
+      type: object
+      required: [instrument_id, tier, rows, next_cursor]
+      properties:
+        instrument_id: { $ref: "#/components/schemas/InstrumentId" }
+        tier: { type: string, enum: [hot, cold, mixed] }
+        rows: { type: array, items: { $ref: "#/components/schemas/Tick" } }
+        next_cursor: { type: [string, "null"] }
+    LatestBar:
+      type: object
+      required: [instrument_id, interval, bar]
+      properties:
+        instrument_id: { $ref: "#/components/schemas/InstrumentId" }
+        interval: { $ref: "#/components/schemas/BarInterval" }
+        bar: { $ref: "#/components/schemas/Bar" }
+    LatestResponse:
+      type: object
+      required: [tier, rows]
+      properties:
+        tier: { type: string, enum: [hot] }
+        rows: { type: array, items: { $ref: "#/components/schemas/LatestBar" } }
+    SpreadPoint:
+      type: object
+      description: One timestamp where both legs have a bar; spread is leg_a close minus leg_b close.
+      required: [ts, ts_ns, leg_a, leg_b, spread]
+      properties:
+        ts: { type: string, format: date-time }
+        ts_ns: { type: integer, format: int64 }
+        leg_a: { type: number }
+        leg_b: { type: number }
+        spread: { type: number }
+    SpreadResponse:
+      type: object
+      required: [leg_a, leg_b, interval, tier, rows]
+      properties:
+        leg_a: { $ref: "#/components/schemas/InstrumentId" }
+        leg_b: { $ref: "#/components/schemas/InstrumentId" }
+        interval: { $ref: "#/components/schemas/BarInterval" }
+        tier: { type: string, enum: [hot, cold, mixed] }
+        rows: { type: array, items: { $ref: "#/components/schemas/SpreadPoint" } }
+    BacktestCosts:
+      type: object
+      required: [fee_bps, slippage_bps]
+      properties:
+        fee_bps: { type: number, minimum: 0 }
+        slippage_bps: { type: number, minimum: 0 }
+    BacktestRequestBase:
+      type: object
+      description: Fields shared by every strategy request.
+      required: [interval, start, end, costs, seed]
+      properties:
+        interval:
+          type: string
+          enum: ["1m", "1h", "1d"]
+          description: 1s is excluded because a 20-year 1s backtest exceeds the per-pod budget in SPEC-05 section 5.
+        start: { $ref: "#/components/schemas/TimeParam" }
+        end: { $ref: "#/components/schemas/TimeParam" }
+        costs: { $ref: "#/components/schemas/BacktestCosts" }
+        seed:
+          type: integer
+          description: Recorded and hashed into result_sha256; v1 strategies are fully deterministic.
         sweep:
           type: object
-          additionalProperties: { type: array, items: { type: number }, maxItems: 20 }
+          minProperties: 1
+          maxProperties: 3
+          description: >
+            Optional parameter sweep. Keys must be param names of the chosen strategy (enforced at
+            runtime). The cartesian product of the value arrays fans out to child jobs; a product
+            above 200 returns 413.
+          additionalProperties: { type: array, minItems: 1, maxItems: 200, items: { type: number } }
+    MaCrossoverRequest:
+      allOf:
+        - $ref: "#/components/schemas/BacktestRequestBase"
+        - type: object
+          required: [strategy, instrument_ids, params]
+          properties:
+            strategy: { type: string, enum: [ma_crossover] }
+            instrument_ids:
+              type: array
+              minItems: 1
+              maxItems: 1
+              items: { $ref: "#/components/schemas/InstrumentId" }
+            params:
+              type: object
+              required: [fast, slow]
+              additionalProperties: false
+              properties:
+                fast: { type: integer, minimum: 1 }
+                slow: { type: integer, minimum: 1 }
+    MeanReversionRequest:
+      allOf:
+        - $ref: "#/components/schemas/BacktestRequestBase"
+        - type: object
+          required: [strategy, instrument_ids, params]
+          properties:
+            strategy: { type: string, enum: [mean_reversion] }
+            instrument_ids:
+              type: array
+              minItems: 1
+              maxItems: 1
+              items: { $ref: "#/components/schemas/InstrumentId" }
+            params:
+              type: object
+              required: [lookback, z_entry, z_exit]
+              additionalProperties: false
+              properties:
+                lookback: { type: integer, minimum: 2 }
+                z_entry: { type: number, exclusiveMinimum: 0 }
+                z_exit: { type: number, minimum: 0 }
+    CalendarSpreadRequest:
+      allOf:
+        - $ref: "#/components/schemas/BacktestRequestBase"
+        - type: object
+          required: [strategy, instrument_ids, params]
+          properties:
+            strategy: { type: string, enum: [calendar_spread] }
+            instrument_ids:
+              type: array
+              minItems: 2
+              maxItems: 2
+              items: { $ref: "#/components/schemas/InstrumentId" }
+              description: Exactly [leg_a, leg_b].
+            params:
+              type: object
+              required: [lookback, z_entry, z_exit]
+              additionalProperties: false
+              properties:
+                lookback: { type: integer, minimum: 2 }
+                z_entry: { type: number, exclusiveMinimum: 0 }
+                z_exit: { type: number, minimum: 0 }
+    BacktestRequest:
+      description: Backtest submission, discriminated by `strategy`.
+      oneOf:
+        - $ref: "#/components/schemas/MaCrossoverRequest"
+        - $ref: "#/components/schemas/MeanReversionRequest"
+        - $ref: "#/components/schemas/CalendarSpreadRequest"
+      discriminator:
+        propertyName: strategy
+        mapping:
+          ma_crossover: "#/components/schemas/MaCrossoverRequest"
+          mean_reversion: "#/components/schemas/MeanReversionRequest"
+          calendar_spread: "#/components/schemas/CalendarSpreadRequest"
     BacktestAccepted:
       type: object
       required: [job_id, status]
       properties:
-        job_id: { type: string, pattern: "^bt_[0-9A-HJKMNP-TV-Z]{26}$" }
+        job_id: { $ref: "#/components/schemas/JobId" }
         status: { type: string, enum: [queued] }
-paths:
-  /health/live:
-    get:
-      security: []
-      responses: { "200": { description: alive } }
-  /bars:
-    get:
-      parameters:
-        - { name: instrument_id, in: query, required: true, schema: { type: string } }
-        - { name: interval, in: query, required: true, schema: { type: string, enum: ["1s", "1m", "1h", "1d"] } }
-        - { name: start, in: query, required: true, schema: { type: string } }
-        - { name: end, in: query, required: true, schema: { type: string } }
-        - { name: fill, in: query, schema: { type: string, enum: [none, ffill], default: none } }
-        - { name: as_of, in: query, schema: { type: string } }
-        - { name: format, in: query, schema: { type: string, enum: [json, arrow, parquet], default: json } }
-        - { name: cursor, in: query, schema: { type: string } }
-        - { name: limit, in: query, schema: { type: integer, maximum: 100000, default: 10000 } }
-      responses:
-        "200":
-          description: bars
-          content:
-            application/json: { schema: { $ref: "#/components/schemas/BarsResponse" } }
-        "4XX":
-          description: error
-          content:
-            application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } }
-  /backtests:
-    post:
-      requestBody:
-        required: true
-        content:
-          application/json: { schema: { $ref: "#/components/schemas/BacktestRequest" } }
-      responses:
-        "202":
-          description: accepted
-          content:
-            application/json: { schema: { $ref: "#/components/schemas/BacktestAccepted" } }
-        "4XX":
-          description: error
-          content:
-            application/problem+json: { schema: { $ref: "#/components/schemas/Problem" } }
+    BacktestChildren:
+      type: object
+      required: [total, succeeded, failed]
+      properties:
+        total: { type: integer, minimum: 0 }
+        succeeded: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+    BacktestMetrics:
+      type: object
+      required: [cagr, ann_vol, sharpe, max_drawdown, hit_rate, turnover, n_trades]
+      description: >
+        A metric with no mathematical definition is null, never NaN/inf (api-contract §3), e.g. hit_rate
+        with 0 closed trades, sharpe/ann_vol with < 2 returns or zero volatility.
+      properties:
+        cagr: { type: [number, "null"] }
+        ann_vol: { type: [number, "null"] }
+        sharpe: { type: [number, "null"] }
+        max_drawdown: { type: [number, "null"] }
+        hit_rate: { type: [number, "null"] }
+        turnover: { type: [number, "null"] }
+        n_trades: { type: integer, minimum: 0 }
+    BacktestResult:
+      type: object
+      required: [metrics, equity_url, trades_url, result_sha256]
+      properties:
+        metrics: { $ref: "#/components/schemas/BacktestMetrics" }
+        equity_url: { type: string, description: "Blob path, e.g. backtests/bt_.../equity.parquet" }
+        trades_url: { type: string }
+        result_sha256: { type: string, pattern: "^[0-9a-f]{64}$" }
+    BacktestStatus:
+      type: object
+      required: [job_id, status, children, submitted_at, finished_at, result]
+      properties:
+        job_id: { $ref: "#/components/schemas/JobId" }
+        status: { $ref: "#/components/schemas/BacktestJobState" }
+        children: { $ref: "#/components/schemas/BacktestChildren" }
+        submitted_at: { type: string, format: date-time }
+        finished_at: { type: [string, "null"], format: date-time }
+        result:
+          oneOf:
+            - $ref: "#/components/schemas/BacktestResult"
+            - type: "null"
+    BacktestList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/BacktestStatus" } }
+        next_cursor: { type: [string, "null"] }
+    TieringRunAccepted:
+      type: object
+      required: [run_id, status]
+      properties:
+        run_id: { type: string }
+        status: { type: string, enum: [queued] }
+    StorageStats:
+      type: object
+      required: [as_of, hot, cold]
+      properties:
+        as_of: { type: string, format: date-time, description: Time of the last stats run. }
+        hot:
+          type: object
+          required: [rows, bytes]
+          properties:
+            rows: { type: integer, minimum: 0 }
+            bytes: { type: integer, minimum: 0 }
+        cold:
+          type: object
+          required: [rows, bytes]
+          properties:
+            rows: { type: integer, minimum: 0 }
+            bytes: { type: integer, minimum: 0 }
