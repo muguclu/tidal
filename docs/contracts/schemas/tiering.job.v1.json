@@ -1,0 +1,82 @@
+{
+  "$defs": {
+    "TieringJob": {
+      "additionalProperties": false,
+      "description": "``tiering.job/v1`` payload.",
+      "properties": {
+        "batch_rows": {
+          "minimum": 1,
+          "title": "Batch Rows",
+          "type": "integer"
+        },
+        "dry_run": {
+          "title": "Dry Run",
+          "type": "boolean"
+        },
+        "hot_window_days": {
+          "minimum": 1,
+          "title": "Hot Window Days",
+          "type": "integer"
+        },
+        "table": {
+          "enum": [
+            "md.bar_hot",
+            "md.tick_hot"
+          ],
+          "title": "Table",
+          "type": "string"
+        }
+      },
+      "required": [
+        "table",
+        "hot_window_days",
+        "dry_run",
+        "batch_rows"
+      ],
+      "title": "TieringJob",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Envelope carrying ``tiering.job/v1`` on ``tiering-jobs``.",
+  "properties": {
+    "correlation_id": {
+      "minLength": 1,
+      "title": "Correlation Id",
+      "type": "string"
+    },
+    "message_id": {
+      "minLength": 1,
+      "title": "Message Id",
+      "type": "string"
+    },
+    "payload": {
+      "$ref": "#/$defs/TieringJob"
+    },
+    "produced_at": {
+      "format": "date-time",
+      "title": "Produced At",
+      "type": "string"
+    },
+    "producer": {
+      "pattern": "^[a-z0-9-]+@\\S+$",
+      "title": "Producer",
+      "type": "string"
+    },
+    "schema": {
+      "const": "tiering.job/v1",
+      "title": "Schema",
+      "type": "string"
+    }
+  },
+  "required": [
+    "message_id",
+    "correlation_id",
+    "produced_at",
+    "producer",
+    "schema",
+    "payload"
+  ],
+  "title": "TieringJobMessage",
+  "type": "object"
+}
