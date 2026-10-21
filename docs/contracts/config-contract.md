@@ -39,6 +39,7 @@ Rules:
 - `TIDAL_STORAGE__CONNECTION_STRING`, `TIDAL_SERVICEBUS__CONNECTION_STRING`, `TIDAL_SQL__PASSWORD` and
   `TIDAL_CLOCK__NOW` set while `TIDAL_ENV != local` fail startup. `TIDAL_OTEL__CONNECTION_STRING` is exempt:
   in Azure it is a Key Vault reference.
+- Outside local, `TIDAL_SQL__AUTH` must be `entra_mi` and `TIDAL_STORAGE__USE_MANAGED_IDENTITY` must be `true` (SPEC-06: Entra-only).
 - `TIDAL_SQL__AUTH=entra_mi` requires a real server (not empty, `localhost` or `127.0.0.1`).
 - `principal_oid` is logged as unsalted sha256 (SPEC-10 §1); a keyed HMAC is reviewed in the T-406 threat model.
 - "Now" comes from an injected clock (`tidal.common.timeutil.Clock`) everywhere; only the clock reads
