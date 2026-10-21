@@ -17,6 +17,7 @@ from tidal.common.errors import (
     NotFound,
     RateLimited,
     TidalError,
+    Unauthenticated,
     ValidationFailed,
 )
 from tidal.common.logging import get_correlation_id, get_logger, new_correlation_id
@@ -101,21 +102,30 @@ def internal_error_response() -> JSONResponse:
     return problem_response(problem)
 
 
-async def _tidal_error(_request: Request, exc: Exception) -> Response:
+async def _tidal_error(request: Request, exc: Exception) -> Response:
     assert isinstance(exc, TidalError)  # noqa: S101 - registered for TidalError only
     headers = None
     if isinstance(exc, RateLimited):
         headers = {"Retry-After": str(max(exc.retry_after, 1))}  # openapi: integer >= 1
+    if isinstance(exc, Unauthenticated):
+        scheme, _, token = request.headers.get("Authorization", "").partition(" ")
+        presented = scheme.lower() == "bearer" and bool(token.strip())
+        headers = {"WWW-Authenticate": 'Bearer error="invalid_token"' if presented else "Bearer"}
     if exc.status >= HTTPStatus.INTERNAL_SERVER_ERROR:
         logger.error("request_failed", error_type=type(exc).__name__, exc_info=exc)
     return problem_response(exc.to_problem(_correlation_id()), headers)
+
+
+def _known_loc(loc: tuple[int | str, ...]) -> tuple[int | str, ...]:
+    """Drop segments after ``body``: they can be client-invented key names."""
+    return loc[:1] if loc and loc[0] == "body" else loc
 
 
 async def _validation_error(_request: Request, exc: Exception) -> Response:
     assert isinstance(exc, RequestValidationError)  # noqa: S101 - registered for it only
     # Report where the problem is, never the offending value; names are sanitised and capped.
     where = [
-        _SAFE_LOC.sub("", ".".join(str(p) for p in err["loc"]))[:64]
+        _SAFE_LOC.sub("", ".".join(str(p) for p in _known_loc(err["loc"])))[:64]
         for err in exc.errors()[:_MAX_REPORTED_ERRORS]
     ]
     detail = "Invalid request parameters: " + ", ".join(where) + "."

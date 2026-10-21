@@ -1,12 +1,15 @@
 """In-memory ``Reader`` fake seeded with a few instruments and daily bars (SPEC-04 §3)."""
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
 
+import pyarrow as pa
+
+from tidal.common.errors import NotFound
 from tidal.contracts.instruments import CATALOGUE_V1, AssetClass, Instrument, Source
 from tidal.contracts.models import Bar, LatestBar, Tick, Tier
-from tidal.contracts.schemas import Interval
-from tidal.query.protocols import Rows
+from tidal.contracts.schemas import BAR_V1, TICK_V1, Interval
+from tidal.query.protocols import Rows, RowStream
 
 DAY_NS = 86_400 * 1_000_000_000
 WTI_NEGATIVE_DAY = datetime(2020, 4, 20, tzinfo=UTC)
@@ -57,6 +60,7 @@ class FakeReader:
         as_of_ns: int | None = None,
     ) -> Rows[Bar]:
         """Daily bars in ``[start_ns, end_ns)``; other intervals are empty."""
+        self._known(instrument_id)
         if interval is not Interval.D1:
             return Rows([], Tier.COLD)
         bars = [b for b in self.bars.get(instrument_id, []) if start_ns <= b.ts_ns < end_ns]
@@ -69,7 +73,54 @@ class FakeReader:
         end_ns: int,
     ) -> Rows[Tick]:
         """No ticks are seeded."""
+        self._known(instrument_id)
         return Rows([], Tier.HOT)
+
+    def _known(self, instrument_id: str) -> None:
+        if instrument_id not in self.bars:
+            raise NotFound("Unknown instrument.")
+
+    async def stream_bars(
+        self,
+        instrument_id: str,
+        interval: Interval,
+        start_ns: int,
+        end_ns: int,
+        *,
+        as_of_ns: int | None = None,
+    ) -> RowStream:
+        """One ``BAR_V1`` batch per seeded bar (exercises multi-batch streaming)."""
+        got = await self.read_bars(instrument_id, interval, start_ns, end_ns, as_of_ns=as_of_ns)
+
+        async def batches() -> AsyncIterator[pa.RecordBatch]:
+            for b in got.rows:
+                row = {
+                    "ts_ns": b.ts_ns,
+                    "instrument_id": instrument_id,
+                    "interval": interval.value,
+                    "open": b.open,
+                    "high": b.high,
+                    "low": b.low,
+                    "close": b.close,
+                    "volume": float("nan") if b.volume is None else b.volume,
+                    "trade_count": None,
+                    "quality": b.quality,
+                    "ingested_at_ns": b.ts_ns,
+                    "version": b.version,
+                }
+                yield pa.RecordBatch.from_pylist([row], schema=BAR_V1)
+
+        return RowStream(got.tier, batches())
+
+    async def stream_ticks(self, instrument_id: str, start_ns: int, end_ns: int) -> RowStream:
+        """Empty tick stream (no ticks are seeded) for a known instrument."""
+        got = await self.read_ticks(instrument_id, start_ns, end_ns)
+
+        async def batches() -> AsyncIterator[pa.RecordBatch]:
+            for _ in got.rows:  # pragma: no cover - no ticks are seeded
+                yield pa.RecordBatch.from_pylist([], schema=TICK_V1)
+
+        return RowStream(got.tier, batches())
 
     async def latest(self, instrument_ids: Sequence[str]) -> list[LatestBar]:
         """Last seeded bar of each known instrument."""

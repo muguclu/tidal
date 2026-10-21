@@ -1,5 +1,6 @@
 """API skeleton: health, problem+json, correlation id, auth seam, OpenAPI export."""
 
+import asyncio
 import json
 import logging
 import re
@@ -20,15 +21,17 @@ from fakes.bus import FakeBus
 from fakes.reader import SEEDED_IDS, WTI_NEGATIVE_DAY, FakeReader
 from tidal.api.app import create_app
 from tidal.api.deps import LOCAL_ANONYMOUS, Principal, get_bus, get_clock, get_principal, get_reader
+from tidal.api.routers import health
 from tidal.common.config import Settings
 from tidal.common.errors import (
     ConfigError,
+    NotFound,
     RangeTooLarge,
     RateLimited,
     ValidationFailed,
 )
 from tidal.contracts.models import Tier
-from tidal.contracts.schemas import Interval
+from tidal.contracts.schemas import BAR_V1, Interval
 from tidal.query.protocols import Bus, Clock, Reader
 
 MakeClient = Callable[[FastAPI], httpx.AsyncClient]
@@ -111,6 +114,10 @@ def add_test_routes(app: FastAPI) -> None:
     async def _limit(limit: int = 5) -> dict[str, int]:
         return {"limit": limit}
 
+    @app.post("/t/map")
+    async def _map(payload: dict[str, int]) -> dict[str, int]:
+        return payload
+
     @app.post("/t/body")
     async def _body(payload: Payload) -> Payload:
         return payload
@@ -172,6 +179,7 @@ async def test_wrong_method_is_problem_with_allow_header(client: httpx.AsyncClie
     assert r.status_code == 405
     assert r.headers["content-type"] == PROBLEM
     assert "GET" in r.headers["allow"]
+    assert r.headers["x-correlation-id"] == r.json()["correlation_id"]
 
 
 async def test_413_problem(app: FastAPI, client: httpx.AsyncClient) -> None:
@@ -381,3 +389,69 @@ def test_generated_health_matches_contract() -> None:
             assert media == (
                 {"application/problem+json"} if code == "429" else {"application/json"}
             )
+
+
+class HangingReader(FakeReader):
+    """Reader whose ping never resolves."""
+
+    async def ping(self) -> None:
+        await asyncio.Event().wait()
+
+
+async def test_ready_times_out_hanging_dependency(
+    monkeypatch: pytest.MonkeyPatch, make_client: MakeClient
+) -> None:
+    monkeypatch.setattr(health, "PING_TIMEOUT_S", 0.01)
+    app = create_app(Settings.from_env({}), reader=HangingReader(), bus=FakeBus())
+    async with make_client(app) as c:
+        r = await c.get("/v1/health/ready")
+    assert r.status_code == 503
+    assert r.json() == {"status": "not_ready"}
+
+
+async def test_401_www_authenticate(make_client: MakeClient) -> None:
+    app = create_app(Settings.from_env({}))
+    add_test_routes(app)
+    async with make_client(app) as c:
+        none = await c.get("/t/me")
+        bad = await c.get("/t/me", headers={"Authorization": "Bearer abc.def.ghi"})
+    assert none.headers["www-authenticate"] == "Bearer"
+    assert bad.headers["www-authenticate"] == 'Bearer error="invalid_token"'
+
+
+async def test_400_does_not_echo_body_keys(app: FastAPI, client: httpx.AsyncClient) -> None:
+    add_test_routes(app)
+    r = await client.post("/t/map", json={"inventedKeyName": "x"})
+    assert r.status_code == 400
+    assert "inventedKeyName" not in r.text
+    assert "body" in r.json()["detail"]
+
+
+async def test_docs_only_in_local(make_client: MakeClient) -> None:
+    dev = Settings.from_env(
+        {
+            "TIDAL_ENV": "dev",
+            "TIDAL_AUTH__TENANT_ID": "11111111-1111-1111-1111-111111111111",
+            "TIDAL_SQL__AUTH": "entra_mi",
+            "TIDAL_SQL__SERVER": "x.database.windows.net",
+            "TIDAL_STORAGE__USE_MANAGED_IDENTITY": "true",
+        }
+    )
+    async with make_client(create_app(dev)) as c:
+        assert (await c.get("/docs")).status_code == 404
+        assert (await c.get("/openapi.json")).status_code == 404
+    async with make_client(create_app(Settings.from_env({}))) as c:
+        assert (await c.get("/openapi.json")).status_code == 200
+
+
+async def test_fake_reader_unknown_instrument_and_stream(reader: FakeReader) -> None:
+    with pytest.raises(NotFound):
+        await reader.read_bars("NOPE.X.Y", Interval.D1, 0, 1)
+    stream = await reader.stream_bars("EIA.WTI.SPOT", Interval.D1, 0, 2**62)
+    assert stream.tier is Tier.COLD
+    batches = [b async for b in stream.batches]
+    assert len(batches) == 3
+    assert batches[1].schema.equals(BAR_V1)
+    assert batches[1].column("close")[0].as_py() == -37.63
+    ticks = await reader.stream_ticks("EIA.WTI.SPOT", 0, 1)
+    assert [b async for b in ticks.batches] == []

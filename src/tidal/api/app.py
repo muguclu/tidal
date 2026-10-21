@@ -103,7 +103,8 @@ def create_app(
         title="Tidal API",
         version="1.0.0",
         lifespan=lifespan,
-        docs_url=None if settings.env == "prod" else "/docs",
+        docs_url="/docs" if settings.env == "local" else None,
+        openapi_url="/openapi.json" if settings.env == "local" else None,
         redoc_url=None,
     )
     app.state.settings = settings

@@ -4,10 +4,12 @@ Tests and Phase-1 routers use the in-memory fakes in ``tests/fakes`` (SPEC-04 §
 int64 epoch nanoseconds (``ts_ns``); ``start`` is inclusive and ``end`` exclusive.
 """
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol, runtime_checkable
+
+import pyarrow as pa
 
 from tidal.contracts.instruments import AssetClass, Instrument, Source
 from tidal.contracts.messages import BacktestJobMessage, TieringJobMessage
@@ -26,6 +28,17 @@ class Rows[T]:
     tier: Tier
 
 
+@dataclass(frozen=True, slots=True)
+class RowStream:
+    """Streamed read: ``tier`` is known before the first batch; rows are never all materialised.
+
+    ``batches`` yields record batches in the contract arrow schema (``BAR_V1`` / ``TICK_V1``).
+    """
+
+    tier: Tier
+    batches: AsyncIterator[pa.RecordBatch]
+
+
 @runtime_checkable
 class Clock(Protocol):
     """Source of the current time; tests inject a frozen clock."""
@@ -37,7 +50,11 @@ class Clock(Protocol):
 
 @runtime_checkable
 class Reader(Protocol):
-    """Unified read access over the hot (SQL) and cold (Blob) stores."""
+    """Unified read access over the hot (SQL) and cold (Blob) stores.
+
+    ``read_*`` and ``stream_*`` raise ``NotFound`` for an unknown ``instrument_id``; they never
+    return empty rows for it (a known instrument with no data in range yields no rows).
+    """
 
     async def read_bars(
         self,
@@ -53,6 +70,22 @@ class Reader(Protocol):
 
     async def read_ticks(self, instrument_id: str, start_ns: int, end_ns: int) -> Rows[Tick]:
         """Ticks in ``[start_ns, end_ns)``."""
+        ...
+
+    async def stream_bars(
+        self,
+        instrument_id: str,
+        interval: Interval,
+        start_ns: int,
+        end_ns: int,
+        *,
+        as_of_ns: int | None = None,
+    ) -> RowStream:
+        """Like ``read_bars`` for arrow/parquet output, as ``BAR_V1`` batches."""
+        ...
+
+    async def stream_ticks(self, instrument_id: str, start_ns: int, end_ns: int) -> RowStream:
+        """Like ``read_ticks`` for arrow/parquet output, as ``TICK_V1`` batches."""
         ...
 
     async def latest(self, instrument_ids: Sequence[str]) -> list[LatestBar]:

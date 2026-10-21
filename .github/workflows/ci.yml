@@ -192,12 +192,13 @@ jobs:
           set -euo pipefail
           cp "$RUNNER_TEMP/generated-openapi.json" generated-openapi.json
           paths="$(python3 -c 'import json,re;print("^(" + "|".join(re.escape(p) for p in json.load(open("generated-openapi.json"))["paths"]) + ")$")')"
+          if [ "$paths" = "^()$" ]; then echo "generated spec has no paths" >&2; exit 1; fi
           echo "comparing paths: $paths"
           rc=0
           for pair in "docs/contracts/openapi.yaml generated-openapi.json" "generated-openapi.json docs/contracts/openapi.yaml"; do
-            set -- $pair
-            echo "::group::oasdiff breaking $1 -> $2"
-            docker run --rm -v "$PWD:/w" -w /w "$OASDIFF_IMAGE" breaking "$1" "$2" --match-path "$paths" --fail-on WARN || rc=1
+            read -r base revision <<< "$pair"
+            echo "::group::oasdiff breaking $base -> $revision"
+            docker run --rm -v "$PWD:/w" -w /w "$OASDIFF_IMAGE" breaking "$base" "$revision" --match-path "$paths" --fail-on WARN || rc=1
             echo "::endgroup::"
           done
           exit "$rc"
