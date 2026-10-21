@@ -20,7 +20,8 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
-"tests/**" = ["S101", "PLR2004", "ANN", "ARG", "D1"]
+"src/tidal/common/timeutil.py" = ["TID251"]
+"tests/**" = ["S101", "PLR2004", "ANN", "ARG", "D1", "TID251"]
 "benchmarks/**" = ["S101", "PLR2004", "T20", "D1"]
 
 [lint.pydocstyle]
@@ -28,6 +29,15 @@ convention = "google"
 
 [lint.flake8-tidy-imports]
 ban-relative-imports = "all"
+
+# Only tidal.common.timeutil.SystemClock may read wall time (config-contract: injected clock).
+[lint.flake8-tidy-imports.banned-api]
+"datetime.datetime.now".msg = "use tidal.common.timeutil.Clock"
+"datetime.datetime.utcnow".msg = "use tidal.common.timeutil.Clock"
+"datetime.datetime.today".msg = "use tidal.common.timeutil.Clock"
+"datetime.date.today".msg = "use tidal.common.timeutil.Clock"
+"time.time".msg = "use tidal.common.timeutil.Clock"
+"time.time_ns".msg = "use tidal.common.timeutil.Clock"
 
 [lint.isort]
 known-first-party = ["tidal"]

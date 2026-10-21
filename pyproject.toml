@@ -9,7 +9,7 @@ authors = [{ name = "Müge Güçlü" }]
 # Baseline set fixed by ADR-0007. Lanes never edit this file (PARALLELISM §1.7).
 dependencies = [
     # data
-    "polars>=1.20",
+    "polars>=2.0",
     "pyarrow>=18",
     "duckdb>=1.1",
     "numpy>=2.1",

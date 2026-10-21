@@ -13,3 +13,4 @@ New ADRs use [0000-template.md](0000-template.md). Breaking contract changes nee
 | [0006](0006-terraform-network.md) | Terraform over Bicep; no Service Bus private endpoint (Premium cost) | Accepted |
 | [0007](0007-baseline-dependencies.md) | Baseline dependency set (declared up-front in T-001) | Accepted |
 | 0008 | Threat model (STRIDE) | written in T-406 |
+| [0009](0009-daily-bar-timestamp.md) | Daily bars stamped at UTC midnight of the trade date | Accepted |
