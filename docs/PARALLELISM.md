@@ -68,7 +68,8 @@ another task until the dependency merges; never imports from an unmerged branch.
 2. For each lane: spawn the lane's agent in its own worktree with the "task brief" (§5)
 3. When an agent reports done: spawn code-reviewer (+ security-reviewer if infra/auth/secrets)
 4. Fix loop: send blocking findings back to the same agent (SendMessage), max 2 rounds, then escalate
-5. Human (Müge) opens PR from the branch, reads review, merges in the §3 order
+5. Orchestrator pushes the branch, opens the PR, and squash-merges it in the §3 order once CI is green and
+   reviews have no open `blocking:` findings (owner decision 2026-10-21: merging is not a human step)
 6. Update TASKS.md status; at end of wave run /gate <n>
 ```
 
