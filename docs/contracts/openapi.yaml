@@ -66,6 +66,7 @@ paths:
       summary: Readiness probe (SQL, Blob, Service Bus reachability)
       security: []
       x-tidal-min-role: none
+      description: Public body is only the status; dependency details (SQL, Blob, Service Bus) are logged, never returned.
       responses:
         "200":
           description: All dependencies reachable.
@@ -74,21 +75,28 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [status, checks]
+                required: [status]
+                additionalProperties: false
                 properties:
-                  status: { type: string, enum: [ok] }
-                  checks:
-                    type: object
-                    description: Per-dependency result, keys sql, blob, service_bus.
-                    additionalProperties: { type: string, enum: [ok] }
+                  status: { type: string, enum: [ready] }
         "429": { $ref: "#/components/responses/TooManyRequests" }
-        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+        "503":
+          description: Not ready.
+          headers: { X-Correlation-Id: { $ref: "#/components/headers/X-Correlation-Id" } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                additionalProperties: false
+                properties:
+                  status: { type: string, enum: [not_ready] }
   /v1/instruments:
     get:
       tags: [reference]
       operationId: listInstruments
       summary: List instruments
-      x-tidal-min-role: Reader
+      x-tidal-min-role: Tidal.Reader
       parameters:
         - name: asset_class
           in: query
@@ -112,7 +120,7 @@ paths:
       tags: [reference]
       operationId: getInstrument
       summary: Get one instrument
-      x-tidal-min-role: Reader
+      x-tidal-min-role: Tidal.Reader
       parameters:
         - name: id
           in: path
@@ -139,7 +147,7 @@ paths:
         `fill=ffill` forward-fills gaps in the API layer only (storage never forward-fills).
         `as_of` returns the data as known at that time (restatement-aware, data-contracts section 7).
         `cursor` and `limit` apply to `format=json` only; arrow and parquet stream the whole range.
-      x-tidal-min-role: Reader
+      x-tidal-min-role: Tidal.Reader
       parameters:
         - $ref: "#/components/parameters/InstrumentIdQuery"
         - name: interval
@@ -180,7 +188,7 @@ paths:
       tags: [market-data]
       operationId: getTicks
       summary: Ticks for one instrument (max 31 days per call)
-      x-tidal-min-role: Trader
+      x-tidal-min-role: Tidal.Trader
       parameters:
         - $ref: "#/components/parameters/InstrumentIdQuery"
         - $ref: "#/components/parameters/Start"
@@ -210,7 +218,7 @@ paths:
       tags: [market-data]
       operationId: getLatest
       summary: Last bar per instrument (hot store only)
-      x-tidal-min-role: Reader
+      x-tidal-min-role: Tidal.Reader
       x-tidal-open-question: >
         api-contract.md gives no parameters for /latest. Minimal reading: repeatable
         `instrument_id` (required, 1..100) plus optional `interval` (default 1d). The response
@@ -252,7 +260,7 @@ paths:
       operationId: getSpreads
       summary: Spread series leg_a minus leg_b
       description: Timestamps present in both legs only (inner join); no forward-fill.
-      x-tidal-min-role: Trader
+      x-tidal-min-role: Tidal.Trader
       x-tidal-open-question: >
         api-contract.md does not define the join semantics, a `format` parameter, or pagination
         for /spreads. Minimal reading: inner join on ts_ns, JSON only, no pagination; the bars
@@ -297,7 +305,7 @@ paths:
         job and enqueues children. `calendar_spread` requires exactly 2 instrument_ids
         (leg_a, leg_b) and params `lookback`, `z_entry`, `z_exit`; other strategies take exactly 1.
         A sweep that expands to more than 200 children returns 413.
-      x-tidal-min-role: Quant
+      x-tidal-min-role: Tidal.Quant
       requestBody:
         required: true
         content:
@@ -319,7 +327,7 @@ paths:
       tags: [backtests]
       operationId: listBacktests
       summary: List the own backtest jobs of the caller
-      x-tidal-min-role: Quant
+      x-tidal-min-role: Tidal.Quant
       x-tidal-open-question: >
         api-contract.md gives no parameters for the list. Minimal reading: cursor/limit
         pagination, newest first, optional status filter.
@@ -346,7 +354,7 @@ paths:
       operationId: getBacktest
       summary: Backtest status, with the result when done
       description: Jobs owned by another principal are reported as 404.
-      x-tidal-min-role: Quant
+      x-tidal-min-role: Tidal.Quant
       parameters:
         - name: job_id
           in: path
@@ -369,7 +377,7 @@ paths:
       tags: [admin]
       operationId: runTiering
       summary: Trigger the hot-to-cold migration job (enqueues)
-      x-tidal-min-role: Admin
+      x-tidal-min-role: Tidal.Admin
       x-tidal-open-question: >
         api-contract.md defines no request body or response shape. Minimal reading: no body,
         202 with `run_id` and `status=queued`.
@@ -388,7 +396,7 @@ paths:
       tags: [admin]
       operationId: getStorageStats
       summary: Rows and bytes per tier, from the last stats run
-      x-tidal-min-role: Admin
+      x-tidal-min-role: Tidal.Admin
       x-tidal-open-question: >
         api-contract.md defines no response shape. Minimal reading: rows and bytes for hot and
         cold plus the timestamp of the stats run.
@@ -424,7 +432,8 @@ components:
       schema: { type: string, enum: [hot, cold, mixed] }
     Retry-After:
       description: Seconds to wait before retrying.
-      schema: { type: integer, minimum: 0 }
+      required: true
+      schema: { type: integer, minimum: 1 }
   parameters:
     InstrumentIdQuery:
       name: instrument_id
@@ -450,8 +459,10 @@ components:
     Cursor:
       name: cursor
       in: query
-      description: Opaque cursor from `next_cursor`; format=json only.
-      schema: { type: string }
+      description: >
+        Opaque cursor from `next_cursor`; format=json only. HMAC-signed by the server and bound
+        to the principal and the query; a tampered cursor returns 400.
+      schema: { type: string, maxLength: 512 }
     Limit:
       name: limit
       in: query
@@ -498,6 +509,7 @@ components:
   schemas:
     InstrumentId:
       type: string
+      maxLength: 64
       pattern: "^[A-Z0-9]+\\.[A-Z0-9_]+\\.[A-Z0-9_]+$"
       examples: [EIA.BRENT.SPOT]
     JobId:
@@ -505,6 +517,7 @@ components:
       pattern: "^bt_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
     TimeParam:
       type: string
+      maxLength: 35
       description: ISO-8601 UTC timestamp ending in Z, or epoch nanoseconds as a decimal integer string.
       pattern: "^([0-9]{1,19}|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z)$"
       examples: ["2020-04-20T00:00:00Z", "1587340800000000000"]
@@ -522,11 +535,12 @@ components:
       type: object
       description: RFC 7807 problem details.
       required: [type, title, status, correlation_id]
+      additionalProperties: false
       properties:
         type: { type: string, format: uri }
         title: { type: string }
         status: { type: integer }
-        detail: { type: string }
+        detail: { type: string, description: "Human-readable; never contains exception text, SQL or stack traces." }
         correlation_id: { type: string }
     Instrument:
       type: object
@@ -657,11 +671,12 @@ components:
         sweep:
           type: object
           minProperties: 1
+          maxProperties: 3
           description: >
             Optional parameter sweep. Keys must be param names of the chosen strategy (enforced at
             runtime). The cartesian product of the value arrays fans out to child jobs; a product
             above 200 returns 413.
-          additionalProperties: { type: array, minItems: 1, items: { type: number } }
+          additionalProperties: { type: array, minItems: 1, maxItems: 200, items: { type: number } }
     MaCrossoverRequest:
       allOf:
         - $ref: "#/components/schemas/BacktestRequestBase"
