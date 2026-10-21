@@ -1,0 +1,19 @@
+# Keep the build context small and free of local state / secrets.
+.git
+.github
+.venv
+.data
+.env
+.env.*
+!.env.example
+**/__pycache__
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.benchmarks
+htmlcov
+infra
+docs
+tests
+benchmarks
+node_modules

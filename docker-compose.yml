@@ -1,0 +1,112 @@
+# Tidal local stack (T-112). See deploy/local/README.md.
+#
+#   docker compose up -d                   # infra only: azurite, sqlserver, servicebus
+#   docker compose --profile app up -d     # infra + api (build target: dev stage)
+#
+# `api` sits behind the `app` profile because the tidal-api entrypoint (T-110) does not exist yet;
+# once T-110 lands, drop the profile line so a plain `docker compose up` starts it too.
+# Requires a .env (cp .env.example .env) with a strong TIDAL_SQL__PASSWORD.
+
+name: tidal
+
+services:
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.37.0
+    command: >-
+      azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0
+      --location /data --skipApiVersionCheck
+    ports:
+      - "127.0.0.1:10000:10000" # blob
+      - "127.0.0.1:10001:10001" # queue
+      - "127.0.0.1:10002:10002" # table
+    volumes:
+      - ./.data/azurite:/data
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 10000 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  sqlserver:
+    # 2022-latest is what LOCAL-DEV names; pinned to a CU tag for reproducibility.
+    image: mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${TIDAL_SQL__PASSWORD:?set TIDAL_SQL__PASSWORD in .env (see .env.example)}
+    ports:
+      - "127.0.0.1:1433:1433"
+    volumes:
+      - sqldata:/var/opt/mssql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -Q "SELECT 1" -b -o /dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  servicebus:
+    image: mcr.microsoft.com/azure-messaging/servicebus-emulator:2.0.1
+    # Shares the sqlserver container above (SQL_SERVER) instead of a second SQL instance.
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      ACCEPT_EULA: "Y"
+      SQL_SERVER: sqlserver
+      MSSQL_SA_PASSWORD: ${TIDAL_SQL__PASSWORD:?set TIDAL_SQL__PASSWORD in .env (see .env.example)}
+      EMULATOR_HTTP_PORT: "5300"
+    ports:
+      - "127.0.0.1:5672:5672" # AMQP
+      - "127.0.0.1:5300:5300" # management / health
+    volumes:
+      - ./deploy/local/sb-config.json:/ServiceBus_Emulator/ConfigFiles/Config.json:ro
+    restart: unless-stopped
+
+  api:
+    profiles: [app] # remove once T-110 (tidal-api) lands
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile
+      target: dev
+    image: tidal-dev:local
+    command: ["tidal-api"]
+    env_file: .env
+    environment:
+      # In-network endpoints override the host-side (127.0.0.1) values from .env.
+      TIDAL_SERVICE_NAME: api
+      TIDAL_STORAGE__ACCOUNT_URL: http://azurite:10000/devstoreaccount1
+      TIDAL_STORAGE__CONNECTION_STRING: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1; # gitleaks:allow
+      TIDAL_SQL__SERVER: sqlserver
+      TIDAL_SERVICEBUS__FQDN: servicebus
+      TIDAL_SERVICEBUS__CONNECTION_STRING: Endpoint=sb://servicebus;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      azurite:
+        condition: service_healthy
+      sqlserver:
+        condition: service_healthy
+      servicebus:
+        condition: service_started # emulator image has no verified in-container health probe
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/v1/health/live', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+
+volumes:
+  sqldata:
