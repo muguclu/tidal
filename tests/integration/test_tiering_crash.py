@@ -14,9 +14,12 @@ Real SQL Server (applocks, DELETE) and a throwaway Azurite (create-only blobs, i
 ``ingested_at_ns``, ``quality`` and the value columns, and the same watermarks. File layout is not
 compared. Environment: ``TIDAL_TEST_SQL_PASSWORD`` or ``TIDAL_SQL__PASSWORD`` (+ optional
 ``TIDAL_TEST_SQL_URL``, default ``127.0.0.1,1433``) selects a running SQL Server; without a password
-the tests skip unless ``TIDAL_TEST_SQL_CONTAINER=1`` starts a throwaway SQL Server container.
-``TIDAL_TEST_CRASH_EXAMPLES`` sets the hypothesis examples of the crash property (default 4, CI 20);
-``TIDAL_TEST_CRASH_FULL=1`` widens the kill matrix to several occurrences of every step.
+the tests skip unless ``TIDAL_TEST_SQL_CONTAINER=1`` starts a throwaway SQL Server container;
+with ``CI`` or ``TIDAL_TEST_REQUIRE_SQL=1`` a missing driver or password fails.
+``TIDAL_TEST_AZURITE_CS``
+selects an existing Azurite (emptied by the tests) instead of a throwaway container.
+``TIDAL_TEST_CRASH_EXAMPLES`` sets the crash property examples (default 4 for PRs, 40 nightly);
+``TIDAL_TEST_CRASH_FULL=1`` (nightly) widens the kill matrix to several occurrences of every step.
 """
 
 # ruff: noqa: PLR0917, S603
@@ -96,13 +99,25 @@ SETTINGS = _settings()
 
 
 # -- infrastructure ------------------------------------------------------------------------------
+def _require() -> bool:
+    """CI (and ``TIDAL_TEST_REQUIRE_SQL=1``) must run these tests: a missing piece is a failure."""
+    return bool(os.environ.get("CI")) or os.environ.get("TIDAL_TEST_REQUIRE_SQL") == "1"
+
+
+def _unavailable(reason: str) -> None:
+    """Skip locally, fail where the suite is required to run."""
+    if _require():
+        pytest.fail(reason, pytrace=False)
+    pytest.skip(reason)
+
+
 def _odbc(server: str, password: str, database: str) -> str:
     drivers = sorted(
         (d for d in pyodbc.drivers() if re.fullmatch(r"ODBC Driver \d+ for SQL Server", d)),
         key=lambda d: int(d.split()[2]),
     )
     if not drivers:
-        pytest.skip("no 'ODBC Driver N for SQL Server' installed")
+        _unavailable("no 'ODBC Driver N for SQL Server' installed")
     return (
         f"DRIVER={{{drivers[-1]}}};SERVER={server};DATABASE={database};UID=sa;"
         f"PWD={{{password}}};TrustServerCertificate=yes"
@@ -135,7 +150,7 @@ def server() -> Iterator[tuple[str, str]]:
         yield os.environ.get("TIDAL_TEST_SQL_URL", "127.0.0.1,1433"), password
         return
     if os.environ.get("TIDAL_TEST_SQL_CONTAINER") != "1":
-        pytest.skip(
+        _unavailable(
             "no SQL Server: set TIDAL_TEST_SQL_PASSWORD (or TIDAL_SQL__PASSWORD) for the "
             "compose server, or TIDAL_TEST_SQL_CONTAINER=1 for a throwaway container"
         )
@@ -178,7 +193,18 @@ def database(server: tuple[str, str]) -> Iterator[tuple[Engine, str]]:
 
 @pytest.fixture(scope="module")
 def azurite() -> Iterator[tuple[str, str]]:
-    """``(connection string, account url)`` of a throwaway Azurite (never the compose one)."""
+    """``(connection string, account url)`` of Azurite.
+
+    ``TIDAL_TEST_AZURITE_CS`` (the CI service container) is used as given and emptied by the
+    tests; otherwise a throwaway container is started (never the compose one: real data).
+    """
+    given = os.environ.get("TIDAL_TEST_AZURITE_CS")
+    if given:
+        endpoint = re.search(r"BlobEndpoint=([^;]+)", given)
+        if endpoint is None:
+            pytest.fail("TIDAL_TEST_AZURITE_CS has no BlobEndpoint=...", pytrace=False)
+        yield given, endpoint.group(1)
+        return
     with (
         DockerContainer("mcr.microsoft.com/azure-storage/azurite:3.37.0")
         .with_exposed_ports(10000)
@@ -200,6 +226,28 @@ Snapshot = tuple[list[Row], list[Row], int | None, int | None]  # sql, cold, bar
 
 def _norm(value: float | None) -> float | None:
     return None if value is None or math.isnan(value) else float(value)  # NULL and NaN are one
+
+
+def finish(proc: subprocess.Popen[str], timeout: float = 600) -> tuple[str, str]:
+    """``communicate`` with a deadline; a hung child is killed and reaped before the test fails."""
+    try:
+        return proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        _, err = proc.communicate()
+        pytest.fail(f"worker still running after {timeout:.0f}s; killed\n{err[-2000:]}")
+
+
+def _row(dataset: str, iid: str, interval: str | None, r: dict[str, Any], ticks: bool) -> Row:
+    """Whole row: key, version, quality, ingest time, identity and every value column."""
+    names = (
+        ("price", "size") if ticks else ("open", "high", "low", "close", "volume", "trade_count")
+    )
+    values = tuple(r[n] if n == "trade_count" else _norm(r[n]) for n in names)
+    return (
+        dataset, r["ts_ns"], r["side"] if ticks else 0, r["version"], r["quality"],
+        r["ingested_at_ns"], iid, interval, values,
+    )  # fmt: skip
 
 
 class World:
@@ -295,7 +343,7 @@ class World:
         """Run the worker until it dies at ``fault``; assert it was really killed there."""
         mark = tmp / f"mark-{uuid.uuid4().hex}"
         proc = self.spawn(params, replace(fault, mode="kill"), mark=mark)
-        out, err = proc.communicate(timeout=600)
+        out, err = finish(proc)
         assert mark.exists(), f"fault point {fault} was never reached\n{out}\n{err[-2000:]}"
         assert mark.read_text(encoding="ascii") == fault.point
         assert proc.returncode == KILLED_CODE, f"not killed ({proc.returncode})\n{err[-2000:]}"
@@ -305,7 +353,7 @@ class World:
 
         def attempt() -> dict[str, Any] | None:
             proc = self.spawn(params)
-            out, err = proc.communicate(timeout=600)
+            out, err = finish(proc)
             assert proc.returncode == 0, f"worker failed\n{out}\n{err[-3000:]}"
             result: dict[str, Any] = json.loads(out.strip().splitlines()[-1])
             return None if result["locked"] else result
@@ -326,20 +374,11 @@ class World:
         """What "same final state" compares (SPEC-03 §6)."""
         sql: list[Row] = []
         for table in (sr.bar_hot, sr.tick_hot):
+            ticks = table is sr.tick_hot
             for r in qs.raw_rows(self.repo, table).iter_rows(named=True):
-                ticks = table is sr.tick_hot
-                ds = "ticks" if ticks else f"bars_{_BY_CODE[r['interval_code']].value}"
+                interval = None if ticks else _BY_CODE[r["interval_code"]].value
                 sql.append(
-                    (
-                        ds,
-                        r["ts_ns"],
-                        r["side"] if ticks else 0,
-                        r["version"],
-                        r["price" if ticks else "close"],
-                        _norm(None if ticks else r["volume"]),
-                        r["ingested_at_ns"],
-                        r["quality"],
-                    )
+                    _row("ticks" if ticks else f"bars_{interval}", qs.WTI, interval, r, ticks)
                 )
         cold: list[Row] = []
         for dataset in layout.DATASETS:
@@ -349,18 +388,8 @@ class World:
                 df = pl.from_arrow(pq.read_table(io.BytesIO(self.store.read(path))))
                 assert isinstance(df, pl.DataFrame)
                 for r in df.iter_rows(named=True):
-                    ticks = dataset == "ticks"
                     cold.append(
-                        (
-                            dataset,
-                            r["ts_ns"],
-                            r.get("side", 0),
-                            r["version"],
-                            r["price" if ticks else "close"],
-                            _norm(None if ticks else r["volume"]),
-                            r["ingested_at_ns"],
-                            r["quality"],
-                        )
+                        _row(dataset, r["instrument_id"], r.get("interval"), r, dataset == "ticks")
                     )
         return (
             sorted(sql, key=repr),
@@ -475,10 +504,11 @@ class HotRow:
         """Bar row; volume is NULL on every fifth timestamp (data-contracts §3.1)."""
         return {
             "instrument_key": key, "interval_code": INTERVAL_CODES[Interval(self.dataset[5:])],
-            "ts_ns": self.ts, "open": self.value, "high": self.value, "low": self.value,
-            "close": self.value,
+            "ts_ns": self.ts, "open": self.value - 0.25, "high": self.value + 0.5,
+            "low": self.value - 0.5, "close": self.value,
             "volume": None if self.ts // HOUR % 5 == 0 else 1000.0 + self.value,
-            "trade_count": None, "quality": self.quality, "ingested_at_ns": self.ingested,
+            "trade_count": None if self.ts // HOUR % 3 == 0 else int(abs(self.value)) + 1,
+            "quality": self.quality, "ingested_at_ns": self.ingested,
             "version": self.version,
         }  # fmt: skip
 
@@ -663,6 +693,7 @@ MIGRATE_KILLS: Final = [
     ("before_write", 3), ("after_part_put", 2), ("after_write", 2), ("before_tag", 2),
     ("before_manifest", 2), ("manifest_after_delete", 2), ("before_delete", 3),
     ("between_delete_chunks", 3), ("before_watermark", 1), ("after_watermark", 1),
+    ("after_watermark", 2),
     *([("before_write", 1), ("after_part_put", 1), ("after_part_put", 5), ("after_write", 1),
        ("before_tag", 1), ("before_manifest", 1), ("manifest_after_delete", 1),
        ("before_delete", 1), ("before_delete", 6), ("between_delete_chunks", 1),
@@ -690,7 +721,8 @@ def test_kill_migration_then_rerun_equals_uninterrupted_run(
     world.restore(reference.prepared)
     params = migrate_params(FIXED, NOW_B)
     world.kill_run(params, Fault(point, nth), tmp_path)
-    if point != "after_watermark":  # that kill comes after the last state change
+    if (point, nth) != ("after_watermark", 2):  # nothing left to do after that one
+        # after_watermark#1 leaves tick_hot (rows and watermark) pending
         assert world.snapshot() != reference.after_migration, "the kill left no trace"
     world.clean_run(params)
     assert_same(world.snapshot(), reference.after_migration, f"kill at {point}#{nth}")
@@ -750,7 +782,7 @@ def test_killed_session_releases_the_applock(
         _poll("the worker to reach its fault point", reached, 300)
         assert not world.applock_free(resource), "the running job must hold the applock"
         again = world.spawn(params)  # a second run must find the lock taken
-        out, err = again.communicate(timeout=600)
+        out, err = finish(again)
         assert again.returncode == 0, err[-2000:]
         assert json.loads(out.strip().splitlines()[-1])["locked"] is True
     finally:
@@ -788,7 +820,7 @@ _cfaults = st.lists(
     deadline=None,
     derandomize=bool(os.environ.get("CI")),  # CI: fixed seed; locally explore, blob printed
     print_blob=True,
-    suppress_health_check=list(HealthCheck),
+    suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
 )
 @given(sc=scenarios(), mig=_faults, cmp=_cfaults)
 def test_property_crash_then_rerun_equals_uninterrupted_run(
@@ -879,7 +911,7 @@ _READER_SETTINGS = settings(
     deadline=None,
     derandomize=bool(os.environ.get("CI")),
     print_blob=True,
-    suppress_health_check=list(HealthCheck),
+    suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
 )
 
 
@@ -892,9 +924,11 @@ def _property_over_queries(reader: UnifiedReader, base: UnifiedReader) -> None:
     check()
 
 
-def _readers(world: World, baseline: sr.SqlRepository) -> tuple[UnifiedReader, UnifiedReader]:
-    empty = Path(os.environ.get("TEMP", ".")) / f"tidal-empty-{uuid.uuid4().hex[:8]}"
-    empty.mkdir(parents=True, exist_ok=True)
+def _readers(
+    world: World, baseline: sr.SqlRepository, tmp: Path
+) -> tuple[UnifiedReader, UnifiedReader]:
+    empty = tmp / "empty-cold"
+    empty.mkdir()
     base = UnifiedReader(baseline, duck.local_session(empty), FixedClock(NOW), SETTINGS)
     session = duck.azure_session(
         account_url=world.url, managed_identity=False, connection_string=world.cs
@@ -902,15 +936,15 @@ def _readers(world: World, baseline: sr.SqlRepository) -> tuple[UnifiedReader, U
     return UnifiedReader(world.repo, session, FixedClock(NOW), SETTINGS), base
 
 
-def test_reader_equals_sql_baseline_before_migration(world: World) -> None:
+def test_reader_equals_sql_baseline_before_migration(world: World, tmp_path: Path) -> None:
     baseline = build_small_baseline()
     qs.copy_rows(baseline, world.engine)
     _add_restatements(baseline, world.engine, 7, 0)
-    reader, base = _readers(world, baseline)
+    reader, base = _readers(world, baseline, tmp_path)
     _property_over_queries(reader, base)
 
 
-def test_reader_equals_sql_baseline_after_migration(world: World) -> None:
+def test_reader_equals_sql_baseline_after_migration(world: World, tmp_path: Path) -> None:
     baseline = build_small_baseline()
     qs.copy_rows(baseline, world.engine)
     _add_restatements(baseline, world.engine, 7, 0)
@@ -920,7 +954,7 @@ def test_reader_equals_sql_baseline_after_migration(world: World) -> None:
     assert world.repo.get_watermark("md.bar_hot") == TARGET
     # late restatements of migrated keys, below the watermark, reach SQL only
     _add_restatements(baseline, world.engine, 5, 3)
-    reader, base = _readers(world, baseline)
+    reader, base = _readers(world, baseline, tmp_path)
     # the equality below is only meaningful if the old rows now live in Blob alone
     old_in_sql = [r for r in world.snapshot()[0] if r[1] < TARGET and r[3] == 1]
     assert not old_in_sql

@@ -88,7 +88,12 @@ _STORE_POINTS: Final = ("after_part_put", "manifest_after_delete")
 
 
 class Boom(BaseException):
-    """Raised at a fault point in ``raise`` mode (a dead process, not a ``TidalError``)."""
+    """Raised at a fault point in ``raise`` mode (a ``BaseException``, not a ``TidalError``).
+
+    This is not a crash: ``finally`` and ``except BaseException`` clauses run. An in-process fault
+    inside ``compact._write_merged`` therefore exercises its rollback path (the new parts are
+    deleted), not a dead process; the real-kill tests cover the crash itself.
+    """
 
 
 @dataclass(frozen=True, slots=True)
