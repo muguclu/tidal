@@ -9,10 +9,14 @@ Wire format (internal, not part of ``openapi.yaml``)
 - JSON reads (``bars``, ``ticks``, ``latest``, ``instruments``): the contract row models; the
   reader's tier travels in the body and in ``X-Tidal-Tier`` (SPEC-03 §5 watermark labelling is
   done by the reader; this layer only carries it).
-- Streams: ``X-Tidal-Tier`` header, then frames ``[u64 big-endian length][Arrow IPC stream with one
-  batch]`` and a final zero-length frame. A body that ends without the zero frame is a truncated
-  stream and raises ``DependencyUnavailable`` instead of looking complete. A frame is capped at
-  64 MiB (both sides); the client holds the partial buffer plus one copy of the frame, so memory
+- Streams: ``X-Tidal-Tier`` header (the up-front range label), then frames ``[u64 big-endian
+  length][u8 tier code][Arrow IPC stream with one batch]`` and a final zero-length frame (8 zero
+  bytes, no tier byte). The tier code is the tier observed so far (``observed_tier``); the client
+  exposes the latest one through ``ObservedRowStream`` so a JSON page can report ``mixed`` when a
+  late restatement turned up in a slice, even though the stream was closed early. A body that
+  ends without the zero frame is a truncated stream and raises ``DependencyUnavailable`` instead
+  of looking complete. A frame is capped at 64 MiB (both sides); the client holds the partial
+  buffer plus one copy of the frame, so memory
   is bounded by a few frames, never by the range.
 - Errors: RFC 7807 problem+json with the shared handlers; the client maps them back to typed
   errors. 401/403 from the query service are an API-to-query misconfiguration and surface to the
@@ -60,11 +64,12 @@ from tidal.contracts.instruments import AssetClass, Instrument, Source
 from tidal.contracts.models import Bar, LatestBar, Tick, Tier
 from tidal.contracts.schemas import Interval
 from tidal.query.limits import check_bars_range, check_ticks_range
-from tidal.query.protocols import Reader, Rows, RowStream
+from tidal.query.protocols import ObservedRowStream, Reader, Rows, RowStream, observed_tier
 
 FRAMES_MEDIA_TYPE: Final = "application/vnd.tidal.batches"
 _PREFIX: Final = "/internal/v1"
 _LEN: Final = struct.Struct(">Q")
+_TIERS: Final = tuple(Tier)  # wire tier codes are indexes into this
 _MAX_FRAME: Final = 64 << 20  # 64 MiB: bound on one frame, checked by server and client
 _TIMEOUT: Final = httpx.Timeout(60.0, connect=5.0)
 
@@ -183,7 +188,8 @@ async def _frames(stream: RowStream) -> AsyncIterator[bytes]:
             data = sink.getvalue().to_pybytes()
             if len(data) > _MAX_FRAME:
                 raise DependencyUnavailable("A result batch exceeds the stream frame limit.")
-            yield _LEN.pack(len(data)) + data
+            code = _TIERS.index(observed_tier(stream))
+            yield _LEN.pack(len(data)) + bytes([code]) + data
     yield _LEN.pack(0)
 
 
@@ -403,10 +409,11 @@ class RemoteReader:
         except (KeyError, ValueError):
             await resp.aclose()
             raise DependencyUnavailable("The query service sent no valid tier.") from None
-        return RowStream(tier, self._decode(resp))
+        latest = [tier]
+        return ObservedRowStream(tier, self._decode(resp, latest), lambda: latest[0])
 
     @staticmethod
-    async def _decode(resp: httpx.Response) -> AsyncIterator[pa.RecordBatch]:
+    async def _decode(resp: httpx.Response, latest: list[Tier]) -> AsyncIterator[pa.RecordBatch]:
         buf = bytearray()
         done = False
         try:
@@ -419,12 +426,16 @@ class RemoteReader:
                         break
                     if n > _MAX_FRAME:
                         raise DependencyUnavailable("The query service sent a corrupt stream.")
-                    if len(buf) < _LEN.size + n:
+                    head = _LEN.size + 1  # length + tier code
+                    if len(buf) < head + n:
                         break
+                    if buf[_LEN.size] >= len(_TIERS):
+                        raise DependencyUnavailable("The query service sent a corrupt stream.")
+                    latest[0] = _TIERS[buf[_LEN.size]]
                     # One copy on purpose: Arrow may alias the buffer, which must stay immutable
                     # while the bytearray is compacted below.
-                    frame = bytes(buf[_LEN.size : _LEN.size + n])
-                    del buf[: _LEN.size + n]
+                    frame = bytes(buf[head : head + n])
+                    del buf[: head + n]
                     with pa.ipc.open_stream(frame) as rdr:
                         for batch in rdr:
                             yield batch
