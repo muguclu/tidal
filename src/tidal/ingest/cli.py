@@ -20,6 +20,7 @@ NEEDS-KEY (gate G1, not yet run): the 20+ year real-data backfills need
 
 import json
 import logging
+import multiprocessing
 import os
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
@@ -474,7 +475,10 @@ def run_synth(
         results = (synth_group(router, g, seed, scale) for g in groups)
     else:
         cid = get_correlation_id()
-        pool = ProcessPoolExecutor(max_workers=workers)
+        # Spawn everywhere: fork after polars/pyarrow threads start can deadlock (Linux CI).
+        pool = ProcessPoolExecutor(
+            max_workers=workers, mp_context=multiprocessing.get_context("spawn")
+        )
         futures = [
             pool.submit(
                 _worker,
