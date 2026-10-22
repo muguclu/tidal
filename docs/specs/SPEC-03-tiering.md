@@ -49,10 +49,13 @@ a deliberate trade-off (ADR-0004). Early-deletion penalties (Cool 30 d, Cold 90 
 modelled in the cost model.
 
 ## 5. Unified reader (`query/reader.py`)
-- `read_bars(instrument, interval, start, end, as_of=None)` splits the range at the watermark:
-  cold part via duckdb `read_parquet('az://marketdata/v1/...', hive_partitioning=1)` with filter pushdown,
-  hot part via SQL; concatenates with polars; resolves versions per data-contracts §7 (latest, or
-  max version with `ingested_at_ns ≤ as_of`).
+- `read_bars(instrument, interval, start, end, as_of=None)` reads **SQL first, then Parquet, both over the
+  whole range** — cold via duckdb `read_parquet('az://marketdata/v1/...', hive_partitioning=1)` with
+  filter pushdown — concatenates with polars and resolves versions per data-contracts §7 (latest, or max
+  version with `ingested_at_ns ≤ as_of`), which de-duplicates rows present in both tiers. Reading SQL first
+  and both tiers in full is what keeps reads correct mid-migration (Parquet is written before the SQL delete,
+  the watermark advances last) and picks up late restatements written to SQL below the watermark (T-208).
+  The watermark only decides the tier label.
 - Returns tier used (`hot|cold|mixed`) for the `X-Tidal-Tier` header.
 
 ## 6. Acceptance criteria
