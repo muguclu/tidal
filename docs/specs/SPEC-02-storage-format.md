@@ -12,7 +12,7 @@ encoding** is smaller, faster and cheaper than the alternatives. This benchmark 
 
 | ID | Format | Notes |
 |---|---|---|
-| F0 | Azure SQL rowstore `md.bar_baseline`: `DATETIME2` + `FLOAT`, no compression (data-contracts §6) | naive baseline; only time type and compression differ from F1, so the comparison isolates those two levers |
+| F0 | Azure SQL rowstore `md.bar_baseline`: `DATETIME2` + `FLOAT`, no compression (data-contracts §6) | naive baseline; only time type and compression differ from F1, so the comparison isolates those two levers. Deviation (T-202): tick-shaped table (the workloads are tick workloads), and a `ts_sub TINYINT` column (1 B/row) because `DATETIME2(7)` resolves only 100 ns while ticks carry ns; it keeps W4 exact and is reported separately (`size_correction_bytes()`) |
 | F1 | Azure SQL rowstore, `ts_ns BIGINT`, PAGE compression | tuned relational |
 | F2 | Azure SQL **clustered columnstore** | strongest relational option (fair comparison) |
 | F3 | CSV gzip on Blob | common "data lake" anti-pattern |
