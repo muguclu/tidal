@@ -293,3 +293,33 @@ def test_local_store_relative_root_and_guards(
         store.put_new("../escape.bin", src)
     store.delete("c/a/p.bin")
     assert not store.exists("c/a/p.bin")
+
+
+def test_local_store_list_walks_only_the_prefix_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = pw.LocalStore(tmp_path / "root")
+    src = tmp_path / "f.bin"
+    src.write_bytes(b"x")
+    paths = [
+        "c/bars/instrument=EIA.WTI.SPOT/year=2020/part-0.parquet",
+        "c/bars/instrument=EIA.WTI.SPOT/year=2021/part-0.parquet",
+        "c/bars/instrument=EIA.WTI.FUT1/year=2020/part-0.parquet",
+        "c/ticks/instrument=SYN.X/part-0.parquet",
+    ]
+    for p in paths:
+        store.put_new(p, src)
+    walked: list[Path] = []
+    real = Path.rglob
+
+    def spy(self: Path, pattern: str) -> object:
+        walked.append(self)
+        return real(self, pattern)
+
+    monkeypatch.setattr(Path, "rglob", spy)
+    assert list(store.list("c/bars/instrument=EIA.WTI.SP")) == paths[:2]
+    assert walked == [(tmp_path / "root" / "c" / "bars").resolve()]
+    assert list(store.list("c/bars/instrument=EIA.WTI.SPOT/year=2020/")) == paths[:1]
+    assert list(store.list("c/bars/instrument=EIA.WTI.FUT1/")) == paths[2:3]
+    assert list(store.list("c/missing/dir/x")) == []
+    assert list(store.list("c/../../x")) == []

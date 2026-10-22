@@ -145,7 +145,12 @@ class LocalStore:
     def list(self, prefix: str) -> Iterator[str]:
         """Yield files whose path starts with ``prefix`` (string prefix, like blob listing)."""
         container, _ = _split_prefix(prefix)
-        base = self._file(container)
+        # Walk only the deepest directory the prefix names: every match lives under it.
+        head = prefix.rpartition("/")[0] or container
+        try:
+            base = self._file(head)
+        except layout.InvalidPath:
+            return iter(())  # a prefix escaping the root matches nothing, like a blob listing
         if not base.is_dir():
             return iter(())
         found = (p.relative_to(self.root).as_posix() for p in base.rglob("*") if p.is_file())
