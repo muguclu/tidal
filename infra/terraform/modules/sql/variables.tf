@@ -31,13 +31,12 @@ variable "location" {
 }
 
 variable "server_name_suffix" {
-  description = "Optional suffix for the globally unique server name (sql-tidal-<env>-<suffix>). Set it if sql-tidal-<env> is already taken."
+  description = "Suffix that makes the server name globally unique (sql-tidal-<env>-<suffix>); supplied by the env composition."
   type        = string
-  default     = ""
 
   validation {
-    condition     = can(regex("^[a-z0-9]{0,12}$", var.server_name_suffix))
-    error_message = "server_name_suffix must be at most 12 lowercase letters or digits."
+    condition     = can(regex("^[a-z0-9]{3,8}$", var.server_name_suffix))
+    error_message = "server_name_suffix must be 3 to 8 lowercase letters or digits."
   }
 }
 
@@ -142,6 +141,12 @@ variable "max_size_gb" {
     condition     = var.max_size_gb >= 1 && var.max_size_gb <= 1024 && floor(var.max_size_gb) == var.max_size_gb
     error_message = "max_size_gb must be a whole number between 1 and 1024."
   }
+}
+
+variable "use_free_offer" {
+  description = "Apply the Azure SQL free offer (100,000 vCore-seconds and 32 GB per month, AutoPause at the limit) through azapi (ADR-0011). Dev-only cost lever; set false for prod or when the subscription already has 10 free databases."
+  type        = bool
+  default     = true
 }
 
 variable "tags" {

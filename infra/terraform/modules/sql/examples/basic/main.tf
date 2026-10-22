@@ -6,6 +6,10 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 4.0"
     }
+    azapi = {
+      source  = "Azure/azapi"
+      version = "~> 2.0"
+    }
   }
 }
 
@@ -14,6 +18,8 @@ variable "subscription_id" {
   type        = string
   default     = "00000000-0000-0000-0000-000000000000"
 }
+
+provider "azapi" {}
 
 provider "azurerm" {
   features {}
@@ -38,6 +44,7 @@ module "sql" {
   tenant_id             = "00000000-0000-0000-0000-000000000000"
   entra_admin_login     = "sg-tidal-sql-admins"
   entra_admin_object_id = "11111111-1111-1111-1111-111111111111"
+  server_name_suffix    = "example"
 }
 
 output "server_fqdn" {

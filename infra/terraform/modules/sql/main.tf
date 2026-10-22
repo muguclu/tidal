@@ -1,6 +1,6 @@
 locals {
   tags        = merge(var.tags, { component = var.component })
-  server_name = var.server_name_suffix == "" ? "sql-tidal-${var.env}" : "sql-tidal-${var.env}-${var.server_name_suffix}"
+  server_name = "sql-tidal-${var.env}-${var.server_name_suffix}"
 
   # Public endpoint follows the Phase 4 private networking flag (SPEC-06 section 4).
   public_network_access_enabled = !var.enable_private_networking
@@ -55,10 +55,6 @@ resource "azurerm_mssql_database" "tidal" {
   storage_account_type = "Local"
   geo_backup_enabled   = false
 
-  # Free offer (LOCAL-DEV section 2): azurerm 4.81.0 and 5.10.0 have no use_free_limit /
-  # free_limit_exhaustion_behavior argument (upstream PRs 32055 / 32277 still open), so it cannot be set here.
-  # See README "Free offer".
-
   tags = local.tags
 }
 
@@ -72,4 +68,26 @@ resource "azurerm_mssql_firewall_rule" "allow_azure_services" {
   server_id        = azurerm_mssql_server.this.id
   start_ip_address = "0.0.0.0"
   end_ip_address   = "0.0.0.0"
+}
+
+# Free offer (ADR-0011, LOCAL-DEV section 2): 100k vCore-s + 32 GB per month, AutoPause at the limit.
+# azurerm 4.81.0 has no native arguments (upstream PRs 32055 / 32277 open), so azapi sets the properties.
+# When azurerm ships use_free_limit / free_limit_exhaustion_behavior: set them on azurerm_mssql_database,
+# remove this resource and the azapi provider, and `terraform state rm` the azapi resource (no recreate).
+# API version 2025-01-01 (GA) carries useFreeLimit / freeLimitExhaustionBehavior in the azapi 2.13.0 embedded schema.
+# Caveat: the offer is normally chosen at creation. Whether the API accepts it as an update on the just-created
+# database is not verified (no Azure credentials in this task). If the first dev apply rejects it, replace
+# azurerm_mssql_database with an azapi_resource carrying the same properties plus the SKU settings.
+resource "azapi_update_resource" "free_offer" {
+  count = var.use_free_offer ? 1 : 0
+
+  type        = "Microsoft.Sql/servers/databases@2025-01-01"
+  resource_id = azurerm_mssql_database.tidal.id
+
+  body = {
+    properties = {
+      useFreeLimit                = true
+      freeLimitExhaustionBehavior = "AutoPause"
+    }
+  }
 }
