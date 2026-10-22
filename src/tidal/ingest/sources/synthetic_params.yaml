@@ -73,3 +73,74 @@ instruments:
   SYN.GASOIL.TICK:  {base_level: 550.0, daily_vol: [0.015, 0.028, 0.055], ticks_weight: 0.7, spread_bps: 4.0}
   SYN.RBOB.TICK:    {base_level: 1.8,   daily_vol: [0.018, 0.032, 0.060], ticks_weight: 0.8, spread_bps: 4.0, session_start_h: 0.0, session_end_h: 23.0}
   SYN.EURUSD.TICK:  {base_level: 1.15,  daily_vol: [0.0045, 0.008, 0.015], ticks_weight: 2.1, spread_bps: 0.6, jump_sd: 0.004, session_start_h: 0.0, session_end_h: 24.0}
+
+# -- Daily history (T-117, ADR-0013) -------------------------------------------------------------
+# `tidal synth daily-history` generates 1d bars for the daily catalogue (EIA.* / FRED.* ids, values
+# synthetic) directly, no ticks. EVERYTHING BELOW IS STYLISED, NOT CALIBRATED: anchor levels follow
+# the broad shape of 2000-2026 so charts look plausible; vols, carry and basis numbers are
+# judgemental. Do not quote any of it as market history. Paths are simulated once from 2000-01-01
+# to the 2060 horizon and sliced, so a series does not depend on the requested range.
+#
+# Model per spot: log(level_t) = log(anchor_t) + y_t, y an OU process (mean_reversion per business
+# day) driven by Student-t(5) shocks with daily vol `daily_vol` x stress multiplier. Brent/WTI
+# shocks are correlated (`corr_with`, `rho`). Futures Mn (n-th nearby):
+#   Fn = S * exp(n * c_t + basis_noise * sqrt(n) * e_n),
+#   c_t = carry_mean - carry_level_beta * y_t + seasonal + OU noise
+# so c_t > 0 is contango and c_t < 0 backwardation (high prices backwardate, low prices contango),
+# and calendar spreads (F2 - F1, ...) change sign over the history.
+# Episodes overwrite specific days after the simulation (deterministic negative print).
+daily_history:
+  stress_windows:           # daily-vol multipliers, stylised regimes
+    - {start: 2008-09-01, end: 2009-06-30, vol_mult: 2.5}
+    - {start: 2014-11-01, end: 2016-02-29, vol_mult: 1.6}
+    - {start: 2020-03-01, end: 2020-06-30, vol_mult: 3.0}
+    - {start: 2022-02-24, end: 2022-12-31, vol_mult: 1.8}
+  commodities:
+    BRENT:
+      spot: EIA.BRENT.SPOT
+      daily_vol: 0.019
+      mean_reversion: 0.004
+      anchors: [[2000-01-01, 25.0], [2005-01-01, 45.0], [2008-07-01, 125.0], [2009-02-01, 45.0], [2011-04-01, 115.0], [2014-06-01, 108.0], [2016-02-01, 34.0], [2018-10-01, 80.0], [2020-04-01, 28.0], [2022-06-01, 110.0], [2024-01-01, 80.0], [2026-01-01, 70.0], [2060-01-01, 70.0]]
+    WTI:
+      spot: EIA.WTI.SPOT
+      futures: EIA.WTI.FUT          # FUT1..FUT4
+      daily_vol: 0.020
+      mean_reversion: 0.004
+      corr_with: BRENT
+      rho: 0.9
+      carry_mean: 0.002
+      carry_level_beta: 0.05
+      carry_noise_vol: 0.0006
+      carry_reversion: 0.02
+      seasonal_amp: 0.0
+      basis_noise: 0.0012
+      fut_volume: 250000.0
+      anchors: [[2000-01-01, 27.0], [2005-01-01, 42.0], [2008-07-01, 122.0], [2009-02-01, 42.0], [2011-04-01, 105.0], [2014-06-01, 102.0], [2016-02-01, 31.0], [2018-10-01, 70.0], [2020-04-01, 24.0], [2022-06-01, 106.0], [2024-01-01, 76.0], [2026-01-01, 66.0], [2060-01-01, 66.0]]
+    HH:
+      spot: EIA.HH.SPOT
+      futures: EIA.HH.FUT
+      daily_vol: 0.032
+      mean_reversion: 0.006
+      carry_mean: 0.010
+      carry_level_beta: 0.08
+      carry_noise_vol: 0.0015
+      carry_reversion: 0.03
+      seasonal_amp: 0.020
+      basis_noise: 0.003
+      fut_volume: 120000.0
+      anchors: [[2000-01-01, 4.0], [2005-09-01, 9.0], [2008-07-01, 11.0], [2009-09-01, 3.2], [2012-04-01, 2.1], [2014-02-01, 5.0], [2016-03-01, 1.8], [2018-06-01, 3.0], [2020-06-01, 1.8], [2022-08-01, 8.0], [2023-06-01, 2.4], [2026-01-01, 3.5], [2060-01-01, 3.5]]
+  fx:
+    EURUSD:
+      instrument_id: FRED.EURUSD.FX
+      daily_vol: 0.0055
+      mean_reversion: 0.002
+      anchors: [[2000-01-01, 1.00], [2002-01-01, 0.89], [2008-07-01, 1.55], [2010-06-01, 1.21], [2014-05-01, 1.38], [2017-01-01, 1.06], [2018-02-01, 1.23], [2022-09-01, 0.99], [2025-01-01, 1.08], [2026-01-01, 1.15], [2060-01-01, 1.15]]
+  range_scale: 0.5           # intraday high/low extension, in units of daily vol x |close|
+  episodes:                  # deterministic overwrites, applied after simulation
+    - name: wti_negative_print
+      commodity: WTI
+      date: 2020-04-20
+      spot: -37.0            # absolute spot close
+      fut1: -37.6            # absolute FUT1 close; FUT2..4 untouched, so M2-M1 jumps (contango)
+      pre_factor: 0.55       # spot/FUT1 multiplier on the previous business day
+      post_factor: 0.60      # spot/FUT1 multiplier on the next business day

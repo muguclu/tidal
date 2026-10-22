@@ -44,7 +44,6 @@ tidal = "tidal.cli:app"                      # T-001 root; groups registered in 
 tidal-api = "tidal.api.app:run"              # T-110
 tidal-query = "tidal.query.service:run"      # T-209
 tidal-worker = "tidal.worker.main:run"       # T-303
-tidal-ingest = "tidal.ingest.cli:run_daily"  # T-105
 tidal-tiering = "tidal.storage.tiering_cli:run"  # T-205
 
 [dependency-groups]

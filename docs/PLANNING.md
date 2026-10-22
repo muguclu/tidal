@@ -83,7 +83,7 @@ Lane A data: synthetic generator, EIA/FRED sources, normaliser, epoch Parquet wr
 Lane B infra: Terraform modules (rg, storage, kv, acr, sql, servicebus, log analytics, budgets).
 Lane C api: FastAPI skeleton against contract with in-memory fake repository.
 **Gate G1**
-- [ ] 20+ years of real daily data ingested locally into Parquet + SQL Server container
+- [ ] 20+ years of synthetic daily history (2005→, 12 series, `tidal synth daily-history`; ADR-0013) ingested locally into Parquet + SQL Server container
 - [ ] Synthetic S-scale (≈ 50M rows) generated reproducibly from a seed
 - [ ] `terraform validate` + tflint + checkov clean for `envs/dev` (`NEEDS-CLOUD`: plan clean, applied once by a human, outputs recorded)
 - [ ] API returns contract-valid responses from fakes; `oasdiff breaking` reports nothing in either direction

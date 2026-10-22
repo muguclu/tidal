@@ -1,38 +1,27 @@
-"""``tidal ingest backfill|daily`` and ``tidal synth`` (SPEC-01 §3, T-105).
+"""``tidal synth`` and ``tidal synth daily-history`` (SPEC-01 §3, T-105, T-117).
 
-Pure functions (``backfill``, ``daily``, ``run_synth``) take a :class:`Context` with injected
-store, repository, clock and sources; the typer commands only build that context from settings.
-Storage is a ``LocalStore('./.data')`` when ``TIDAL_ENV=local`` and no storage connection string
-is set, otherwise Azurite / Azure Blob.
+All data is synthetic (ADR-0013). Pure functions (``run_synth``, ``run_daily_history``) take a
+:class:`Context` with injected store, repository and clock; the typer commands only build that
+context from settings. Storage is a ``LocalStore('./.data')`` when ``TIDAL_ENV=local`` and no
+storage connection string is set, otherwise Azurite / Azure Blob.
 
-Determinism: ``tidal synth`` output is byte-identical across runs only when ``TIDAL_CLOCK__NOW`` is
-set (``ingested_at_ns`` comes from the clock). Re-running into a store that already holds a group
-skips it (resume); ``--require-empty`` makes that an error instead.
-
-NEEDS-KEY (gate G1, not yet run): the 20+ year real-data backfills need
-``TIDAL_SOURCES__EIA_API_KEY`` and ``TIDAL_SOURCES__FRED_API_KEY``. Once the keys exist, run::
-
-    tidal ingest backfill --source eia
-    tidal ingest backfill --source fred
-
-``tidal ingest daily`` needs ``TIDAL_HOT_WINDOW_DAYS >= 10`` (its look-back).
+Determinism: output is byte-identical across runs only when ``TIDAL_CLOCK__NOW`` is set
+(``ingested_at_ns`` comes from the clock). Re-running ``tidal synth`` into a store that already
+holds a group skips it (resume); ``--require-empty`` makes that an error instead. Re-running
+``daily-history`` is idempotent (unchanged cold bars are skipped).
 """
 
-import json
-import logging
 import multiprocessing
 import os
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path
 from typing import Annotated, Final
 
-import httpx
-import numpy as np
 import pyarrow as pa
 import typer
 from sqlalchemy import Engine
@@ -46,46 +35,26 @@ from tidal.common.logging import (
     get_correlation_id,
     get_logger,
 )
-from tidal.common.timeutil import Clock, FixedClock, clock_from_settings, from_ts_ns
-from tidal.contracts.instruments import CATALOGUE_V1, InstrumentKind
+from tidal.common.timeutil import Clock, FixedClock, clock_from_settings
 from tidal.contracts.schemas import Interval
-from tidal.ingest.normalise import normalise_page
 from tidal.ingest.router import Routed, Router
 from tidal.ingest.sources import synthetic as syn
-from tidal.ingest.sources.base import Source, series_for
-from tidal.ingest.sources.eia import EiaSource, parse_eia_page
-from tidal.ingest.sources.fred import FredSource, parse_fred_page
+from tidal.ingest.sources import synthetic_daily as syd
 from tidal.storage import layout
 from tidal.storage import sql_repo as sr
 from tidal.storage.aggregate import BarAggregator
 from tidal.storage.parquet_writer import AzureBlobStore, LocalStore, ObjectStore
 
-DEFAULT_FROM: Final = date(1980, 1, 1)
-DAILY_LOOKBACK_DAYS: Final = 10
 LOCAL_ROOT: Final = Path("./.data")
 _SYNTH_INTERVALS: Final = (Interval.S1, Interval.M1, Interval.H1, Interval.D1)
 _log = get_logger(__name__)
 
-app = typer.Typer(
-    name="ingest",
-    help="Ingest EIA / FRED data. Real backfills need API keys (NEEDS-KEY): "
-    "`tidal ingest backfill --source eia` / `--source fred`.",
-    no_args_is_help=True,
-    pretty_exceptions_show_locals=False,
-)
 synth_app = typer.Typer(
     name="synth",
     help="Generate synthetic tick data. Byte-identical output requires TIDAL_CLOCK__NOW.",
     no_args_is_help=False,
     pretty_exceptions_show_locals=False,
 )
-
-
-class SourceName(StrEnum):
-    """Real data sources."""
-
-    EIA = "eia"
-    FRED = "fred"
 
 
 class Scale(StrEnum):
@@ -105,7 +74,6 @@ class Context:
     store: ObjectStore
     repo: sr.SqlRepository
     clock: Clock
-    sources: Mapping[str, Source] = field(default_factory=dict)
     engine_factory: Callable[[Settings], Engine] = sr.create_engine_from_settings  # worker SQL
 
     def router(self, *, dedupe_cold: bool) -> Router:
@@ -147,158 +115,6 @@ def build_context(settings: Settings | None = None) -> Context:
     clock = clock_from_settings(settings)
     repo = sr.SqlRepository(sr.create_engine_from_settings(settings), clock)
     return Context(settings, build_store(settings), repo, clock)
-
-
-def _http() -> httpx.Client:
-    return httpx.Client(timeout=30.0)
-
-
-def _real_sources(ctx: Context, names: Sequence[str]) -> dict[str, Source]:
-    """EIA / FRED clients (unless injected in ``ctx.sources``) with a seeded jitter stream."""
-    rng = np.random.Generator(np.random.PCG64(ctx.settings.synth.seed))
-    src = ctx.settings.sources
-    makers: dict[str, Callable[[], Source]] = {
-        "EIA": lambda: EiaSource(_http(), src.eia_api_key, ctx.store, rng, clock=ctx.clock),
-        "FRED": lambda: FredSource(_http(), src.fred_api_key, ctx.store, rng, clock=ctx.clock),
-    }
-    return {n: ctx.sources.get(n) or makers[n]() for n in names}
-
-
-# -- backfill / daily ----------------------------------------------------------------------------
-@dataclass(frozen=True, slots=True)
-class SeriesResult:
-    """Outcome of one instrument: rows fetched vs the source's ``total``, rows written."""
-
-    instrument_id: str
-    rows: int
-    total: int | None
-    nan_dropped: int
-    written: Routed
-
-    @property
-    def ok(self) -> bool:
-        """``False`` when the fetched row count disagrees with the source total."""
-        return self.total is None or self.rows == self.total
-
-
-def _source_total(source: str, payload: bytes) -> int | None:
-    try:
-        body = json.loads(payload)
-        return int(body["response"]["total"] if source == "EIA" else body["count"])
-    except (ValueError, KeyError, TypeError):
-        return None
-
-
-def ingest_series(
-    ctx: Context,
-    router: Router,
-    source: str,
-    src: Source,
-    *,
-    instrument_id: str,
-    start: date,
-    end: date,
-    checkpoint: bool,
-) -> SeriesResult:
-    """Fetch, normalise and route one instrument; checkpoint after each routed page."""
-    series = series_for(instrument_id)
-    rows = dropped = 0
-    total: int | None = None
-    written = Routed()
-    for chunk in src.fetch(instrument_id, start, end):
-        page = (
-            parse_eia_page(chunk.payload)
-            if source == "EIA"
-            else parse_fred_page(chunk.payload, series)
-        )
-        if chunk.page == 0:
-            total = _source_total(source, chunk.payload)
-        norm = normalise_page(page, source, ctx.clock)
-        written += router.route_bars(norm.bars, chunk.sha256)
-        rows += norm.rows_in
-        dropped += norm.nan_dropped
-        if checkpoint and page.num_rows:
-            ctx.repo.set_checkpoint(source, instrument_id, int(page.column("ts_ns")[-1].as_py()))
-    result = SeriesResult(instrument_id, rows, total, dropped, written)
-    _log.log(
-        logging.INFO if result.ok else logging.ERROR,
-        "series_ingested",
-        instrument_id=instrument_id,
-        rows=rows,
-        source_total=total,
-        nan_dropped=dropped,
-        hot_written=written.hot,
-        cold_written=written.cold,
-    )
-    return result
-
-
-def _instruments(source: str, only: Sequence[str] = ()) -> list[str]:
-    ids = [e.instrument_id for e in CATALOGUE_V1 if e.instrument_id.startswith(source + ".")]
-    unknown = set(only) - set(ids)
-    if unknown:
-        raise ConfigError(f"not a {source} instrument: {', '.join(sorted(unknown))}")
-    return [i for i in ids if not only or i in only]
-
-
-def backfill(
-    ctx: Context, source: str, start: date | None = None, instruments: Sequence[str] = ()
-) -> list[SeriesResult]:
-    """Resumable backfill: start after ``ops.ingest_checkpoint`` (never before ``start``)."""
-    source = source.upper()
-    src = _real_sources(ctx, [source])[source]
-    router = ctx.router(dedupe_cold=True)
-    ids = _instruments(source, instruments)
-    router.ensure_instruments(ids)
-    end = ctx.clock.now().date()
-    results = []
-    for iid in ids:
-        first = start or DEFAULT_FROM
-        cp = ctx.repo.get_checkpoint(source, iid)
-        if cp is not None:
-            first = max(first, from_ts_ns(cp).date() + timedelta(days=1))
-            _log.info("backfill_resume", instrument_id=iid, resume_from=first.isoformat())
-        if first > end:
-            continue
-        results.append(
-            ingest_series(
-                ctx, router, source, src, instrument_id=iid, start=first, end=end, checkpoint=True
-            )
-        )
-    router.flush_bounds()
-    return results
-
-
-def daily(ctx: Context) -> list[SeriesResult]:
-    """Last 10 days of every non-futures EIA/FRED instrument; restated values get version+1.
-
-    Requires ``hot_window_days >= DAILY_LOOKBACK_DAYS`` so restatements always hit the hot store
-    (never cold rows written as v1 duplicates of SQL-resident data).
-    """
-    if ctx.settings.hot_window_days < DAILY_LOOKBACK_DAYS:
-        raise ConfigError(f"TIDAL_HOT_WINDOW_DAYS must be >= {DAILY_LOOKBACK_DAYS} for daily")
-    ids = [
-        e.instrument_id
-        for e in CATALOGUE_V1
-        if e.source.value in ("EIA", "FRED") and e.kind is not InstrumentKind.FUTURE
-    ]
-    names = sorted({i.split(".")[0] for i in ids})
-    sources = _real_sources(ctx, names)
-    router = ctx.router(dedupe_cold=True)
-    router.ensure_instruments(ids)
-    end = ctx.clock.now().date()
-    start = end - timedelta(days=DAILY_LOOKBACK_DAYS)
-    results = []
-    for iid in ids:
-        name = iid.split(".")[0]
-        results.append(
-            ingest_series(
-                ctx, router, name, sources[name], instrument_id=iid, start=start, end=end,
-                checkpoint=False,
-            )
-        )  # fmt: skip
-    router.flush_bounds()
-    return results
 
 
 # -- synthetic -----------------------------------------------------------------------------------
@@ -506,6 +322,38 @@ def run_synth(
     return SynthResult(total, len(groups), skipped)
 
 
+@dataclass(frozen=True, slots=True)
+class DailyHistoryResult:
+    """Rows written per tier for ``daily-history`` and the covered trade-date range."""
+
+    routed: Routed
+    instruments: int
+    start: date
+    end: date
+
+
+def run_daily_history(ctx: Context, seed: int, start: date) -> DailyHistoryResult:
+    """Write synthetic daily bars of the daily catalogue from ``start`` to the day before "now".
+
+    Goes through the normal hot/cold router (``dedupe_cold``: a re-run writes nothing new). The
+    last trade date is the clock's UTC date minus one (a daily bar is complete after its day).
+    """
+    end = ctx.clock.now().date() - timedelta(days=1)
+    if start > end:
+        raise ConfigError(f"daily history start {start} is after the last complete day {end}")
+    ids = syd.daily_instruments()
+    router = ctx.router(dedupe_cold=True)
+    router.ensure_instruments(ids)
+    total = Routed()
+    for iid in ids:
+        bars = syd.generate_daily(iid, seed=seed, start=start, end=end, clock=ctx.clock)
+        digest = sha256(f"syn-daily:{seed}:{iid}:{start}:{end}".encode()).hexdigest()
+        total += router.route_bars(bars, digest)
+    router.flush_bounds()
+    _log.info("daily_history_done", instruments=len(ids), hot=total.hot, cold=total.cold)
+    return DailyHistoryResult(total, len(ids), start, end)
+
+
 # -- typer commands ------------------------------------------------------------------------------
 def _date(value: str | None) -> date | None:
     try:
@@ -519,37 +367,9 @@ def _fail(exc: TidalError) -> typer.Exit:
     return typer.Exit(1)
 
 
-@app.command("backfill")
-def backfill_cmd(
-    source: Annotated[SourceName, typer.Option(help="eia or fred")],
-    from_: Annotated[str | None, typer.Option("--from", help="Start date YYYY-MM-DD")] = None,
-    instrument: Annotated[list[str] | None, typer.Option(help="Instrument id (repeatable)")] = None,
-) -> None:
-    """Backfill history (needs the source API key); resumes from ``ops.ingest_checkpoint``."""
-    start = _date(from_)
-    with correlation_scope():
-        try:
-            results = backfill(build_context(), source.value, start, instrument or ())
-        except TidalError as exc:
-            raise _fail(exc) from exc
-    if not all(r.ok for r in results):
-        raise typer.Exit(1)
-
-
-@app.command("daily")
-def daily_cmd() -> None:
-    """Re-fetch the last 10 days of EIA/FRED spot and FX series; restated values become v+1."""
-    with correlation_scope():
-        try:
-            results = daily(build_context())
-        except TidalError as exc:
-            raise _fail(exc) from exc
-    if not all(r.ok for r in results):
-        raise typer.Exit(1)
-
-
 @synth_app.callback(invoke_without_command=True)
 def synth_cmd(
+    typer_ctx: typer.Context,
     scale: Annotated[Scale | None, typer.Option(help="S, M or L")] = None,
     seed: Annotated[int | None, typer.Option(help="Root seed")] = None,
     workers: Annotated[int | None, typer.Option(help="Parallel workers")] = None,
@@ -565,6 +385,8 @@ def synth_cmd(
     Byte-identical output across runs requires TIDAL_CLOCK__NOW. Groups already in the store
     are skipped (resume).
     """
+    if typer_ctx.invoked_subcommand is not None:
+        return
     with correlation_scope():
         try:
             ctx = build_context()
@@ -580,6 +402,22 @@ def synth_cmd(
             raise _fail(exc) from exc
 
 
-def run_daily() -> None:
-    """Console-script entry point ``tidal-ingest`` (Container Apps Job): ``tidal ingest daily``."""
-    app(["daily"])
+@synth_app.command("daily-history")
+def daily_history_cmd(
+    start: Annotated[
+        str | None, typer.Option(help="First trade date YYYY-MM-DD (default TIDAL_SYNTH__START)")
+    ] = None,
+    seed: Annotated[int | None, typer.Option(help="Root seed (default TIDAL_SYNTH__SEED)")] = None,
+) -> None:
+    """Generate synthetic daily bars (no ticks) for the daily catalogue up to the clock.
+
+    Spot, futures M1..M4 and EUR/USD, deterministic per seed, including a WTI negative-price
+    episode. Byte-identical output across runs requires TIDAL_CLOCK__NOW.
+    """
+    with correlation_scope():
+        try:
+            ctx = build_context()
+            first = _date(start) or ctx.settings.synth.start
+            run_daily_history(ctx, ctx.settings.synth.seed if seed is None else seed, first)
+        except TidalError as exc:
+            raise _fail(exc) from exc

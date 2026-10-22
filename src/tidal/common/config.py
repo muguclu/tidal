@@ -1,4 +1,4 @@
-"""Settings mirroring ``docs/contracts/config-contract.md`` v1.1.
+"""Settings mirroring ``docs/contracts/config-contract.md`` v1.2.
 
 Prefix ``TIDAL_``, nested delimiter ``__``. Use :func:`get_settings` in services and
 :meth:`Settings.from_env` with an explicit mapping in tests.
@@ -96,13 +96,6 @@ class AuthSettings(_Section):
     disabled: bool = False
 
 
-class SourcesSettings(_Section):
-    """``TIDAL_SOURCES__*``: upstream API keys."""
-
-    eia_api_key: SecretStr | None = None
-    fred_api_key: SecretStr | None = None
-
-
 class SynthSettings(_Section):
     """``TIDAL_SYNTH__*``: synthetic tick generator (part of the determinism key)."""
 
@@ -175,7 +168,7 @@ class Settings(BaseSettings):
         hide_input_in_errors=True,
     )
 
-    env: Literal["local", "dev", "prod"]  # required (contract v1.1): no default, fail closed
+    env: Literal["local", "dev", "prod"]  # required (contract v1.1+): no default, fail closed
     log_level: str = "INFO"
     service_name: Literal["api", "query", "worker", "ingest", "tiering", "legacy"] = "api"
     hot_window_days: int = Field(default=90, gt=0)
@@ -184,7 +177,6 @@ class Settings(BaseSettings):
     servicebus: ServiceBusSettings = ServiceBusSettings()
     query: QuerySettings = QuerySettings()
     auth: AuthSettings = AuthSettings()
-    sources: SourcesSettings = SourcesSettings()
     synth: SynthSettings = SynthSettings()
     clock: ClockSettings = ClockSettings()
     otel: OtelSettings = OtelSettings()

@@ -1,5 +1,7 @@
 """FRED ``series/observations`` client (SPEC-01 §2-3, T-103).
 
+REFERENCE CODE, UNWIRED since ADR-0013: no config key, CLI command or verify script uses it.
+
 Mirrors :mod:`tidal.ingest.sources.eia`: one request per page (``limit``/``offset``, 100000 max),
 retried with exponential backoff, seeded jitter and ``Retry-After``; each response is persisted raw
 (injected store) *before* it is yielded, and the API key (a ``SecretStr`` in the query string) is
@@ -93,9 +95,9 @@ class FredSource:
         base_url: str = BASE_URL,
         max_pages: int = MAX_PAGES,
     ) -> None:
-        """Wire injected collaborators; ``api_key`` comes from ``settings.sources.fred_api_key``."""
+        """Wire injected collaborators; ``api_key`` is a plain argument (ADR-0013)."""
         if api_key is None or not api_key.get_secret_value():
-            raise ConfigError("TIDAL_SOURCES__FRED_API_KEY is not set")
+            raise ConfigError("FRED api_key is empty")
         self._client = client
         self._key = api_key
         self._store = store

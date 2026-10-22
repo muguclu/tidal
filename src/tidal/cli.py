@@ -10,8 +10,7 @@ import typer
 
 #: group name -> "module:attribute" of a ``typer.Typer`` (owning task in the comment).
 SUBCOMMANDS: dict[str, str] = {
-    "ingest": "tidal.ingest.cli:app",  # T-105 — backfill, daily
-    "synth": "tidal.ingest.cli:synth_app",  # T-105 — synthetic generator
+    "synth": "tidal.ingest.cli:synth_app",  # T-105/T-117 — synthetic generator, daily-history
     "db": "tidal.storage.sql_repo:db_app",  # T-106 — migrate
     "tiering": "tidal.storage.tiering_cli:app",  # T-205 — run, retag, compact
     "dlq": "tidal.worker.dlq:app",  # T-303 — inspect, resubmit

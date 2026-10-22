@@ -1,5 +1,7 @@
 """EIA Open Data API v2 client (SPEC-01 §2-3, T-102).
 
+REFERENCE CODE, UNWIRED since ADR-0013: no config key, CLI command or verify script uses it.
+
 One request per page (``offset``/``length``, 5000 max), retried with exponential backoff, jitter
 from an injected numpy ``Generator`` and ``Retry-After``. Each response is persisted raw (via the
 injected store) *before* it is yielded, so :func:`parse_eia_page` and T-105 normalisation always
@@ -95,9 +97,9 @@ class EiaSource:
         base_url: str = BASE_URL,
         max_pages: int = MAX_PAGES,
     ) -> None:
-        """Wire injected collaborators; ``api_key`` comes from ``settings.sources.eia_api_key``."""
+        """Wire injected collaborators; ``api_key`` is a plain argument (ADR-0013)."""
         if api_key is None or not api_key.get_secret_value():
-            raise ConfigError("TIDAL_SOURCES__EIA_API_KEY is not set")
+            raise ConfigError("EIA api_key is empty")
         self._client = client
         self._key = api_key
         self._store = store
