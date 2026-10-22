@@ -15,7 +15,6 @@ from tidal.api.pagination import (
     cursor_key,
     decode_cursor,
     encode_cursor,
-    page_of,
 )
 from tidal.api.routers.bars import (
     Format,
@@ -23,7 +22,7 @@ from tidal.api.routers.bars import (
     market_data_ok,
     parse_range,
 )
-from tidal.api.streaming import TIER_HEADER, stream_response
+from tidal.api.streaming import TIER_HEADER, page_from_stream, stream_response, tick_from_row
 from tidal.contracts.instruments import InstrumentId
 from tidal.contracts.models import TicksResponse
 from tidal.contracts.schemas import TICK_V1
@@ -58,16 +57,16 @@ async def get_ticks(  # noqa: PLR0917 - contract query parameters
     check_ticks_range(start_ns, end_ns)
     if format is not Format.JSON:
         stream = await reader.stream_ticks(instrument_id, start_ns, end_ns)
-        return stream_response(stream, TICK_V1, arrow=format is Format.ARROW)
+        return await stream_response(stream, TICK_V1, arrow=format is Format.ARROW)
     bound = binding("ticks", principal.oid, instrument_id, start_ns, end_ns)
     key = cursor_key(request)
     pos = decode_cursor(key, bound, cursor) if cursor else None
-    got = await reader.read_ticks(instrument_id, pos.ts_ns if pos else start_ns, end_ns)
-    page, nxt = page_of(got.rows, lambda t: t.ts_ns, pos, limit)
-    response.headers[TIER_HEADER] = got.tier.value
+    stream = await reader.stream_ticks(instrument_id, pos.ts_ns if pos else start_ns, end_ns)
+    page, nxt = await page_from_stream(stream, tick_from_row, lambda t: t.ts_ns, pos, limit)
+    response.headers[TIER_HEADER] = stream.tier.value
     return TicksResponse(
         instrument_id=instrument_id,
-        tier=got.tier,
+        tier=stream.tier,
         rows=page,
         next_cursor=encode_cursor(key, bound, nxt) if nxt else None,
     )

@@ -6,7 +6,10 @@ per-process random key held on ``app.state``.
 
 LIMITATION (until T-402 adds a configured key): there is no key in settings yet, so cursors are
 valid only on the process that issued them (and die on restart). Multi-instance deployments need
-a shared key. The reader protocol has no offset/limit either, so a page re-reads its range.
+a shared key.
+
+Pages are read from the reader's stream starting at the cursor position (see
+``tidal.api.streaming.page_from_stream``), so a page costs at most one reader slice.
 """
 
 import base64
@@ -36,6 +39,7 @@ class Position:
     ts_ns: int
     idx: int
     as_of_ns: int | None = None  # pinned knowledge time (bars only), see the bars router
+    anchor_ns: int | None = None  # ffill: last real bar before this position (read start)
 
 
 def cursor_key(request: Request) -> bytes:
@@ -63,7 +67,9 @@ def _sign(key: bytes, payload: str) -> str:
 def encode_cursor(key: bytes, bound: str, pos: Position) -> str:
     """Serialise and sign ``pos`` for the query identified by ``bound``."""
     payload = _b64(
-        json.dumps([pos.ts_ns, pos.idx, bound, pos.as_of_ns], separators=(",", ":")).encode()
+        json.dumps(
+            [pos.ts_ns, pos.idx, bound, pos.as_of_ns, pos.anchor_ns], separators=(",", ":")
+        ).encode()
     )
     return f"{payload}.{_sign(key, payload)}"
 
@@ -76,17 +82,18 @@ def decode_cursor(key: bytes, bound: str, token: str) -> Position:
     if not hmac.compare_digest(sig.encode(), _sign(key, payload).encode()):
         raise ValidationFailed(_BAD)
     try:
-        ts_ns, idx, got, as_of = json.loads(
+        ts_ns, idx, got, as_of, anchor = json.loads(
             base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
         )
     except (ValueError, binascii.Error):
         raise ValidationFailed(_BAD) from None
     ints = isinstance(ts_ns, int) and isinstance(idx, int)
-    if not ints or not (as_of is None or isinstance(as_of, int)):
+    opt_ints = all(v is None or isinstance(v, int) for v in (as_of, anchor))
+    if not ints or not opt_ints:
         raise ValidationFailed(_BAD)
     if not hmac.compare_digest(str(got).encode(), bound.encode()):
         raise ValidationFailed(_BAD)
-    return Position(ts_ns, idx, as_of)
+    return Position(ts_ns, idx, as_of, anchor)
 
 
 def page_of[T](

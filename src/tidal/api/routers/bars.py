@@ -1,6 +1,6 @@
 """``GET /v1/bars`` plus helpers shared by ticks/spreads (time parsing, limits, streaming)."""
 
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable
 from dataclasses import replace
 from enum import StrEnum
 from typing import Annotated, Any
@@ -18,13 +18,19 @@ from tidal.api.pagination import (
     cursor_key,
     decode_cursor,
     encode_cursor,
-    page_of,
 )
-from tidal.api.streaming import ARROW, PARQUET, TIER_HEADER, ffill_bars, stream_response
+from tidal.api.streaming import (
+    ARROW,
+    PARQUET,
+    TIER_HEADER,
+    bar_from_row,
+    page_from_stream,
+    stream_response,
+)
 from tidal.common.errors import ValidationFailed
 from tidal.common.timeutil import to_ts_ns
 from tidal.contracts.instruments import InstrumentId
-from tidal.contracts.models import Bar, BarsResponse, Tier, datetime_to_ns
+from tidal.contracts.models import BarsResponse, Tier, datetime_to_ns
 from tidal.contracts.schemas import BAR_V1, Interval
 from tidal.query.limits import check_bars_range
 from tidal.query.protocols import Clock, Reader
@@ -122,7 +128,7 @@ async def get_bars(  # noqa: PLR0917 - contract query parameters
         stream = await reader.stream_bars(
             instrument_id, interval, start_ns, end_ns, as_of_ns=given_as_of
         )
-        return stream_response(stream, BAR_V1, arrow=format is Format.ARROW)
+        return await stream_response(stream, BAR_V1, arrow=format is Format.ARROW)
     bound = binding(
         "bars", principal.oid, instrument_id, interval, start_ns, end_ns, fill, given_as_of
     )
@@ -131,18 +137,24 @@ async def get_bars(  # noqa: PLR0917 - contract query parameters
     # Without an explicit as_of, pin the first page's request time into the cursor so row
     # versions do not change between pages.
     as_of_ns = given_as_of or (pos.as_of_ns if pos else None) or datetime_to_ns(clock.now())
-    # ffill needs the bar before the page start, so it always reads from the original start.
-    read_from = pos.ts_ns if pos and fill is Fill.NONE else start_ns
-    got = await reader.read_bars(instrument_id, interval, read_from, end_ns, as_of_ns=as_of_ns)
-    rows: Sequence[Bar] | Iterator[Bar] = (
-        ffill_bars(got.rows, interval) if fill is Fill.FFILL else got.rows
-    )
-    page, nxt = page_of(rows, lambda b: b.ts_ns, pos, limit)
-    response.headers[TIER_HEADER] = got.tier.value
+    # ffill needs the real bar before the page start (the cursor's anchor); a plain page starts at
+    # the cursor. The reader is streamed and closed after limit + 1 rows, so paging is bounded.
+    if pos is None:
+        read_from = start_ns
+    elif fill is Fill.FFILL:
+        read_from = pos.anchor_ns if pos.anchor_ns is not None else start_ns
+    else:
+        read_from = pos.ts_ns
+    stream = await reader.stream_bars(instrument_id, interval, read_from, end_ns, as_of_ns=as_of_ns)
+    page, nxt = await page_from_stream(
+        stream, bar_from_row, lambda b: b.ts_ns, pos, limit,
+        ffill=interval if fill is Fill.FFILL else None,
+    )  # fmt: skip
+    response.headers[TIER_HEADER] = stream.tier.value
     return BarsResponse(
         instrument_id=instrument_id,
         interval=interval,
-        tier=got.tier,
+        tier=stream.tier,
         rows=page,
         next_cursor=encode_cursor(key, bound, replace(nxt, as_of_ns=as_of_ns)) if nxt else None,
     )
