@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Protocol
 
+from sqlalchemy import Engine
+
 from tidal.common.errors import NotFound
 from tidal.common.logging import get_logger
 from tidal.common.timeutil import Clock
@@ -53,6 +55,10 @@ class BlobTagger(Protocol):
 
     def set_tags(self, path: str, tags: Mapping[str, str]) -> None:
         """Replace all tags of the blob."""
+        ...
+
+    def discard(self, path: str) -> None:
+        """Forget tags kept outside the blob (sidecars) after the blob was deleted; idempotent."""
         ...
 
 
@@ -110,6 +116,9 @@ class AzureTagger:
         except ResourceNotFoundError:
             raise NotFound(f"{path} not found") from None
 
+    def discard(self, path: str) -> None:
+        """Nothing to do: Azure drops index tags with the blob."""
+
     def set_tags(self, path: str, tags: Mapping[str, str]) -> None:
         """Replace the blob's tags."""
         from azure.core.exceptions import ResourceNotFoundError  # noqa: PLC0415
@@ -145,6 +154,10 @@ class LocalTagger:
             return {}
         return {str(k): str(v) for k, v in data.items()}
 
+    def discard(self, path: str) -> None:
+        """Remove the sidecar of a deleted blob so a recreated ``part-`` name starts untagged."""
+        self._sidecar(path).unlink(missing_ok=True)
+
     def set_tags(self, path: str, tags: Mapping[str, str]) -> None:
         """Atomically replace the sidecar."""
         if not (self.root / path).is_file():
@@ -163,12 +176,14 @@ class RetagResult:
     blobs: int
     changed: int
     missing: int  # listed but deleted before they could be tagged
+    skipped_datasets: int = 0  # datasets whose table lock was held by a migration/compaction
 
 
 def retag(
     store: ObjectStore,
     tagger: BlobTagger,
     clock: Clock,
+    engine: Engine,
     *,
     datasets: tuple[str, ...] = layout.DATASETS,
 ) -> RetagResult:
@@ -176,23 +191,33 @@ def retag(
 
     Idempotent: a blob whose tags already match is not written. Run once a year (Jan 2) so the
     lifecycle rules (T-207) move data that crossed a band boundary. ``compacted`` is preserved.
+    Each dataset is processed under the table lock of the migration (``sp_getapplock``), so tags
+    are never rewritten while a migration or compaction creates and deletes parts; a held lock
+    skips the dataset (re-run later).
     """
+    from tidal.storage.tiering import applock, spec_for_dataset  # noqa: PLC0415 - import cycle
+
     now_year = clock.now().year
-    blobs = changed = missing = 0
+    blobs = changed = missing = skipped = 0
     for dataset in datasets:
-        prefix = f"{layout.CONTAINER_MARKETDATA}/{layout.MD_VERSION}/{dataset}/"
-        for path in store.list(prefix):
-            try:
-                part = layout.parse_md_path(path)
-            except layout.InvalidPath:
-                continue  # temp files, foreign blobs
-            if part.seq is None:
-                continue  # manifest
-            blobs += 1
-            try:
-                changed += ensure_tags(tagger, path, now_year)
-            except NotFound:
-                missing += 1
+        with applock(engine, f"tiering:{spec_for_dataset(dataset).name}") as lock:
+            if not lock:
+                skipped += 1
                 continue
-    log.info("retag_done", blobs=blobs, changed=changed, missing=missing, year=now_year)
-    return RetagResult(blobs, changed, missing)
+            prefix = f"{layout.CONTAINER_MARKETDATA}/{layout.MD_VERSION}/{dataset}/"
+            for path in store.list(prefix):
+                try:
+                    part = layout.parse_md_path(path)
+                except layout.InvalidPath:
+                    continue  # temp files, foreign blobs
+                if part.seq is None:
+                    continue  # manifest
+                blobs += 1
+                lock.check()
+                try:
+                    changed += ensure_tags(tagger, path, now_year)
+                except NotFound:
+                    missing += 1
+    log.info("retag_done", blobs=blobs, changed=changed, missing=missing, skipped=skipped,
+             year=now_year)  # fmt: skip
+    return RetagResult(blobs, changed, missing, skipped)

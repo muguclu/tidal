@@ -20,9 +20,9 @@ from tidal.storage.retag import AzureTagger, BlobTagger, LocalTagger, retag
 from tidal.storage.tiering import (
     DEFAULT_BATCH_ROWS,
     DEFAULT_DELETE_CHUNK_ROWS,
-    SPECS,
     TieringConfig,
     run_tiering,
+    spec_for_table,
 )
 
 _log = get_logger(__name__)
@@ -69,25 +69,32 @@ def _fail(exc: TidalError) -> typer.Exit:
 @app.command("run")
 def run_cmd(
     table: Annotated[
-        list[str] | None, typer.Option(help="bar_hot and/or tick_hot (default: both)")
+        list[str] | None,
+        typer.Option(help="bar_hot and/or tick_hot, or md.bar_hot / md.tick_hot (default: both)"),
     ] = None,
-    batch_rows: Annotated[int, typer.Option(help="Max rows per batch/part")] = DEFAULT_BATCH_ROWS,
+    hot_window_days: Annotated[
+        int | None, typer.Option(help="Override TIDAL_HOT_WINDOW_DAYS")
+    ] = None,
+    batch_rows: Annotated[int, typer.Option(help="Rows per SQL read page")] = DEFAULT_BATCH_ROWS,
     delete_chunk_rows: Annotated[
         int, typer.Option(help="Rows per delete transaction")
     ] = DEFAULT_DELETE_CHUNK_ROWS,
-    align_months: Annotated[
-        bool, typer.Option(help="Migrate whole calendar months only (fewer, larger parts)")
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Plan only: report what would move, change nothing")
     ] = False,
 ) -> None:
     """Move rows older than the hot window from SQL to Parquet (idempotent, resumable)."""
     names = tuple(table or _DEFAULT_TABLES)
-    if unknown := [n for n in names if n not in SPECS]:
-        raise typer.BadParameter(f"unknown table(s) {unknown}; choose from {sorted(SPECS)}")
+    try:
+        for name in names:
+            spec_for_table(name)
+    except layout.InvalidPath:
+        raise typer.BadParameter(f"unknown table in {names}; use bar_hot or tick_hot") from None
     with correlation_scope():
         try:
             settings, engine, store, tagger, clock = _context()
             cfg = TieringConfig(
-                settings.hot_window_days, batch_rows, delete_chunk_rows, align_months
+                hot_window_days or settings.hot_window_days, batch_rows, delete_chunk_rows, dry_run
             )
             results = run_tiering(engine, store, tagger, clock, cfg, names)
         except TidalError as exc:
@@ -96,7 +103,7 @@ def run_cmd(
         typer.echo(
             f"{r.table}: moved={r.rows_moved} deduped={r.rows_deduped} swept={r.rows_swept} "
             f"deleted={r.rows_deleted} bytes={r.bytes_written} locked={r.locked} "
-            f"errors={len(r.errors)}"
+            f"dry_run={r.dry_run} errors={len(r.errors)}"
         )
     if any(r.errors for r in results):
         raise typer.Exit(1)
@@ -111,11 +118,14 @@ def retag_cmd(
     """Recompute ``age_band`` for all blobs (run yearly, Jan 2)."""
     with correlation_scope():
         try:
-            _, _, store, tagger, clock = _context()
-            res = retag(store, tagger, clock, datasets=tuple(dataset or layout.DATASETS))
+            _, engine, store, tagger, clock = _context()
+            res = retag(store, tagger, clock, engine, datasets=tuple(dataset or layout.DATASETS))
         except TidalError as exc:
             raise _fail(exc) from exc
-    typer.echo(f"retag: blobs={res.blobs} changed={res.changed} missing={res.missing}")
+    typer.echo(
+        f"retag: blobs={res.blobs} changed={res.changed} missing={res.missing} "
+        f"skipped_datasets={res.skipped_datasets}"
+    )
 
 
 @app.command("compact")

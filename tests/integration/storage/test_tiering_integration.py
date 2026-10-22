@@ -39,7 +39,16 @@ from tidal.storage.parquet_writer import AzureBlobStore
 from tidal.storage.retag import AzureTagger, retag
 from tidal.storage.tiering import run_tiering
 from unit.query import query_support as qs
-from unit.storage.tiering_support import CFG, CUTOFF, NOW, Boom, cold_rows, sql_rows
+from unit.storage.tiering_support import (
+    CFG,
+    NOW,
+    T0,
+    TARGET,
+    Boom,
+    build_small_baseline,
+    cold_rows,
+    sql_rows,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -150,7 +159,7 @@ def azurite() -> Iterator[tuple[str, str]]:
 
 @pytest.fixture(scope="module")
 def baseline() -> sr.SqlRepository:
-    return qs.build_baseline()
+    return build_small_baseline()
 
 
 class Stack:
@@ -202,9 +211,9 @@ def test_migration_on_sql_server_and_azurite_keeps_every_row_and_tags_blobs(stac
     results = stack.migrate()
     assert all(not r.errors and not r.locked for r in results)
     remaining, cold = sql_rows(stack.repo), cold_rows(stack.store)
-    assert remaining and all(r[1] >= CUTOFF for r in remaining)
+    assert remaining and all(r[1] >= TARGET for r in remaining)
     assert sorted(remaining + cold) == before
-    assert stack.repo.get_watermark("md.bar_hot") == CUTOFF
+    assert stack.repo.get_watermark("md.bar_hot") == TARGET
     bars = next(r for r in results if r.table == "md.bar_hot")
     assert bars.sql_kb_before is not None and bars.sql_kb_after is not None
     assert bars.bytes_written > 0
@@ -238,11 +247,11 @@ def test_reader_over_sql_server_and_azurite_equals_baseline_after_migration(stac
         SETTINGS,
     )
     stack.migrate()
-    hi = qs.T0 + 2_000 * qs.DAY
+    hi = T0 + 2_000 * qs.DAY
     for interval in (Interval.D1, Interval.H1):
         for as_of in (None, qs.LATE_INGEST):
-            want = _run(base_reader.read_bars(qs.WTI, interval, qs.T0, hi, as_of_ns=as_of))
-            got = _run(reader.read_bars(qs.WTI, interval, qs.T0, hi, as_of_ns=as_of))
+            want = _run(base_reader.read_bars(qs.WTI, interval, T0, hi, as_of_ns=as_of))
+            got = _run(reader.read_bars(qs.WTI, interval, T0, hi, as_of_ns=as_of))
             assert got.rows == want.rows
     want_t = _run(base_reader.read_ticks(qs.WTI, qs.TICK0, qs.TICK0 + 60 * qs.DAY))
     got_t = _run(reader.read_ticks(qs.WTI, qs.TICK0, qs.TICK0 + 60 * qs.DAY))
@@ -275,25 +284,25 @@ def test_crash_after_delete_then_rerun_converges_on_sql_server(
     stack: Stack, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     before = sql_rows(stack.repo)
-    real = tiering.delete_batch
+    real = tiering.delete_chunk
 
     def crash(*a: Any, **k: Any) -> int:
         real(*a, **k)
         raise Boom
 
-    monkeypatch.setattr(tiering, "delete_batch", crash)
+    monkeypatch.setattr(tiering, "delete_chunk", crash)
     with pytest.raises(Boom):
         stack.migrate()
     monkeypatch.undo()
-    results = stack.migrate()  # the session lock died with the connection: not blocked
+    results = stack.migrate()  # the lock was released by the context manager's finally clause
     assert not any(r.locked or r.errors for r in results)
     assert sorted(sql_rows(stack.repo) + cold_rows(stack.store)) == before
-    assert stack.repo.get_watermark("md.bar_hot") == CUTOFF
+    assert stack.repo.get_watermark("md.bar_hot") == TARGET
 
 
 def test_compaction_and_retag_on_azurite(stack: Stack) -> None:
     stack.migrate()
-    assert len(tiering.part_paths(stack.store, "bars_1d", qs.WTI, 2019, 0)) == 12
+    assert len(tiering.part_paths(stack.store, "bars_1d", qs.WTI, 2019, 0)) == 3
     before = sorted(set(cold_rows(stack.store)))
     res = compact(stack.engine, stack.store, stack.tagger, stack.clock, "bars_1d")
     assert not res.errors and res.merged >= 1
@@ -301,25 +310,60 @@ def test_compaction_and_retag_on_azurite(stack: Stack) -> None:
     assert stack.tagger.get_tags(only)["compacted"] == "true"
     assert sorted(set(cold_rows(stack.store))) == before
     later = FixedClock(NOW + 4 * 366 * 86_400 * 10**9)
-    moved = retag(stack.store, stack.tagger, later)
+    moved = retag(stack.store, stack.tagger, later, stack.engine)
     assert moved.changed == moved.blobs > 0
     assert stack.tagger.get_tags(only) == {
         "dataset": "bars_1d", "instrument": qs.WTI, "data_year": "2019",
         "age_band": "cool", "compacted": "true",
     }  # fmt: skip
-    assert retag(stack.store, stack.tagger, later).changed == 0
+    assert retag(stack.store, stack.tagger, later, stack.engine).changed == 0
 
 
 def test_delete_chunk_mismatch_rolls_back_on_sql_server(stack: Stack) -> None:
-    import polars as pl
-    from sqlalchemy import select
-
-    t = sr.bar_hot
-    with stack.engine.connect() as c:
-        q = select(t).where(t.c.interval_code == 4, t.c.ts_ns < qs.T0 + 5 * qs.DAY)
-        rows = pl.DataFrame([dict(r) for r in c.execute(q).mappings()])
-    read = tiering.normalise(rows.filter(pl.col("version") == 1).sort("ts_ns", "version"))
     n = len(sql_rows(stack.repo))
-    with pytest.raises(tiering.TieringDeleteMismatch):
-        tiering.delete_batch(stack.engine, tiering.BARS, 1, 4, read, 50_000)
+    with pytest.raises(tiering.TieringDeleteMismatch):  # several versions live in the range
+        tiering.delete_chunk(
+            stack.engine, tiering.BARS, tiering.DeleteChunk(1, 4, T0, T0 + 5 * qs.DAY, 1)
+        )
     assert len(sql_rows(stack.repo)) == n
+
+
+def test_lock_check_sees_the_session_lock_and_loses_it_on_release(stack: Stack) -> None:
+    with tiering.applock(stack.engine, "tiering:md.bar_hot") as lock:
+        assert lock
+        lock.check()  # APPLOCK_MODE on the owning session says Exclusive
+        assert lock.conn is not None
+        lock.conn.exec_driver_sql(
+            "EXEC sp_releaseapplock @Resource = 'tiering:md.bar_hot', @LockOwner = 'Session'"
+        )
+        lock.conn.commit()
+        with pytest.raises(tiering.LockLost):
+            lock.check()
+
+
+def test_dry_run_and_restatement_after_migration_on_sql_server(stack: Stack) -> None:
+    import numpy as np
+
+    before = sql_rows(stack.repo)
+    dry = run_tiering(
+        stack.engine,
+        stack.store,
+        stack.tagger,
+        stack.clock,
+        tiering.TieringConfig(90, dry_run=True),
+    )
+    assert sql_rows(stack.repo) == before and sum(r.rows_moved for r in dry) > 0
+    stack.migrate()
+    ts = T0 + 10 * qs.DAY
+    top = max(r[3] for r in cold_rows(stack.store) if r[0] == "bars_1d" and r[1] == ts)
+    # the repository files a restatement of a migrated key as version 1; tiering re-versions it
+    stack.repo.upsert_bars(
+        qs.bars_table(np.array([ts]), np.array([7.0]), np.array([1.0]), qs.LATE_INGEST + 5)
+    )
+    res = stack.migrate()
+    assert not any(r.errors for r in res)
+    new = max(
+        (r for r in cold_rows(stack.store) if r[0] == "bars_1d" and r[1] == ts), key=lambda r: r[3]
+    )
+    assert new[3] == top + 1 and new[4] == 7.0
+    assert not any(r[1] < TARGET for r in sql_rows(stack.repo))

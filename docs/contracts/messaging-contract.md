@@ -47,6 +47,12 @@ application property `schema` = `<name>/v<major>`.
 ```jsonc
 { "table": "md.bar_hot", "hot_window_days": 90, "dry_run": false, "batch_rows": 500000 }
 ```
+`table` is `md.bar_hot` or `md.tick_hot` (the CLI also accepts `bar_hot` / `tick_hot`).
+`hot_window_days`: the cut-off `now - hot_window` is rounded down to a month start, so SQL keeps the
+window plus the partial month. `dry_run`: plan and report what would move, change nothing.
+`batch_rows`: rows per SQL read page (memory bound; one month is still one Parquet write). The
+consumer that reads `tiering-jobs` and calls `tidal.storage.tiering.run_job` is future work (see the
+T-303 note in TASKS); until then `tidal tiering run` runs the same code.
 
 ## 4. Consumer rules
 
