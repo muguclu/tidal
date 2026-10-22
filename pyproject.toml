@@ -66,7 +66,7 @@ bench = ["matplotlib>=3.9"]
 load = ["locust>=2.32"]
 
 [tool.uv]
-default-groups = ["dev"]
+default-groups = ["dev", "bench"]  # bench: report charts are unit-tested (T-201)
 
 [build-system]
 requires = ["uv_build>=0.11,<0.12"]
