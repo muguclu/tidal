@@ -62,6 +62,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | T-112 | docker-compose local stack | platform-engineer | T-001 | `docker-compose.yml`, `deploy/docker/Dockerfile` (dev stage), `deploy/local/**` (incl. `sb-config.json`), `.env.example` | `docker compose up` gives Azurite, one SQL Server container shared by Tidal and the SB emulator, SB emulator, api | done |
 | T-114 | `TIDAL_ENV` fails closed | architect | T-005 | `docs/contracts/config-contract.md`, `src/tidal/common/config.py` +tests, `.env.example` | `TIDAL_ENV` has no default (unset → startup error); compose/.env set `local` | todo |
 | T-115 | Shared source helpers; layout-built backtest prefixes | data-engineer | T-103 | `src/tidal/ingest/sources/{base,eia,fred}.py`, `scripts/verify_{eia,fred}.py`, `src/tidal/contracts/messages.py`, `src/tidal/storage/layout.py` +tests | eia.py uses base retry/redact helpers; `BacktestJob` prefix check uses `layout.backtest_prefix` | todo |
+| T-116 | `ObjectStore.read()` | data-engineer | T-105 | `src/tidal/storage/parquet_writer.py`, `src/tidal/ingest/router.py` +tests | stores expose `read(path) -> bytes`; router drops store-type special-casing | todo |
 | T-113 | Local JWKS + dev token script | api-engineer | T-005 | `scripts/dev-token.py`, `tests/fakes/jwks/**` | mints RS256 tokens per role for local/tests; keys generated at runtime, never committed | done |
 
 **Gate G1**
