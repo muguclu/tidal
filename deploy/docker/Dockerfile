@@ -23,6 +23,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Then the project itself (README.md is referenced by pyproject; uv_build needs src/).
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
+# Migrations ship with the image so `tidal db migrate` works in containers (default --dir).
+COPY sql ./sql
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev
 

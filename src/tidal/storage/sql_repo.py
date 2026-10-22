@@ -443,13 +443,21 @@ _BOOTSTRAP: Final = (
 
 
 def discover_migrations(directory: Path) -> list[Migration]:
-    """Read ``NNNN_*.sql`` files in name order."""
+    """Read ``NNNN_*.sql`` files in name order; a missing or empty directory is an error.
+
+    An empty result would otherwise report "nothing to do" against an empty database (seen when
+    the container image did not ship ``sql/``).
+    """
+    if not directory.is_dir():
+        raise MigrationError(f"migrations directory not found: {directory}")
     out = []
     for path in sorted(directory.glob("*.sql")):
         if not re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", path.name):
             raise MigrationError(f"bad migration file name {path.name}")
         text = path.read_text(encoding="utf-8")
         out.append(Migration(path.stem, text, hashlib.sha256(text.encode()).hexdigest()))
+    if not out:
+        raise MigrationError(f"no migration files in {directory}")
     return out
 
 

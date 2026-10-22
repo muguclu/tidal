@@ -167,6 +167,13 @@ def test_bad_file_name(tmp_path: Path) -> None:
         sql_repo.discover_migrations(tmp_path)
 
 
+def test_missing_or_empty_directory_is_an_error(tmp_path: Path) -> None:
+    with pytest.raises(sql_repo.MigrationError, match="not found"):
+        sql_repo.discover_migrations(tmp_path / "absent")
+    with pytest.raises(sql_repo.MigrationError, match="no migration files"):
+        sql_repo.discover_migrations(tmp_path)
+
+
 def test_real_migration_directory_is_discoverable() -> None:
     assert [m.version for m in sql_repo.discover_migrations(sql_repo.DEFAULT_MIGRATIONS)] == [
         "0001_init"
