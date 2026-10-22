@@ -13,8 +13,10 @@ engine, so "all formats return identical aggregates" (SPEC-02 section 6) is chec
 import hashlib
 import json
 import math
+import os
+import shutil
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Final, Protocol
@@ -68,6 +70,9 @@ class Dataset:
     rows: dict[str, int]  # base rows per instrument
     content_hash: str
     instruments: tuple[str, ...]
+    _mem: dict[tuple[Part, bool], list[pa.Table]] | None = field(
+        default=None, compare=False, repr=False
+    )
 
     @property
     def base(self) -> LocalStore:
@@ -114,10 +119,22 @@ class Dataset:
 
     def read_partition(self, part: Part, *, restated: bool = False) -> list[pa.Table]:
         """Tables of one partition (ascending ``ts_ns``), contract schema."""
+        if self._mem is not None and (part, restated) in self._mem:
+            return self._mem[(part, restated)]
         inst, y, m = part
         store = self.restate if restated else self.base
         paths = store.list_paths(layout.md_partition_prefix("ticks", inst, y, m))
         return [pq.read_table(store.root / p).cast(TICK_V1) for p in paths]
+
+    def preloaded(self) -> "Dataset":
+        """Copy holding the selected partitions in memory, so a timed ``load`` does no source I/O.
+
+        Memory is the selected rows in Arrow form (about 40 B/row); W1 selects one instrument.
+        """
+        mem = {(p, False): self.read_partition(p) for p in self.partitions()}
+        if self.restated[0] in self.instruments:
+            mem[(self.restated, True)] = self.read_partition(self.restated, restated=True)
+        return replace(self, _mem=mem)
 
     def scan(self, p: Params, *, with_restated: bool = False) -> pl.LazyFrame:
         """Lazy frame over ``p['instruments']`` x ``p['months']`` clipped to ``[lo_ns, hi_ns)``."""
@@ -142,7 +159,16 @@ def build_dataset(spec: DatasetSpec, root: Path = DATA_ROOT) -> Dataset:
     """Build (or load from the on-disk cache) the dataset for ``spec`` under ``root/<key>/``."""
     out = root / spec.key()
     if not (out / "dataset.json").exists():
-        _generate(spec, out)
+        root.mkdir(parents=True, exist_ok=True)
+        tmp = root / f".tmp-{spec.key()}-{os.getpid()}"
+        shutil.rmtree(tmp, ignore_errors=True)
+        try:
+            _generate(spec, tmp)  # a crash leaves only the temp dir, never a half-built cache
+            if out.exists():  # stale dir without dataset.json
+                shutil.rmtree(out, ignore_errors=True)
+            tmp.rename(out)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
     d = json.loads((out / "dataset.json").read_text(encoding="utf-8"))
     units = tuple((i, int(y), int(m)) for i, y, m in d["units"])
     r = d["restated"]
@@ -255,7 +281,11 @@ class Format(Protocol):
         ...
 
     def run(self, workload: str, params: Mapping[str, Any]) -> WorkloadResult:  # Any: JSON params
-        """Execute W2-W6 (W1 is ``load``) and return its value for the oracle."""
+        """Execute W2-W6 (W1 is ``load``); value only, NO profiling inside the timed call."""
+        ...
+
+    def io_profile(self, workload: str, params: Mapping[str, Any]) -> WorkloadResult:  # Any: JSON
+        """Untimed separate pass that fills ``bytes_read`` / ``rows_scanned`` (profiling on)."""
         ...
 
     def reopen(self) -> None:
@@ -311,6 +341,20 @@ def _w6(ds: Dataset) -> Params:
     p = _p([ds.restated[0]], [ds.restated[1:]])
     p["asof_ns"] = [BASE_INGEST_NS + 15 * NS_DAY, BASE_INGEST_NS + 60 * NS_DAY]
     return p
+
+
+_YEARS = {"S": 5, "M": 10, "L": 20}
+
+
+def default_range(scale: str, end: date | None = None) -> tuple[date, date]:
+    """``(start, end)`` covering the scale's years, ending at ``TIDAL_SYNTH__END`` (or 2025-12-31).
+
+    S: last 5 years, M: last 10, L: last 20 (``synthetic.plan`` takes the last N years of range).
+    """
+    if end is None:
+        env = os.environ.get("TIDAL_SYNTH__END")
+        end = date.fromisoformat(env) if env else date(2025, 12, 31)
+    return date(end.year - _YEARS[scale] + 1, 1, 1), end
 
 
 def _first(lf: pl.LazyFrame) -> pl.LazyFrame:
@@ -374,7 +418,7 @@ def _o3(ds: Dataset, p: Params) -> Value:
 
 
 def _o4(ds: Dataset, p: Params) -> Value:
-    d = _first(ds.scan(p)).sort("ts_ns").tail(1).collect()
+    d = _first(ds.scan(p)).filter(pl.col("side") == 0).sort("ts_ns", "side").tail(1).collect()
     return {"ts_ns": d["ts_ns"][0], "price": d["price"][0]}
 
 
@@ -393,8 +437,8 @@ def _o6(ds: Dataset, p: Params) -> Value:
         d = (
             ds.scan(p, with_restated=True)
             .filter(pl.col("ingested_at_ns") <= asof)
-            .sort("ts_ns", "version")
-            .group_by("ts_ns", maintain_order=True)
+            .sort("ts_ns", "side", "version")
+            .group_by("ts_ns", "side", maintain_order=True)
             .last()
             .select(n=pl.len(), s=pl.col("price").sum(), r=(pl.col("version") == 2).sum())
             .collect()
@@ -417,7 +461,7 @@ _DEFS = (
         _o2,
     ),
     ("W3", "1-month range", "Count/sum/min/max price, 1 instrument, middle month", _w3, _o3),
-    ("W4", "Last price", "Latest first-print tick of 1 instrument", _w4, _o4),
+    ("W4", "Last trade price", "Latest first-print trade (side 0) of 1 instrument", _w4, _o4),
     (
         "W5",
         "Cross-instrument scan",
@@ -428,7 +472,7 @@ _DEFS = (
     (
         "W6",
         "As-of with restatements",
-        "Latest version known at 2 ingest instants, 1 inst-month",
+        "Latest version per tick key (ts_ns, side) known at 2 ingest instants",
         _w6,
         _o6,
     ),

@@ -37,6 +37,7 @@ from benchmarks.storage.workloads import (
     LoadStats,
     WorkloadResult,
     build_dataset,
+    default_range,
     parse_ids,
     values_match,
 )
@@ -52,6 +53,10 @@ _W2 = (
     " WHERE version = 1 AND side = 0 GROUP BY ts_ns // 86400000000000)"  # 1 UTC day in ns
 )
 _W2_KEYS = ("n_days", "n_trades", "sum_open", "sum_high", "sum_low", "sum_close", "sum_volume")
+_W4 = (
+    "SELECT ts_ns, price FROM read_parquet(?) WHERE version = 1 AND side = 0"
+    " ORDER BY ts_ns DESC, side DESC LIMIT 1"
+)
 _W3 = (
     "SELECT count(*), sum(price), min(price), max(price) FROM read_parquet(?)"
     " WHERE version = 1 AND ts_ns >= ? AND ts_ns < ?"
@@ -76,6 +81,7 @@ class F5Format:
         self._bytes = 0
         self._rows = 0
         self._prof = str(workdir / "profile.json")
+        self._profiling = False
 
     def load(self, dataset: Dataset) -> LoadStats:
         """Write base partitions, then the restatement rows as an extra immutable part."""
@@ -103,14 +109,15 @@ class F5Format:
             self._con.close()
         self._con = duckdb.connect()
         self._prof = str(self.workdir / "profile.json")
-        self._con.execute("PRAGMA enable_profiling='json'")
-        self._con.execute(f"PRAGMA profiling_output='{self._prof}'")
+        self._profiling = False
 
     def _q(self, sql: str, args: list[Any]) -> list[tuple[Any, ...]]:  # Any: duckdb cell values
         if self._con is None:
             self.reopen()
         assert self._con is not None
         out = self._con.execute(sql, args).fetchall()
+        if not self._profiling:
+            return out
         prof = json.loads(Path(self._prof).read_text(encoding="utf-8"))
         self._bytes += int(prof["io"]["total_bytes_read"])
         self._rows += int(prof["query"]["total_rows_scanned"])
@@ -123,8 +130,22 @@ class F5Format:
                 out += self.store.list_paths(layout.md_partition_prefix("ticks", inst, y, m))
         return [str(self.store.root / f) for f in sorted(out)]
 
+    def io_profile(self, workload: str, params: Mapping[str, Any]) -> WorkloadResult:  # Any: JSON
+        """Re-run with DuckDB JSON profiling on (untimed) to get bytes read / rows scanned."""
+        if self._con is None:
+            self.reopen()
+        assert self._con is not None
+        self._con.execute("PRAGMA enable_profiling='json'")
+        self._con.execute(f"PRAGMA profiling_output='{self._prof}'")
+        self._profiling = True
+        try:
+            return self.run(workload, params)
+        finally:
+            self._profiling = False
+            self._con.execute("PRAGMA disable_profiling")
+
     def run(self, workload: str, params: Mapping[str, Any]) -> WorkloadResult:  # Any: JSON params
-        """Run W2-W6 as DuckDB SQL over the partition files selected from the layout."""
+        """Run W2-W6 as DuckDB SQL (no profiling) over the partition files from the layout."""
         self._bytes = self._rows = 0
         files, p = [self._files(params)], params
         rng = [] if p["lo_ns"] is None else [p["lo_ns"], p["hi_ns"]]
@@ -142,8 +163,7 @@ class F5Format:
                 "max_price": float(r[3]),
             }
         elif workload == "W4":
-            r = self._q("SELECT ts_ns, price FROM read_parquet(?) WHERE version = 1"
-                        " ORDER BY ts_ns DESC LIMIT 1", files)[0]  # fmt: skip
+            r = self._q(_W4, files)[0]
             v = {"ts_ns": int(r[0]), "price": float(r[1])}
         elif workload == "W5":
             v = {}
@@ -156,9 +176,9 @@ class F5Format:
             v = {}
             for k, asof in enumerate(p["asof_ns"]):
                 r = self._q(
-                    "SELECT count(*), sum(price), count_if(version = 2) FROM (SELECT ts_ns,"
+                    "SELECT count(*), sum(price), count_if(version = 2) FROM (SELECT ts_ns, side,"
                     " arg_max(price, version) AS price, max(version) AS version"
-                    " FROM read_parquet(?) WHERE ingested_at_ns <= ? GROUP BY ts_ns)",
+                    " FROM read_parquet(?) WHERE ingested_at_ns <= ? GROUP BY ts_ns, side)",
                     [*files, asof],
                 )[0]
                 v[f"n_{k}"], v[f"sum_price_{k}"], v[f"n_restated_{k}"] = (
@@ -273,7 +293,7 @@ def run_benchmark(
 def _run_w1(
     spec: DatasetSpec, ds: Dataset, factory: Callable[[Path], Format], work: Path, runs: int
 ) -> ResultRow:
-    sub = ds.select(list(ds.instruments[:1]))
+    sub = ds.select(list(ds.instruments[:1])).preloaded()  # source I/O stays outside the timer
     want = WORKLOADS["W1"].oracle(sub, WORKLOADS["W1"].params(sub))["rows"]
     samples: list[tuple[float, float]] = []
     for r in range(runs):
@@ -285,7 +305,7 @@ def _run_w1(
         size = fmt.size_bytes()
         fmt.teardown()
     return _row(
-        spec, fmt, wl="W1", cache="cold", samples=samples, rows=int(want), at_rest=size, res=None
+        spec, fmt, wl="W1", cache="n/a", samples=samples, rows=int(want), at_rest=size, res=None
     )
 
 
@@ -308,6 +328,9 @@ def _run_query(
         cold.append(once())
     once()  # untimed priming run
     warm = [once() for _ in range(runs)]
+    io = fmt.io_profile(wid, p)  # separate untimed pass: profiling never inflates wall/CPU
+    if not values_match(io.value, want):
+        raise OracleMismatchError(f"{wid} {fmt.id}: profiled {io.value} != oracle {want}")
     return [
         _row(
             spec,
@@ -315,9 +338,9 @@ def _run_query(
             wl=wid,
             cache=name,
             samples=[(a, b) for a, b, _ in s],
-            rows=s[-1][2].rows_scanned or 0,
+            rows=io.rows_scanned or 0,
             at_rest=at_rest,
-            res=s[-1][2],
+            res=io,
         )
         for name, s in (("cold", cold), ("warm", warm))
     ]
@@ -334,12 +357,15 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--runs", type=int, default=5)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--start", type=date.fromisoformat, default=date(2020, 1, 1))
-    ap.add_argument("--end", type=date.fromisoformat, default=date(2024, 12, 31))
+    ap.add_argument("--start", type=date.fromisoformat, default=None, help="default: from scale")
+    ap.add_argument(
+        "--end", type=date.fromisoformat, default=None, help="default: TIDAL_SYNTH__END"
+    )
     ap.add_argument("--instruments", type=int, default=None, help="cap on instruments")
     ap.add_argument("--data-root", type=Path, default=DATA_ROOT)
     a = ap.parse_args(argv)
-    spec = DatasetSpec(a.scale, a.seed, a.start, a.end, a.instruments)
+    start, end = default_range(a.scale, a.end)
+    spec = DatasetSpec(a.scale, a.seed, a.start or start, end, a.instruments)
     res = run_benchmark(spec, parse_ids(a.formats, "F"), parse_ids(a.workloads, "W"), a.runs, a.out,
                         data_root=a.data_root)  # fmt: skip
     for r in res:

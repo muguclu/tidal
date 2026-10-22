@@ -25,11 +25,11 @@ class ResultRow(BaseModel):
     seed: int
     format_id: str
     workload_id: str
-    cache: Literal["cold", "warm"]
+    cache: Literal["cold", "warm", "n/a"]  # W1 = fresh-store write: n/a
     runs: int
     wall_p50_s: float
     wall_p95_s: float
-    cpu_s: float  # median process CPU seconds (all threads) per run
+    cpu_s: float  # median CLIENT-process CPU s (all threads); server-side SQL CPU is NOT included
     rows: int  # rows written (W1) or rows scanned by the engine (W2-W6)
     rows_per_s: float | None  # rows / wall_p50_s
     bytes_at_rest: int

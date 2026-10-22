@@ -61,10 +61,12 @@ def test_eur_at_rest_hand_checked() -> None:
 
 def test_eur_per_1k_queries_hand_checked() -> None:
     # 8 MiB -> 2 read ops: 2/10000 x 0.004 = 8e-7 ; egress 8/1024 GiB x 0.08 = 6.25e-4
-    # per query 6.258e-4 -> x1000 = 0.6258
-    assert report.eur_per_1k_queries(8 * 1024**2, BOOK) == pytest.approx(0.6258)
-    # 1 byte still costs one read operation: 1/10000 x 0.004 x 1000 = 0.0004 (+ negligible egress)
-    assert report.eur_per_1k_queries(1, BOOK) == pytest.approx(0.0004, rel=1e-3)
+    # default (in-region, egress 0): 1000 x 8e-7 = 0.0008 ; with internet egress 0.6258
+    assert report.eur_per_1k_queries(8 * 1024**2, BOOK) == pytest.approx(0.0008)
+    got = report.eur_per_1k_queries(8 * 1024**2, BOOK, internet_egress=True)
+    assert got == pytest.approx(0.6258)
+    # 1 byte still costs one read operation: 1/10000 x 0.004 x 1000 = 0.0004
+    assert report.eur_per_1k_queries(1, BOOK) == pytest.approx(0.0004)
     assert report.eur_per_1k_queries(None, BOOK) is None
 
 
@@ -74,13 +76,20 @@ def test_precision_limited_price_is_refused() -> None:
 
 
 def test_markdown_labels_every_eur_cell_modelled(tmp_path: Path) -> None:
-    rows = [_row(), _row(workload_id="W1")]
+    rows = [_row(), _row(workload_id="W1", cache="n/a")]
     md = report.render_markdown(rows, BOOK, {"python": "3.12"})
     body = [ln for ln in md.splitlines() if ln.startswith("| F5")]
     assert len(body) == 2
     assert all(ln.count("(MODELLED)") >= 1 for ln in body)
     assert "0.040000 (MODELLED)" in body[0] or "0.040000 (MODELLED)" in body[1]
     assert "[MODELLED] EUR/1k queries =" in md
+    assert "lower bound" in md
+    assert "page cache is NOT dropped" in md
+    assert "client-process CPU only" in md
+    assert "(C5)" in md
+    assert "internet egress" not in md.split("Environment")[0].split("\n", 1)[0]
+    md2 = report.render_markdown(rows, BOOK, {}, internet_egress=True)
+    assert "incl. internet egress" in md2
     assert "python=3.12" in md
     paths = report.render_charts(rows, tmp_path)
     assert all(p.exists() and p.stat().st_size > 0 for p in paths)
