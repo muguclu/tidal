@@ -1,4 +1,6 @@
 import gzip
+import hashlib
+import json
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
@@ -21,6 +23,8 @@ from tidal.ingest.sources.eia import (
     EiaUnavailable,
     parse_eia_page,
     redact_url,
+    strip_api_key,
+    strip_credential_echo,
 )
 from tidal.storage.parquet_writer import LocalStore
 
@@ -297,3 +301,65 @@ def test_different_payloads_same_day_distinct_blobs_same_payload_idempotent(tmp_
     assert raw_blob_path(second) in paths
     run(src)  # same payload again: no new blob
     assert store.list_paths("raw/") == paths
+
+
+def echoing_server(key: str) -> Handler:
+    inner = Server()
+
+    def h(request: httpx.Request) -> httpx.Response:
+        body = json.loads(inner(request).content)
+        body["request"]["params"]["api_key"] = request.url.params["api_key"]
+        body["request"]["params"]["facets"]["x"] = [{"api_key": key}]
+        return httpx.Response(200, content=json.dumps(body, indent=2).encode())
+
+    return h
+
+
+def test_key_echo_stripped_before_digest_and_storage(tmp_path: Path) -> None:
+    def fetch_with(key: str, sub: str) -> tuple[list[RawChunk], LocalStore]:
+        store = LocalStore(tmp_path / sub)
+        src = EiaSource(
+            httpx.Client(transport=httpx.MockTransport(echoing_server(key))),
+            SecretStr(key),
+            store,
+            np.random.Generator(np.random.PCG64(1)),
+            clock=FixedClock(1),
+            sleep=lambda _: None,
+        )
+        return run(src), store
+
+    chunks_a, store_a = fetch_with("KEYAAAAAAAA", "a")
+    chunks_b, _ = fetch_with("KEYBBBBBBBB", "b")
+    assert [c.sha256 for c in chunks_a] == [c.sha256 for c in chunks_b]  # rotation-invariant
+    for c in chunks_a:
+        assert b"KEYAAAAAAAA" not in c.payload
+        assert c.sha256 == hashlib.sha256(c.payload).hexdigest()
+        assert "api_key" not in json.loads(c.payload)["request"]["params"]
+        assert json.loads(c.payload)["response"]["data"]  # data untouched
+    for path in store_a.list_paths("raw/"):
+        assert b"KEYAAAAAAAA" not in gzip.decompress((tmp_path / "a" / path).read_bytes())
+
+
+def test_strip_credential_echo_is_verbatim_without_echo() -> None:
+    assert strip_credential_echo(PAGE1) == PAGE1
+    assert strip_credential_echo(b"not json") == b"not json"
+    assert strip_api_key([1]) == [1]
+
+
+def test_key_outside_request_refused(tmp_path: Path) -> None:
+    leak = PAGE1.replace(b'"RWTC"', b'"RWTC" ', 1).replace(b"WTI Crude Oil", KEY.encode(), 1)
+    src, _, store = make(tmp_path, lambda _: httpx.Response(200, content=leak))
+    with pytest.raises(EiaUnavailable):
+        run(src)
+    assert store.list_paths("raw/") == []
+
+
+def test_retry_after_capped_at_300(tmp_path: Path) -> None:
+    server = Server([httpx.Response(429, headers={"Retry-After": "120"})])
+    src, sleeps, _ = make(tmp_path, server)
+    run(src)
+    assert sleeps == [120.0]
+    server = Server([httpx.Response(429, headers={"Retry-After": "9999"})])
+    src, sleeps, _ = make(tmp_path / "2", server)
+    run(src)
+    assert sleeps == [eia.MAX_RETRY_AFTER_S]

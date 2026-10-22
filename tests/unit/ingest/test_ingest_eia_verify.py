@@ -72,3 +72,18 @@ def test_main_without_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
     monkeypatch.delenv(m.KEY_ENV, raising=False)
     monkeypatch.chdir(tmp_path)
     assert m.main([]) == 2
+
+
+def test_record_strips_echoed_key(tmp_path: Path) -> None:
+    m = load()
+    inner = handler()
+
+    def echo(request: httpx.Request) -> httpx.Response:
+        body = json.loads(inner(request).content)
+        body["request"] = {"params": {"api_key": KEY, "frequency": "daily"}}
+        return httpx.Response(200, json=body)
+
+    assert m.verify(httpx.Client(transport=httpx.MockTransport(echo)), KEY, tmp_path) == []
+    files = list(tmp_path.glob("*.json"))
+    assert files
+    assert all(KEY not in f.read_text() for f in files)

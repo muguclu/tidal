@@ -42,6 +42,7 @@ MAX_PAGES = 500
 MAX_ATTEMPTS = 5
 BACKOFF_BASE_S = 1.0
 MAX_BACKOFF_S = 60.0
+MAX_RETRY_AFTER_S = 300.0
 _HTTP_BAD_REQUEST = 400
 _HTTP_TOO_MANY = 429
 _HTTP_SERVER_ERROR = 500
@@ -86,10 +87,47 @@ def redact_url(text: str) -> str:
 
 
 def _retry_delay(attempt: int, retry_after: str | None, rng: np.random.Generator) -> float:
+    """Backoff capped at 60 s with jitter; a numeric ``Retry-After`` raises it, up to 300 s."""
     delay = min(MAX_BACKOFF_S, BACKOFF_BASE_S * 2**attempt) * (0.5 + 0.5 * float(rng.random()))
     if retry_after is not None and retry_after.strip().isdigit():
-        delay = max(delay, float(retry_after))
-    return float(min(delay, MAX_BACKOFF_S))
+        delay = min(max(delay, float(retry_after)), MAX_RETRY_AFTER_S)
+    return float(delay)
+
+
+def strip_api_key(body: object) -> object:
+    """Remove every ``api_key`` field below the top-level ``request`` object of a v2 response.
+
+    EIA may echo the query parameters (including the key) in ``request.params``. Only that
+    subtree is touched; ``response`` data is left as is.
+    """
+    if not isinstance(body, dict) or "request" not in body:
+        return body
+
+    def clean(node: object) -> object:
+        if isinstance(node, dict):
+            return {k: clean(v) for k, v in node.items() if str(k).lower() != "api_key"}
+        if isinstance(node, list):
+            return [clean(v) for v in node]
+        return node
+
+    return {**body, "request": clean(body["request"])}
+
+
+def strip_credential_echo(payload: bytes) -> bytes:
+    """Raw payload = verbatim response minus any credential echo.
+
+    Bytes are returned untouched unless an ``api_key`` field exists in ``request``; then the
+    document is re-serialised compactly (original key order, ``ensure_ascii=False``) so the sha256
+    and digest never depend on the key value. Unparseable bodies are returned as is.
+    """
+    try:
+        body = json.loads(payload)
+    except ValueError:
+        return payload
+    cleaned = strip_api_key(body)
+    if cleaned == body:
+        return payload
+    return json.dumps(cleaned, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
 class EiaSource:
@@ -142,7 +180,9 @@ class EiaSource:
             if attempt == MAX_ATTEMPTS - 1:
                 break
             delay = _retry_delay(attempt, retry_after, self._rng)
-            _log.warning("eia_retry", url=url, status=status, attempt=attempt + 1, delay_s=delay)
+            _log.warning(
+                "eia_retry", url=redact_url(url), status=status, attempt=attempt + 1, delay_s=delay
+            )
             self._sleep(delay)
         raise EiaUnavailable(f"EIA still failing after {MAX_ATTEMPTS} attempts")
 
@@ -171,7 +211,9 @@ class EiaSource:
                 "offset": offset,
                 "length": PAGE_LENGTH,
             }
-            payload = self._get(url, params)
+            payload = strip_credential_echo(self._get(url, params))
+            if self._key.get_secret_value().encode() in payload:
+                raise EiaUnavailable("EIA response echoes the credential outside request.params")
             fetched_at_ns = self._clock.now_ns()
             total, first_day, n_rows = _page_info(payload, start)
             chunk = RawChunk(
@@ -210,7 +252,8 @@ def parse_eia_page(payload: bytes) -> pa.Table:
     """Parse a v2 page to ``(ts_ns int64, value float64, series string)``.
 
     ``ts_ns`` is UTC midnight of the trade date (ADR-0009). Negative values are kept; null or
-    non-numeric values become NaN (never filled). Normalisation to BAR_V1 is T-105's job.
+    non-numeric values become NaN (never filled). Normalisation to BAR_V1 is T-105's job: it must
+    drop (or flag) the NaN rows, because data-contracts §3.1 says OHLC is never NaN.
     """
     try:
         data = json.loads(payload)["response"]["data"]
