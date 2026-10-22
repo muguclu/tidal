@@ -186,6 +186,16 @@ instead of `ts_ns` (`md.bar_baseline`), to show the epoch + compression gain hon
 - Latest view: per key, the row with max `version`.
 - As-of view (`as_of = T`): per key, the row with max `version` among rows with `ingested_at_ns ≤ T`;
   keys with no such row are absent.
+- **Tiering and compaction (ADR-0014).** Moving rows to Parquet never drops a version or an
+  `ingested_at_ns`. Equal rows (same key, version, values) may exist more than once, with different
+  `ingested_at_ns`; readers treat them as one, and compaction keeps the earliest. A restatement
+  that reaches SQL after its key was migrated is filed there as `version = 1`; if it is newer than
+  the key's whole cold history, tiering compares it with the cold row of the max version (same rule
+  as the cold write path of ingest): an equal value adds nothing, any other value (including a
+  revert to an earlier one) becomes `max + 1` with `RESTATED`, so versions stay monotone across the
+  tiers. Until that run the reader sees the tie of SQL `v1` and cold `v1`; equal-version duplicates
+  resolve to the copy with the minimum `ingested_at_ns`. The same key and version with different
+  values and no newer `ingested_at_ns` is an error, never a silent overwrite.
 
 ## 8. Versioning rules
 
@@ -194,5 +204,8 @@ instead of `ts_ns` (`md.bar_baseline`), to show the epoch + compression gain hon
 
 ## Changelog
 
+- **v1 clarification (T-205, ADR-0014)**: no schema change. §7 documents how tiering and compaction
+  treat duplicate rows and re-version late restatements; `version` of a migrated restatement can be
+  larger than the one SQL assigned.
 - **v1 clarification (T-117, ADR-0013)**: no version bump, no, no schema change. The v1 daily catalogue (`EIA.*`, `FRED.*`)
   is sourced synthetically; ids are unchanged, `SYNTHETIC` is set on every row. EIA's end-of-futures note removed.

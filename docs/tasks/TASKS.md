@@ -83,7 +83,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 ### Lane B — tiering (data-engineer, infra-engineer)
 | ID | Title | Agent | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|---|
-| T-205 | Migration job, retag, compaction | data-engineer | T-106 | `src/tidal/storage/{tiering,retag,compact,tiering_cli}.py` +tests | SPEC-03 §2–3.1; applock; manifest; `age_band` tags; all versions migrated and kept; sweeps late restatements written to SQL below the watermark into a new `part-` (reader already merges them, T-208) | todo |
+| T-205 | Migration job, retag, compaction | data-engineer | T-106 | `src/tidal/storage/{tiering,retag,compact,tiering_cli}.py` +tests | SPEC-03 §2–3.1; applock; manifest; `age_band` tags; all versions migrated and kept; sweeps late restatements written to SQL below the watermark into a new `part-` (reader already merges them, T-208) | done |
 | T-206 | Crash-injection property tests | test-engineer | T-205 | `tests/integration/test_tiering_crash.py` | kill at each step ⇒ same final state | todo |
 | T-207 | Lifecycle policy + retag | infra-engineer | T-121, T-205 | `modules/storage/lifecycle.tf` | rules = SPEC-03 §4 (tag filters match T-205 tag names) | todo |
 | T-208 | Unified reader | data-engineer | T-106 | `src/tidal/query/{reader,duck}.py` +tests | hypothesis equality vs SQL baseline (200 ranges) | done |
@@ -105,7 +105,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 |---|---|---|---|---|---|---|
 | T-301 | Engine, strategies, metrics | data-engineer | T-003 | `src/tidal/backtest/**` | SPEC-05 §2–3; engine is pure over polars frames (data loading is the worker's job), so it can start in W2 | todo |
 | T-302 | Golden + look-ahead + determinism tests | test-engineer | T-301 | `tests/unit/backtest/**`, `tests/fixtures/backtest/**` | hash identical across CI matrix | todo |
-| T-303 | Worker consumer | data-engineer | T-301, T-208 | `src/tidal/worker/**` +tests | idempotent; SIGTERM abandon; lock renew; `tidal dlq inspect/resubmit` CLI | todo |
+| T-303 | Worker consumer | data-engineer | T-301, T-208 | `src/tidal/worker/**` +tests | idempotent; SIGTERM abandon; lock renew; `tidal dlq inspect/resubmit` CLI. Also consume `tiering-jobs`: validate `tiering.job/v1` (`TieringJobMessage`) and call `tidal.storage.tiering.run_job` (T-205 provides it; a held `sp_getapplock` returns `locked=True` => complete the message) | todo |
 | T-304 | Submit endpoint + aggregator | api-engineer | T-209, T-303 | `api/routers/backtests.py`, `src/tidal/api/aggregator.py` +tests | sweep fan-out batching; parent status; aggregator idempotent on redelivery (messaging §4); messages serialised with `exclude_none=True` and checked against `MAX_MESSAGE_BYTES` | todo |
 
 ### Lane B — containers & AKS (platform-engineer, infra-engineer)

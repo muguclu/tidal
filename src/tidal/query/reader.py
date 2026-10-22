@@ -93,12 +93,18 @@ def tier_for(start_ns: int, end_ns: int, watermark: int | None) -> Tier:
 
 
 def resolve_versions(df: pl.DataFrame, key: Sequence[str]) -> pl.DataFrame:
-    """One row per ``key``: the max ``version`` (§7), ordered by ``key``."""
-    return (
-        df.sort([*key, "version"])
-        .unique(subset=list(key), keep="last", maintain_order=True)
-        .sort(list(key))
-    )
+    """One row per ``key``: the max ``version`` (§7), ordered by ``key``.
+
+    Equal-version duplicates (the same row in both tiers, ADR-0014) resolve to the copy with the
+    smallest ``ingested_at_ns`` so the result does not depend on the concatenation order.
+    """
+    if "ingested_at_ns" in df.columns:
+        df = df.sort(
+            [*key, "version", "ingested_at_ns"], descending=[False] * (len(key) + 1) + [True]
+        )
+    else:
+        df = df.sort([*key, "version"])
+    return df.unique(subset=list(key), keep="last", maintain_order=True).sort(list(key))
 
 
 class UnifiedReader:

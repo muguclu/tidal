@@ -36,6 +36,12 @@ marketdata/v1/{dataset}/instrument={instrument_id}/year={YYYY}/month={MM}/part-{
 - Ticks and intraday bars: one file per instrument per **month** (roll to a new `part-` only above
   10M rows). Epoch Parquet is ~5–10 bytes/tick, so a month is typically 5–60 MB; bigger targets
   would need multi-month files and break monthly pruning.
+- Each partition may hold a `_manifest.json` (`marketdata/v1/.../month=MM/_manifest.json`, built by
+  `layout.md_manifest_path`): `dataset, instrument_id, year, month, rows, min_ts_ns, max_ts_ns` and,
+  per part, `name, rows, min_ts_ns, max_ts_ns, bytes, sha256, source_hash`. It is **derived,
+  replaceable and not read by the reader**: tiering uses it to skip parts that cannot overlap a month
+  and rebuilds it (delete + create) after every change of the partition. A missing or stale manifest
+  never changes query results.
 - Files are **immutable**. Restatements write a new `part-` containing the higher-`version` rows.
   Compaction merges the parts of one partition into one file **keeping every version** (as-of needs
   them, data-contracts §7), writes it, verifies row count + checksum, then deletes the old parts and
@@ -69,6 +75,11 @@ Lifecycle rules filter on `age_band` tags (not on last-modified, because a backf
 data "today"). This is a deliberate design point — see ADR-0004.
 
 ## 5. Naming rules
+
+- Local dev (`LocalStore`) keeps blob index tags as JSON sidecars at
+  `<root>/.tags/<container>/<blob name>.json`, outside every listed prefix. A sidecar is removed when
+  its part is deleted (compaction, rollback of a failed write) so a recreated `part-` name starts
+  untagged. On Azure the tags live on the blob and disappear with it.
 
 - All lowercase except `instrument=` values (which keep contract casing).
 - No spaces; `-` in file names, `_` in partition values.
