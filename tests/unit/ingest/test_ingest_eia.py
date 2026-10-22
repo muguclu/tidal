@@ -93,7 +93,7 @@ def test_pagination_two_pages_saved(tmp_path: Path) -> None:
     paths = [raw_blob_path(c) for c in chunks]
     assert paths[0].startswith("raw/eia/rwtc/20200416-")
     assert paths[1].startswith("raw/eia/rwtc/20200421-")
-    assert store.list_paths("raw/eia/") == sorted(paths)
+    assert list(store.list("raw/eia/")) == sorted(paths)
     assert gzip.decompress((tmp_path / paths[0]).read_bytes()) == PAGE1
 
 
@@ -129,16 +129,16 @@ def test_raw_saved_even_if_parse_fails(tmp_path: Path) -> None:
     bad = b'{"response":{"total":"1","data":[{"period":"2020-04-16","series":"RWTC","value":"x"}]}}'
     src, _, store = make(tmp_path, lambda _: httpx.Response(200, content=bad))
     (chunk,) = run(src)
-    assert store.list_paths("raw/eia/") == [raw_blob_path(chunk)]
+    assert list(store.list("raw/eia/")) == [raw_blob_path(chunk)]
     assert parse_eia_page(chunk.payload).column("value").to_pylist()[0] != 0.0  # NaN, no crash
 
 
 def test_refetch_is_idempotent(tmp_path: Path) -> None:
     src, _, store = make(tmp_path, Server())
     run(src)
-    before = {p: (tmp_path / p).read_bytes() for p in store.list_paths("raw/")}
+    before = {p: (tmp_path / p).read_bytes() for p in list(store.list("raw/"))}
     run(src)
-    assert {p: (tmp_path / p).read_bytes() for p in store.list_paths("raw/")} == before
+    assert {p: (tmp_path / p).read_bytes() for p in list(store.list("raw/"))} == before
 
 
 @pytest.mark.parametrize("status", [429, 500, 503])
@@ -214,7 +214,7 @@ def test_key_in_query_but_never_in_logs_or_paths(tmp_path: Path) -> None:
     assert server.requests[0].url.params["api_key"] == KEY
     assert logs
     assert KEY not in repr(logs)
-    assert all(KEY not in p for p in store.list_paths("raw/"))
+    assert all(KEY not in p for p in list(store.list("raw/")))
 
 
 def test_redact_url() -> None:
@@ -299,11 +299,11 @@ def test_different_payloads_same_day_distinct_blobs_same_payload_idempotent(tmp_
     (second,) = run(src)
     assert first.day == second.day
     assert raw_blob_path(first) != raw_blob_path(second)
-    paths = store.list_paths("raw/")
+    paths = list(store.list("raw/"))
     assert raw_blob_path(first) in paths
     assert raw_blob_path(second) in paths
     run(src)  # same payload again: no new blob
-    assert store.list_paths("raw/") == paths
+    assert list(store.list("raw/")) == paths
 
 
 def echoing_server(key: str) -> Handler:
@@ -339,7 +339,7 @@ def test_key_echo_stripped_before_digest_and_storage(tmp_path: Path) -> None:
         assert c.sha256 == hashlib.sha256(c.payload).hexdigest()
         assert "api_key" not in json.loads(c.payload)["request"]["params"]
         assert json.loads(c.payload)["response"]["data"]  # data untouched
-    for path in store_a.list_paths("raw/"):
+    for path in list(store_a.list("raw/")):
         assert b"KEYAAAAAAAA" not in gzip.decompress((tmp_path / "a" / path).read_bytes())
 
 
@@ -354,7 +354,7 @@ def test_key_outside_request_refused(tmp_path: Path) -> None:
     src, _, store = make(tmp_path, lambda _: httpx.Response(200, content=leak))
     with pytest.raises(EiaUnavailable):
         run(src)
-    assert store.list_paths("raw/") == []
+    assert list(store.list("raw/")) == []
 
 
 def test_retry_after_capped_at_300(tmp_path: Path) -> None:

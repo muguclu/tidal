@@ -194,7 +194,7 @@ class Router:
                 prefix = layout.md_partition_prefix(dataset, iid, year, month)
                 parts = [
                     read_part(self.store, p, ["ts_ns", "version", *_VALUES])
-                    for p in self.store.list_paths(prefix)
+                    for p in self.store.list(prefix)
                     if p.endswith(".parquet")
                 ]
                 part = _plan_cold(part, pa.concat_tables(parts) if parts else None)

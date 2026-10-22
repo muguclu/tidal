@@ -272,3 +272,24 @@ def test_local_store_read_list_delete(tmp_path: Path) -> None:
         store.delete("../f.bin")
     with pytest.raises(layout.InvalidPath):
         store.read("c/../../x")
+
+
+def test_local_store_relative_root_and_guards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    store = pw.LocalStore(Path("./.data"))
+    src = tmp_path / "f.bin"
+    src.write_bytes(b"x")
+    store.put_new("c/a/p.bin", src)
+    assert list(store.list("c")) == list(store.list("c/")) == ["c/a/p.bin"]
+    assert list(store.list("nocontainer")) == []
+    with pytest.raises(layout.InvalidPath):
+        list(store.list(""))
+    assert store.read("c/a/p.bin") == b"x" and store.exists("c/a/p.bin")
+    with pytest.raises(layout.InvalidPath):
+        store.delete("c/a")  # a directory
+    with pytest.raises(layout.InvalidPath):
+        store.put_new("../escape.bin", src)
+    store.delete("c/a/p.bin")
+    assert not store.exists("c/a/p.bin")

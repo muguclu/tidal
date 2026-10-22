@@ -64,7 +64,7 @@ def bars(ts: list[int], prices: list[float], *, ingested: int = NOW, iid: str = 
 
 
 def parts(store: ObjectStore) -> list[str]:
-    return [p for p in store.list_paths("marketdata/") if p.endswith(".parquet")]
+    return [p for p in list(store.list("marketdata/")) if p.endswith(".parquet")]
 
 
 def test_split_hot_and_cold_by_window(router: Router) -> None:

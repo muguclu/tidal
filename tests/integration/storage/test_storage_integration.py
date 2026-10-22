@@ -6,8 +6,10 @@ NOT executed on the box that authored them (no docker). Run with ``uv run pytest
 # ruff: noqa: PLC0415, PT018
 
 import math
+import os
 import re
 import time
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -20,7 +22,7 @@ from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.engine import URL
 from testcontainers.community.mssql import SqlServerContainer
 from testcontainers.core.container import DockerContainer
-from testcontainers.core.wait_strategies import LogMessageWaitStrategy
+from testcontainers.core.wait_strategies import ExecWaitStrategy, LogMessageWaitStrategy
 
 from tidal.contracts.schemas import BAR_V1, TICK_V1, Interval
 from tidal.storage import layout
@@ -46,26 +48,74 @@ def _odbc_driver() -> str:
     return str(found[-1])
 
 
+class _SlowStartSqlServer(SqlServerContainer):
+    """SqlServerContainer with a 300 s readiness timeout (shared Docker hosts are slow)."""
+
+    def _connect(self) -> None:
+        ExecWaitStrategy(
+            [
+                "bash",
+                "-c",
+                '/opt/mssql-tools*/bin/sqlcmd -U "$SQLSERVER_USER" -P "$SA_PASSWORD" '
+                "-Q 'SELECT 1' -C",
+            ]
+        ).with_startup_timeout(300).wait_until_ready(self)
+
+
+def _engine_for(odbc_server: str, user: str, password: str, database: str) -> Engine:
+    odbc = (
+        f"DRIVER={{{_odbc_driver()}}};SERVER={odbc_server};DATABASE={database};"
+        f"UID={user};PWD={{{password}}};TrustServerCertificate=yes"
+    )
+    return create_engine(
+        URL.create("mssql+pyodbc", query={"odbc_connect": odbc}), fast_executemany=True
+    )
+
+
+def _wait_for_login(eng: Engine, seconds: float) -> None:
+    deadline = time.monotonic() + seconds
+    while True:  # the server accepts TCP before it accepts logins
+        try:
+            with eng.connect():
+                return
+        except Exception:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(2)
+
+
 @pytest.fixture(scope="module")
 def engine() -> Iterator[Engine]:
-    with SqlServerContainer("mcr.microsoft.com/mssql/server:2022-latest", password=PASSWORD) as c:
-        odbc = (
-            f"DRIVER={{{_odbc_driver()}}};SERVER={c.get_container_host_ip()},"
-            f"{c.get_exposed_port(1433)};DATABASE=master;UID=sa;PWD={{{PASSWORD}}};"
-            "TrustServerCertificate=yes"
+    """A SQL Server: ``TIDAL_TEST_SQL_URL`` (``host,port``; SA password from
+    ``TIDAL_TEST_SQL_PASSWORD`` or ``TIDAL_SQL__PASSWORD``) with a throwaway database, else a
+    testcontainer."""
+    shared = os.environ.get("TIDAL_TEST_SQL_URL")
+    if shared:
+        pw_env = os.environ.get("TIDAL_TEST_SQL_PASSWORD") or os.environ.get("TIDAL_SQL__PASSWORD")
+        if not pw_env:
+            pytest.skip("TIDAL_TEST_SQL_URL set but no TIDAL_TEST_SQL_PASSWORD")
+        admin = _engine_for(shared, "sa", pw_env, "master").execution_options(
+            isolation_level="AUTOCOMMIT"
         )
-        eng = create_engine(
-            URL.create("mssql+pyodbc", query={"odbc_connect": odbc}), fast_executemany=True
+        _wait_for_login(admin, 60)
+        db = f"tidal_test_{uuid.uuid4().hex[:12]}"
+        with admin.connect() as conn:
+            conn.execute(text(f"CREATE DATABASE [{db}]"))
+        eng = _engine_for(shared, "sa", pw_env, db)
+        try:
+            yield eng
+        finally:
+            eng.dispose()
+            with admin.connect() as conn:
+                conn.execute(text(f"ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE"))
+                conn.execute(text(f"DROP DATABASE [{db}]"))
+            admin.dispose()
+        return
+    with _SlowStartSqlServer("mcr.microsoft.com/mssql/server:2022-latest", password=PASSWORD) as c:
+        eng = _engine_for(
+            f"{c.get_container_host_ip()},{c.get_exposed_port(1433)}", "sa", PASSWORD, "master"
         )
-        deadline = time.monotonic() + 60
-        while True:  # the server accepts TCP before it accepts logins
-            try:
-                with eng.connect():
-                    break
-            except Exception:
-                if time.monotonic() > deadline:
-                    raise
-                time.sleep(2)
+        _wait_for_login(eng, 60)
         yield eng
 
 
@@ -236,8 +286,8 @@ def test_azure_store_is_create_only_and_lists(azurite_url: str, tmp_path: Path) 
     store.put_new("tidalstoretest/v1/a/part-00000.parquet", f)
     with pytest.raises(pw.ImmutableFileExists):
         store.put_new("tidalstoretest/v1/a/part-00000.parquet", f)
-    assert store.list_paths("tidalstoretest/v1/a/") == ["tidalstoretest/v1/a/part-00000.parquet"]
-    assert store.list_paths("tidalstoretest/v1/b/") == []
+    assert list(store.list("tidalstoretest/v1/a/")) == ["tidalstoretest/v1/a/part-00000.parquet"]
+    assert list(store.list("tidalstoretest/v1/b/")) == []
 
 
 def test_azure_store_read_list_delete(azurite_url: str, tmp_path: Path) -> None:
@@ -259,6 +309,10 @@ def test_azure_store_read_list_delete(azurite_url: str, tmp_path: Path) -> None:
     with pytest.raises(NotFound):
         store.read("tidalrwtest/v1/nope")
     assert list(store.list("tidalrwtest/v1/")) == sorted(paths)
+    assert list(store.list("tidalrwtest")) == list(store.list("tidalrwtest/")) != []
+    assert list(store.list("nosuchcontainer")) == []
+    with pytest.raises(layout.InvalidPath):
+        list(store.list(""))
     assert list(store.list("tidalrwtest/v1")) == sorted([*paths, other])
     store.delete(paths[0])
     store.delete(paths[0])  # idempotent

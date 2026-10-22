@@ -118,7 +118,7 @@ def test_synth_s_one_instrument_month_hot_and_cold(
     for interval in ("1s", "1m", "1h", "1d"):
         dataset = f"bars_{interval}"
         month = 0 if interval == "1d" else 1
-        assert store.list_paths(layout.md_partition_prefix(dataset, iid, 2025, month))
+        assert list(store.list(layout.md_partition_prefix(dataset, iid, 2025, month)))
     assert ctx.repo.read_bars(iid, Interval.H1, 0, clock.now_ns() + 1).num_rows > 0
     with engine.connect() as c:
         row = c.execute(
