@@ -2,7 +2,7 @@
 
 import itertools
 from datetime import date
-from typing import Any
+from typing import Any  # Any: rows from Table.to_pylist() are heterogeneous dicts
 
 import numpy as np
 import polars as pl
@@ -13,10 +13,10 @@ from hypothesis import strategies as st
 
 from tidal.common.errors import ValidationFailed
 from tidal.common.timeutil import INTERVAL_NS, FixedClock
-from tidal.contracts.schemas import BAR_V1, TICK_V1, Interval
+from tidal.contracts.schemas import BAR_V1, TICK_V1, Interval, QualityFlag
 from tidal.ingest.sources import synthetic
 from tidal.ingest.validate import validate_and_flag
-from tidal.storage.aggregate import aggregate_ticks
+from tidal.storage.aggregate import BarAggregator, aggregate_ticks
 
 INST = "SYN.BRENT.TICK"
 T0 = 1709251200 * 10**9  # 2024-03-01T00:00:00Z
@@ -101,11 +101,17 @@ def tick_sets(draw: st.DrawFn) -> pa.Table:
     ts = (T0 + DAY // 2 + np.cumsum(gaps)).tolist()
     price = draw(st.lists(st.floats(-100, 100), min_size=n, max_size=n))
     side = draw(st.lists(st.integers(0, 2), min_size=n, max_size=n))
-    seen: dict[tuple[int, int], int] = {}  # key (ts, side) repeats are restatements: version+1
+    # Repeated (ts, side) keys are restatements; versions are distinct (PK) but may arrive in
+    # any order (reversed here when `flip`).
+    flip = draw(st.booleans())
+    total: dict[tuple[int, int], int] = {}
+    for t, sd in zip(ts, side, strict=True):
+        total[t, sd] = total.get((t, sd), 0) + 1
+    seen: dict[tuple[int, int], int] = {}
     version = []
     for t, sd in zip(ts, side, strict=True):
         seen[t, sd] = seen.get((t, sd), 0) + 1
-        version.append(seen[t, sd])
+        version.append(total[t, sd] - seen[t, sd] + 1 if flip else seen[t, sd])
     quality = draw(st.lists(st.integers(0, 31), min_size=n, max_size=n))
     return make_ticks(ts, price, side=side, version=version, quality=quality)
 
@@ -202,6 +208,8 @@ def test_bars_validate_and_ohlc_invariants(interval: Interval) -> None:
     assert d.select(ok.all()).item()
     assert (d["low"] < 0).any()
     assert validate_and_flag(bars).num_rows == bars.num_rows
+    flagged = validate_and_flag(bars, synthetic=True)
+    assert (flagged.column("quality").to_numpy() & QualityFlag.SYNTHETIC).all()
 
 
 def test_syn_month_s_scale_through_1m_and_1d() -> None:
@@ -222,3 +230,41 @@ def test_syn_month_s_scale_through_1m_and_1d() -> None:
     assert (days.column("ts_ns").to_numpy() % DAY == 0).all()
     one = pa.concat_tables(chunks).combine_chunks()
     assert run([one], Interval.M1).equals(run(chunks, Interval.M1))
+
+
+def test_reviewer_example_chunking_independent_and_duplicate_raises() -> None:
+    s = 10**9
+    ts = [T0 + 1, T0 + 1, T0 + 2 * s, T0 + 2 * s, T0 + 9 * s]
+    ok = make_ticks(ts, [1.0, 2.0, 3.0, 4.0, 5.0], version=[1, 2, 1, 2, 1])
+    ref = reference(ok, Interval.S1)
+    for cuts in ([], [1], [2], [3], [1, 3], [1, 2, 3, 4]):
+        bounds = [0, *cuts, 5]
+        chunks = [ok.slice(a, b - a) for a, b in itertools.pairwise(bounds)]
+        assert as_rows(run(chunks, Interval.S1)) == ref
+    dup = make_ticks(ts, [1.0, 2.0, 3.0, 4.0, 5.0], version=[1, 1, 1, 2, 1])
+    with pytest.raises(ValidationFailed):
+        run([dup], Interval.S1)
+    with pytest.raises(ValidationFailed):
+        run([dup.slice(0, 1), dup.slice(1)], Interval.S1)
+
+
+def test_unsorted_within_chunk_raises() -> None:
+    with pytest.raises(ValidationFailed):
+        run([make_ticks([T0 + 5, T0 + 1])], Interval.S1)
+
+
+def test_bar_aggregator_one_pass_serves_all_intervals() -> None:
+    rng = np.random.default_rng(5)
+    ts = (T0 + np.cumsum(rng.integers(1, 3 * 10**11, 400))).tolist()
+    ticks = make_ticks(ts, rng.standard_normal(400).tolist())
+    chunks = [ticks.slice(a, 37) for a in range(0, 400, 37)]
+    agg = BarAggregator(list(Interval))
+    got: dict[Interval, list[pa.Table]] = {i: [] for i in Interval}
+    for c in chunks:
+        for iv, tabs in agg.feed(c).items():
+            got[iv].extend(tabs)
+    for iv, tabs in agg.flush().items():
+        got[iv].extend(tabs)
+    for iv in Interval:
+        assert pa.concat_tables(got[iv]).equals(run([ticks], iv))
+    assert all(v == [] for v in agg.flush().values())
