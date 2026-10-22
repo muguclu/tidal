@@ -195,6 +195,47 @@ METERS: tuple[MeterSpec, ...] = (
         "Basic",
         "Basic Messaging Operations",
     ),
+    # Standard adds a fixed base charge per namespace (accrues while it exists) plus operations.
+    # The API publishes the base unit twice under the same sku/meter name: hourly (meter 9d0c5c5c)
+    # and monthly (meter d5034e45). Both are pinned by meter_id; use ONE per calculation.
+    _m(
+        "servicebus_standard_base_hour",
+        "Service Bus",
+        "Service Bus",
+        "Standard",
+        "Standard Base Unit",
+        meter_id="9d0c5c5c-f0ff-48c2-8c68-9ee7ffd306af",
+        note="per namespace-hour; month = x730; fixed cost even when idle",
+    ),
+    _m(
+        "servicebus_standard_base_month",
+        "Service Bus",
+        "Service Bus",
+        "Standard",
+        "Standard Base Unit",
+        meter_id="d5034e45-00c1-48c6-8c00-c866f788e033",
+        note="per namespace-month list price; alternative to the hourly meter, do not add both",
+    ),
+    # Operations are tiered in millions: tier 0 = 0.0 (first 13M included in the base unit),
+    # 13M = first paid tier, then 100M and 2,500M tiers (not snapshotted).
+    _m(
+        "servicebus_standard_ops_included_1m",
+        "Service Bus",
+        "Service Bus",
+        "Standard",
+        "Standard Messaging Operations",
+        allow_zero=True,
+        note="tier 0: first 13 million operations/month are included (price 0.0)",
+    ),
+    _m(
+        "servicebus_standard_ops_1m",
+        "Service Bus",
+        "Service Bus",
+        "Standard",
+        "Standard Messaging Operations",
+        tier_min=13.0,
+        note="per 1M operations, first paid tier (13M to 100M/month); tier minimum is in millions",
+    ),
     # --- Container Apps Consumption (4-dp rounding makes per-second meters read 0) ---
     _m(
         "containerapps_vcpu_active_second",
@@ -336,6 +377,29 @@ METERS: tuple[MeterSpec, ...] = (
         "Basic",
         "Data Stored",
         note="Basic includes 10 GiB in the registry unit",
+    ),
+    # ACR Tasks bill vCPU-seconds (same meter on Basic/Standard/Premium). Tier 0 is the free
+    # first 6,000 s/month (100 min); the paid tier is 0.0001 EUR/s as rounded by the API, so the
+    # true price is unknown (precision-limited). Consumers must pass allow_imprecise=True.
+    _m(
+        "acr_task_vcpu_free_second",
+        "Container Registry",
+        "Container Registry",
+        "Basic",
+        "Task vCPU Duration",
+        allow_zero=True,
+        precision_limited=True,
+        note="per vCPU-second; tier 0 = first 6,000 s/month free",
+    ),
+    _m(
+        "acr_task_vcpu_second",
+        "Container Registry",
+        "Container Registry",
+        "Basic",
+        "Task vCPU Duration",
+        tier_min=6000.0,
+        precision_limited=True,
+        note="per vCPU-second above 6,000 s/month; API rounds to 4 dp, so cost is approximate",
     ),
     # --- Key Vault Standard ---
     _m("keyvault_standard_ops_10k", "Key Vault", "Key Vault", "Standard", "Operations"),

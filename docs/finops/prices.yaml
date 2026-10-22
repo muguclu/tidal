@@ -1,6 +1,6 @@
 # Pinned Azure Retail Prices snapshot (T-501). GENERATED - do not edit by hand.
 # Regenerate: uv run python -m tidal.finops.fetch_prices --out docs/finops/prices.yaml
-captured_at: '2026-10-21'
+captured_at: '2026-10-22'
 currency: EUR
 prices:
 - effectiveStartDate: '2018-01-01T00:00:00Z'
@@ -22,6 +22,28 @@ prices:
   tierMinimumUnits: 0.0
   unit: 1 GB/Month
   unitPrice: 0.088
+- effectiveStartDate: '2019-04-01T00:00:00Z'
+  key: acr_task_vcpu_free_second
+  meterId: bb93fa13-a4e2-4027-85b9-b06e3353ffc3
+  meterName: Task vCPU Duration
+  note: per vCPU-second; tier 0 = first 6,000 s/month free
+  precision_limited: true
+  productName: Container Registry
+  skuName: Basic
+  tierMinimumUnits: 0.0
+  unit: 1 Second
+  unitPrice: 0.0
+- effectiveStartDate: '2019-04-01T00:00:00Z'
+  key: acr_task_vcpu_second
+  meterId: bb93fa13-a4e2-4027-85b9-b06e3353ffc3
+  meterName: Task vCPU Duration
+  note: per vCPU-second above 6,000 s/month; API rounds to 4 dp, so cost is approximate
+  precision_limited: true
+  productName: Container Registry
+  skuName: Basic
+  tierMinimumUnits: 6000.0
+  unit: 1 Second
+  unitPrice: 0.0001
 - effectiveStartDate: '2019-06-01T00:00:00Z'
   key: appservice_b1_linux_hour
   meterId: e08d4be1-d8c1-49ba-a814-6369d6f14c34
@@ -418,6 +440,46 @@ prices:
   tierMinimumUnits: 0.0
   unit: 1M
   unitPrice: 0.044
+- effectiveStartDate: '2018-05-01T00:00:00Z'
+  key: servicebus_standard_base_hour
+  meterId: 9d0c5c5c-f0ff-48c2-8c68-9ee7ffd306af
+  meterName: Standard Base Unit
+  note: per namespace-hour; month = x730; fixed cost even when idle
+  productName: Service Bus
+  skuName: Standard
+  tierMinimumUnits: 0.0
+  unit: 1/Hour
+  unitPrice: 0.0118
+- effectiveStartDate: '2018-05-01T00:00:00Z'
+  key: servicebus_standard_base_month
+  meterId: d5034e45-00c1-48c6-8c00-c866f788e033
+  meterName: Standard Base Unit
+  note: per namespace-month list price; alternative to the hourly meter, do not add both
+  productName: Service Bus
+  skuName: Standard
+  tierMinimumUnits: 0.0
+  unit: 1/Month
+  unitPrice: 8.7997
+- effectiveStartDate: '2017-08-15T00:00:00Z'
+  key: servicebus_standard_ops_1m
+  meterId: 2a9992f8-e914-490b-a7a6-6d21ba55acda
+  meterName: Standard Messaging Operations
+  note: per 1M operations, first paid tier (13M to 100M/month); tier minimum is in millions
+  productName: Service Bus
+  skuName: Standard
+  tierMinimumUnits: 13.0
+  unit: 1M
+  unitPrice: 0.704
+- effectiveStartDate: '2017-08-15T00:00:00Z'
+  key: servicebus_standard_ops_included_1m
+  meterId: 2a9992f8-e914-490b-a7a6-6d21ba55acda
+  meterName: Standard Messaging Operations
+  note: 'tier 0: first 13 million operations/month are included (price 0.0)'
+  productName: Service Bus
+  skuName: Standard
+  tierMinimumUnits: 0.0
+  unit: 1M
+  unitPrice: 0.0
 - effectiveStartDate: '2025-06-01T00:00:00Z'
   key: sql_gp_provisioned_vcore_hour
   meterId: 1cd4ee5b-2b55-4dd9-b3d9-ae1b22af74b0
