@@ -72,7 +72,7 @@ variable "budget_scope" {
 }
 
 variable "credit_alert_amounts" {
-  description = "Cloud-window credit alerts (LOCAL-DEV section 2: 50, 100, 150). Each amount creates an extra subscription budget with a single 100 % Actual notification to the action group and alert_emails. Amounts are in the subscription billing currency (the USD credit only matches if the account bills in USD). Empty by default."
+  description = "Cloud-window credit alerts (LOCAL-DEV section 2: 50, 100, 150). Each amount creates an extra subscription budget (Annually grain, running from start_date to credit_window_end_date so spend accumulates over the whole window) with a single 100 % Actual notification to the action group. Amounts are in the subscription billing currency (the USD credit only matches if the account bills in USD). Empty by default."
   type        = list(number)
   default     = []
 
@@ -94,7 +94,7 @@ variable "amount" {
 }
 
 variable "start_date" {
-  description = "First day of the budget period, RFC 3339 at midnight UTC on the first of a month, for example 2026-11-01T00:00:00Z. Azure rejects start dates earlier than the first of the current month for new budgets, so set it at creation time."
+  description = "First day of the budget period, RFC 3339 at midnight UTC on the first of a month, for example 2026-11-01T00:00:00Z. Azure rejects start dates earlier than the first of the current month for new budgets, so set it at creation time; later changes are ignored (lifecycle ignore_changes), so a rebuilt environment (new cloud window) must pass the current month."
   type        = string
 
   validation {
@@ -111,6 +111,32 @@ variable "end_date" {
   validation {
     condition     = var.end_date == null || can(formatdate("YYYY", var.end_date))
     error_message = "end_date must be null or an RFC 3339 timestamp."
+  }
+
+  validation {
+    condition     = var.end_date == null || (can(formatdate("YYYY", var.end_date)) && timecmp(var.end_date, var.start_date) > 0)
+    error_message = "end_date must be later than start_date."
+  }
+}
+
+variable "credit_window_end_date" {
+  description = "End of the cloud window (RFC 3339), required when credit_alert_amounts is not empty. Credit budgets use the Annually grain with this end_date so they track cumulative spend over the window instead of resetting monthly. Must be later than start_date and within one year of it."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.credit_window_end_date == null || can(formatdate("YYYY", var.credit_window_end_date))
+    error_message = "credit_window_end_date must be null or an RFC 3339 timestamp."
+  }
+
+  validation {
+    condition     = var.credit_window_end_date == null || (can(formatdate("YYYY", var.credit_window_end_date)) && timecmp(var.credit_window_end_date, var.start_date) > 0)
+    error_message = "credit_window_end_date must be later than start_date."
+  }
+
+  validation {
+    condition     = length(var.credit_alert_amounts) == 0 || var.credit_window_end_date != null
+    error_message = "credit_window_end_date is required when credit_alert_amounts is not empty."
   }
 }
 

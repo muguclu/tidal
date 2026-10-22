@@ -45,6 +45,11 @@ resource "azurerm_consumption_budget_resource_group" "this" {
     end_date   = var.end_date
   }
 
+  # Azure rejects past start dates and a change would recreate the budget, so only the first value counts.
+  lifecycle {
+    ignore_changes = [time_period[0].start_date]
+  }
+
   dynamic "notification" {
     for_each = local.notifications
     content {
@@ -52,7 +57,6 @@ resource "azurerm_consumption_budget_resource_group" "this" {
       threshold      = notification.value.threshold
       threshold_type = notification.value.threshold_type
       operator       = "GreaterThan"
-      contact_emails = var.alert_emails
       contact_groups = [azurerm_monitor_action_group.this.id]
     }
   }
@@ -71,6 +75,11 @@ resource "azurerm_consumption_budget_subscription" "this" {
     end_date   = var.end_date
   }
 
+  # Azure rejects past start dates and a change would recreate the budget, so only the first value counts.
+  lifecycle {
+    ignore_changes = [time_period[0].start_date]
+  }
+
   dynamic "notification" {
     for_each = local.notifications
     content {
@@ -78,24 +87,30 @@ resource "azurerm_consumption_budget_subscription" "this" {
       threshold      = notification.value.threshold
       threshold_type = notification.value.threshold_type
       operator       = "GreaterThan"
-      contact_emails = var.alert_emails
       contact_groups = [azurerm_monitor_action_group.this.id]
     }
   }
 }
 
 # Cloud-window credit alerts (LOCAL-DEV section 2). Always subscription scope, 100 % Actual only.
+# Annually grain from start_date to credit_window_end_date: the budget period is the whole window, so spend
+# accumulates against the amount instead of resetting each month.
 resource "azurerm_consumption_budget_subscription" "credit" {
   for_each = { for a in var.credit_alert_amounts : tostring(a) => a }
 
   name            = "${local.budget_name}-credit-${each.key}"
   subscription_id = "/subscriptions/${local.subscription_id}"
   amount          = each.value
-  time_grain      = "Monthly"
+  time_grain      = "Annually"
 
   time_period {
     start_date = var.start_date
-    end_date   = var.end_date
+    end_date   = var.credit_window_end_date
+  }
+
+  # Azure rejects past start dates and a change would recreate the budget, so only the first value counts.
+  lifecycle {
+    ignore_changes = [time_period[0].start_date]
   }
 
   notification {
@@ -103,7 +118,6 @@ resource "azurerm_consumption_budget_subscription" "credit" {
     threshold      = 100
     threshold_type = "Actual"
     operator       = "GreaterThan"
-    contact_emails = var.alert_emails
     contact_groups = [azurerm_monitor_action_group.this.id]
   }
 }
