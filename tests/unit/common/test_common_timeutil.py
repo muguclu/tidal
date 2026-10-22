@@ -237,8 +237,10 @@ def test_system_clock_is_close_to_real_time() -> None:
 
 
 def test_clock_from_settings() -> None:
-    assert isinstance(clock_from_settings(Settings.from_env({})), SystemClock)
-    frozen = clock_from_settings(Settings.from_env({"TIDAL_CLOCK__NOW": "2025-12-31T23:59:59Z"}))
+    assert isinstance(clock_from_settings(Settings.from_env({"TIDAL_ENV": "local"})), SystemClock)
+    frozen = clock_from_settings(
+        Settings.from_env({"TIDAL_ENV": "local", "TIDAL_CLOCK__NOW": "2025-12-31T23:59:59Z"})
+    )
     assert isinstance(frozen, FixedClock)
     assert frozen.now_ns() == utc(2025, 12, 31, 23, 59, 59)
 

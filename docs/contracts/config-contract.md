@@ -1,11 +1,11 @@
-# Config Contract — v1
+# Config Contract — v1.1
 
 Code mirror: `src/tidal/common/config.py` (pydantic-settings, prefix `TIDAL_`, nested delimiter `__`).
 Every service reads only these keys. Unknown `TIDAL_*` keys fail startup (catches typos).
 
 | Key | Type | Default | Secret? | Source in Azure |
 |---|---|---|---|---|
-| `TIDAL_ENV` | `local\|dev\|prod` | `local` | no | app setting |
+| `TIDAL_ENV` | `local\|dev\|prod` | **required** | no | app setting; docker compose and `.env.example` set `local` |
 | `TIDAL_LOG_LEVEL` | str | `INFO` | no | app setting |
 | `TIDAL_SERVICE_NAME` | `api\|query\|worker\|ingest\|tiering\|legacy` | `api` | no | set per entrypoint/deployment |
 | `TIDAL_STORAGE__ACCOUNT_URL` | url | `http://127.0.0.1:10000/devstoreaccount1` | no | Terraform output; docker compose sets `http://azurite:10000/devstoreaccount1` |
@@ -34,6 +34,8 @@ Every service reads only these keys. Unknown `TIDAL_*` keys fail startup (catche
 | `TIDAL_OTEL__CONNECTION_STRING` | secret | — | **yes** | Key Vault reference |
 
 Rules:
+- `TIDAL_ENV` has no default: unset fails startup with a `ConfigError` naming `TIDAL_ENV` (fail closed).
+  Every entrypoint, script and test that builds settings passes it explicitly (`local` for dev tooling).
 - `AZURE_CLIENT_ID` (user-assigned managed identity) is read by `DefaultAzureCredential`, not by
   Tidal settings; it is outside the `TIDAL_` namespace and therefore not subject to the unknown-key rule.
 - `TIDAL_STORAGE__CONNECTION_STRING`, `TIDAL_SERVICEBUS__CONNECTION_STRING`, `TIDAL_SQL__PASSWORD` and
@@ -48,3 +50,11 @@ Rules:
   Container Apps, and **CSI Secrets Store driver** (workload identity) on AKS.
 - `Settings.__repr__` masks secret fields (`SecretStr`).
 - Synthetic scales: `S` ≈ 50M ticks (3 instruments × 5 y), `M` ≈ 300M (10 × 10 y), `L` ≈ 1.5B (10 × 20 y).
+
+## Changelog
+
+- **v1.1 (T-114)**: `TIDAL_ENV` is required (was default `local`). Reason: the T-112 security review
+  found that an Azure deployment which forgot `TIDAL_ENV` would silently get local rules
+  (connection strings, SQL password and `TIDAL_CLOCK__NOW` allowed). Fail closed instead. Minor
+  bump: no key, type or allowed value changes; docker compose and `.env.example` already set it,
+  scripts and tests now pass it explicitly, and no Azure app settings exist yet that could omit it.

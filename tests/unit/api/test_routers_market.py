@@ -88,7 +88,7 @@ def clock() -> FixedClock:
 
 @pytest.fixture
 def app(reader: Reader, clock: FixedClock) -> FastAPI:
-    settings = Settings.from_env({"TIDAL_AUTH__DISABLED": "true"})
+    settings = Settings.from_env({"TIDAL_ENV": "local", "TIDAL_AUTH__DISABLED": "true"})
     return create_app(settings, reader=reader, clock=clock)
 
 
@@ -240,7 +240,9 @@ async def test_cursor_tampering_and_binding(client: httpx.AsyncClient, app: Fast
     as_roles(app, "Tidal.Reader", oid="someone-else")
     assert (await client.get("/v1/bars", params=bars_params(cursor=cursor))).status_code == 400
     # a differently signed but well-formed cursor is rejected too
-    other = create_app(Settings.from_env({"TIDAL_AUTH__DISABLED": "true"}), reader=Reader())
+    other = create_app(
+        Settings.from_env({"TIDAL_ENV": "local", "TIDAL_AUTH__DISABLED": "true"}), reader=Reader()
+    )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=other), base_url="http://test"
     ) as c2:
@@ -416,7 +418,8 @@ def test_has_role_hierarchy() -> None:
 
 
 async def test_no_token_is_401_when_auth_enabled(reader: Reader) -> None:
-    app = create_app(Settings.from_env({}), reader=reader)  # local, auth not disabled
+    # local, auth not disabled
+    app = create_app(Settings.from_env({"TIDAL_ENV": "local"}), reader=reader)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as c:
@@ -425,7 +428,7 @@ async def test_no_token_is_401_when_auth_enabled(reader: Reader) -> None:
 
 
 async def test_missing_reader_is_503() -> None:
-    app = create_app(Settings.from_env({"TIDAL_AUTH__DISABLED": "true"}))
+    app = create_app(Settings.from_env({"TIDAL_ENV": "local", "TIDAL_AUTH__DISABLED": "true"}))
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as c:

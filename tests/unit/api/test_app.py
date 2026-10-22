@@ -22,7 +22,7 @@ from fakes.reader import SEEDED_IDS, WTI_NEGATIVE_DAY, FakeReader
 from tidal.api.app import create_app
 from tidal.api.deps import LOCAL_ANONYMOUS, Principal, get_bus, get_clock, get_principal, get_reader
 from tidal.api.routers import health
-from tidal.common.config import Settings
+from tidal.common.config import Settings, get_settings
 from tidal.common.errors import (
     ConfigError,
     NotFound,
@@ -61,7 +61,7 @@ def bus() -> FakeBus:
 @pytest.fixture
 def app(reader: FakeReader, bus: FakeBus) -> FastAPI:
     """App with fakes, local env, auth disabled."""
-    settings = Settings.from_env({"TIDAL_AUTH__DISABLED": "true"})
+    settings = Settings.from_env({"TIDAL_ENV": "local", "TIDAL_AUTH__DISABLED": "true"})
     return create_app(settings, reader=reader, bus=bus)
 
 
@@ -144,7 +144,7 @@ async def test_ready_failing_dependency_hides_details(
     make_client: MakeClient, caplog: pytest.LogCaptureFixture, bad_reader: bool, bad_bus: bool
 ) -> None:
     app = create_app(
-        Settings.from_env({}),
+        Settings.from_env({"TIDAL_ENV": "local"}),
         reader=FakeReader(fail_ping=bad_reader),
         bus=FakeBus(fail_ping=bad_bus),
     )
@@ -157,7 +157,7 @@ async def test_ready_failing_dependency_hides_details(
 
 
 async def test_ready_without_clients_is_not_ready(make_client: MakeClient) -> None:
-    async with make_client(create_app(Settings.from_env({}))) as c:
+    async with make_client(create_app(Settings.from_env({"TIDAL_ENV": "local"}))) as c:
         r = await c.get("/v1/health/ready")
     assert r.status_code == 503
     assert r.json() == {"status": "not_ready"}
@@ -286,7 +286,7 @@ async def test_providers_return_injected_clients(
 
 
 async def test_missing_clients_give_503(make_client: MakeClient) -> None:
-    app = create_app(Settings.from_env({}))
+    app = create_app(Settings.from_env({"TIDAL_ENV": "local"}))
 
     @app.get("/t/r")
     async def _r(r: Reader = Depends(get_reader)) -> None:  # noqa: B008
@@ -322,13 +322,13 @@ async def test_fake_bus_records(bus: FakeBus) -> None:
 async def test_principal_anonymous_only_in_local_with_auth_disabled(
     make_client: MakeClient,
 ) -> None:
-    local = create_app(Settings.from_env({"TIDAL_AUTH__DISABLED": "true"}))
+    local = create_app(Settings.from_env({"TIDAL_ENV": "local", "TIDAL_AUTH__DISABLED": "true"}))
     add_test_routes(local)
     async with make_client(local) as c:
         r = await c.get("/t/me")
     assert r.json() == {"oid": LOCAL_ANONYMOUS.oid}
 
-    enabled = create_app(Settings.from_env({}))
+    enabled = create_app(Settings.from_env({"TIDAL_ENV": "local"}))
     add_test_routes(enabled)
     async with make_client(enabled) as c:
         no_token = await c.get("/t/me")
@@ -343,7 +343,8 @@ def test_auth_disabled_rejected_outside_local() -> None:
         Settings.from_env({"TIDAL_ENV": "dev", "TIDAL_AUTH__DISABLED": "true"})
     # Defence in depth: create_app re-asserts even if settings validation was bypassed.
     bypassed = Settings.model_construct(
-        env="prod", auth=Settings.from_env({"TIDAL_AUTH__DISABLED": "true"}).auth
+        env="prod",
+        auth=Settings.from_env({"TIDAL_ENV": "local", "TIDAL_AUTH__DISABLED": "true"}).auth,
     )
     with pytest.raises(ConfigError):
         create_app(bypassed)
@@ -367,7 +368,12 @@ def test_export_openapi_script(tmp_path: Path) -> None:
 def test_run_starts_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[object, dict[str, object]]] = []
     monkeypatch.setattr(uvicorn, "run", lambda a, **kw: calls.append((a, kw)))
-    app_module.run()
+    monkeypatch.setenv("TIDAL_ENV", "local")  # required (config-contract v1.1)
+    get_settings.cache_clear()
+    try:
+        app_module.run()
+    finally:
+        get_settings.cache_clear()
     assert isinstance(calls[0][0], FastAPI)
     assert calls[0][1]["port"] == 8000
 
@@ -377,7 +383,7 @@ def test_generated_health_matches_contract() -> None:
     contract = yaml.safe_load(
         (Path(__file__).parents[3] / "docs/contracts/openapi.yaml").read_text(encoding="utf-8")
     )
-    generated = create_app(Settings.from_env({})).openapi()
+    generated = create_app(Settings.from_env({"TIDAL_ENV": "local"})).openapi()
     for path in ("/v1/health/live", "/v1/health/ready"):
         want, got = contract["paths"][path]["get"], generated["paths"][path]["get"]
         assert set(got["responses"]) == set(want["responses"])
@@ -402,7 +408,9 @@ async def test_ready_times_out_hanging_dependency(
     monkeypatch: pytest.MonkeyPatch, make_client: MakeClient
 ) -> None:
     monkeypatch.setattr(health, "PING_TIMEOUT_S", 0.01)
-    app = create_app(Settings.from_env({}), reader=HangingReader(), bus=FakeBus())
+    app = create_app(
+        Settings.from_env({"TIDAL_ENV": "local"}), reader=HangingReader(), bus=FakeBus()
+    )
     async with make_client(app) as c:
         r = await c.get("/v1/health/ready")
     assert r.status_code == 503
@@ -410,7 +418,7 @@ async def test_ready_times_out_hanging_dependency(
 
 
 async def test_401_www_authenticate(make_client: MakeClient) -> None:
-    app = create_app(Settings.from_env({}))
+    app = create_app(Settings.from_env({"TIDAL_ENV": "local"}))
     add_test_routes(app)
     async with make_client(app) as c:
         none = await c.get("/t/me")
@@ -440,7 +448,7 @@ async def test_docs_only_in_local(make_client: MakeClient) -> None:
     async with make_client(create_app(dev)) as c:
         assert (await c.get("/docs")).status_code == 404
         assert (await c.get("/openapi.json")).status_code == 404
-    async with make_client(create_app(Settings.from_env({}))) as c:
+    async with make_client(create_app(Settings.from_env({"TIDAL_ENV": "local"}))) as c:
         assert (await c.get("/openapi.json")).status_code == 200
 
 

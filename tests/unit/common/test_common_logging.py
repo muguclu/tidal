@@ -46,7 +46,9 @@ def _lines(capsys: pytest.CaptureFixture[str]) -> list[dict[str, Any]]:
 
 
 def _configure(**environ: str) -> None:
-    configure_logging(Settings.from_env({"TIDAL_SERVICE_NAME": "worker", **environ}))
+    configure_logging(
+        Settings.from_env({"TIDAL_ENV": "local", "TIDAL_SERVICE_NAME": "worker", **environ})
+    )
 
 
 def test_log_line_has_mandatory_fields(capsys: pytest.CaptureFixture[str]) -> None:
@@ -111,7 +113,7 @@ def test_secret_keys_and_values_redacted(capsys: pytest.CaptureFixture[str]) -> 
 
 
 def test_settings_secret_never_logged(capsys: pytest.CaptureFixture[str]) -> None:
-    settings = Settings.from_env({"TIDAL_SQL__PASSWORD": "hunter2"})
+    settings = Settings.from_env({"TIDAL_ENV": "local", "TIDAL_SQL__PASSWORD": "hunter2"})
     configure_logging(settings)
     get_logger().info("settings_loaded", settings=settings, sql=settings.sql)
     assert "hunter2" not in capsys.readouterr().out
@@ -279,6 +281,6 @@ def test_correlation_id_propagates_per_task(capsys: pytest.CaptureFixture[str]) 
 
 
 def test_http_client_loggers_never_log_urls_at_info() -> None:
-    configure_logging(Settings.from_env({"TIDAL_LOG_LEVEL": "DEBUG"}))
+    configure_logging(Settings.from_env({"TIDAL_ENV": "local", "TIDAL_LOG_LEVEL": "DEBUG"}))
     for name in ("httpx", "httpcore", "urllib3"):
         assert logging.getLogger(name).getEffectiveLevel() >= logging.WARNING
