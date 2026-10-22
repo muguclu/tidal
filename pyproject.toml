@@ -11,7 +11,7 @@ dependencies = [
     # data
     "polars>=2.0",
     "pyarrow>=18",
-    "duckdb>=1.1",
+    "duckdb==2.0.0",  # the azure extension is ABI-bound to the duckdb version (T-208)
     "numpy>=2.1",
     # api
     "fastapi>=0.115",

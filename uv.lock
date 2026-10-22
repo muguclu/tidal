@@ -2098,7 +2098,7 @@ requires-dist = [
     { name = "azure-monitor-opentelemetry", specifier = ">=1.6" },
     { name = "azure-servicebus", specifier = ">=7.13" },
     { name = "azure-storage-blob", specifier = ">=12.24" },
-    { name = "duckdb", specifier = ">=1.1" },
+    { name = "duckdb", specifier = "==2.0.0" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "numpy", specifier = ">=2.1" },
