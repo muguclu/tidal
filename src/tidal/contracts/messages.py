@@ -11,6 +11,7 @@ from tidal.contracts.models import (
     JobId,
     Sha256,
 )
+from tidal.contracts.paths import backtest_prefix
 
 QUEUE_BACKTEST_JOBS: Final = "backtest-jobs"
 QUEUE_BACKTEST_RESULTS: Final = "backtest-results"
@@ -52,10 +53,7 @@ class BacktestJob(_Model):
         if (self.parent_job_id is None) != (self.child_index is None):
             msg = "parent_job_id and child_index must be both set or both null"
             raise ValueError(msg)
-        if self.parent_job_id is None:
-            expected = f"backtests/{self.job_id}/"
-        else:
-            expected = f"backtests/{self.parent_job_id}/child-{self.child_index:04d}/"
+        expected = backtest_prefix(self.parent_job_id or self.job_id, self.child_index)
         if self.output_prefix != expected:
             msg = f"output_prefix must be {expected!r}"
             raise ValueError(msg)

@@ -44,6 +44,7 @@ from tidal.ingest.sources.base import (
     retry_delay,
     series_for,
     sha256_hex,
+    strip_credential_echo,
 )
 from tidal.storage.parquet_writer import ObjectStore
 
@@ -75,44 +76,6 @@ class FredUnavailable(DependencyUnavailable):
 
     slug = "fred-unavailable"
     title = "FRED unavailable"
-
-
-def strip_api_key(body: object) -> object:
-    """Remove every ``api_key`` field from a response, except inside ``observations``.
-
-    FRED is not known to echo parameters; this guards against it generically. Data is untouched.
-    """
-
-    def clean(node: object) -> object:
-        if isinstance(node, dict):
-            return {k: clean(v) for k, v in node.items() if str(k).lower() != "api_key"}
-        if isinstance(node, list):
-            return [clean(v) for v in node]
-        return node
-
-    if not isinstance(body, dict):
-        return body
-    return {
-        k: v if k == "observations" else clean(v)
-        for k, v in body.items()
-        if str(k).lower() != "api_key"
-    }
-
-
-def strip_credential_echo(payload: bytes) -> bytes:
-    """Raw payload = verbatim response minus any credential echo.
-
-    Bytes are returned untouched unless an ``api_key`` field is found; then the document is
-    re-serialised compactly so the sha256 and digest never depend on the key value.
-    """
-    try:
-        body = json.loads(payload)
-    except ValueError:
-        return payload
-    cleaned = strip_api_key(body)
-    if cleaned == body:
-        return payload
-    return json.dumps(cleaned, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
 class FredSource:
@@ -189,7 +152,7 @@ class FredSource:
                 "limit": PAGE_LIMIT,
                 "offset": offset,
             }
-            payload = strip_credential_echo(self._get(url, params))
+            payload = strip_credential_echo(self._get(url, params), keep="observations")
             if self._key.get_secret_value().encode() in payload:
                 raise FredUnavailable("FRED response echoes the credential")
             fetched_at_ns = self._clock.now_ns()

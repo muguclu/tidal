@@ -14,11 +14,11 @@ from datetime import date
 from typing import Final
 
 from tidal.common.errors import TidalError
+from tidal.contracts.paths import backtest_prefix as _backtest_prefix
 
 CONTAINER_MARKETDATA: Final = "marketdata"
 CONTAINER_RAW: Final = "raw"
 CONTAINER_REFERENCE: Final = "reference"
-CONTAINER_BACKTESTS: Final = "backtests"
 MD_VERSION: Final = "v1"
 DATASETS: Final = ("ticks", "bars_1s", "bars_1m", "bars_1h", "bars_1d")
 DAILY_DATASET: Final = "bars_1d"
@@ -27,7 +27,6 @@ MANIFEST_NAME: Final = "_manifest.json"
 
 _INSTRUMENT = re.compile(r"[A-Z0-9]+\.[A-Z0-9_]+\.[A-Z0-9_]+")
 _SERIES = re.compile(r"[a-z0-9_]+")
-_JOB = re.compile(r"bt_[0-7][0-9A-HJKMNP-TV-Z]{25}")
 _MD = re.compile(
     rf"{CONTAINER_MARKETDATA}/{MD_VERSION}/(?P<dataset>[a-z0-9_]+)/instrument=(?P<instrument>[^/]+)"
     r"/year=(?P<year>\d{4})/month=(?P<month>\d{2})/(?:part-(?P<seq>\d{5})\.parquet|_manifest\.json)"
@@ -139,13 +138,11 @@ def reference_path(name: str = "instruments") -> str:
 
 
 def backtest_prefix(job_id: str, child_index: int | None = None) -> str:
-    """``backtests/bt_<ULID>/`` or ``.../child-NNNN/`` (messaging-contract ``output_prefix``)."""
-    if not _JOB.fullmatch(job_id):
-        raise InvalidPath(f"bad job id {job_id!r}")
-    child = "" if child_index is None else f"child-{child_index:04d}/"
-    if child_index is not None and not 0 <= child_index <= 9999:
-        raise InvalidPath(f"child index {child_index} out of range")
-    return f"{CONTAINER_BACKTESTS}/{job_id}/{child}"
+    """``backtests/bt_<ULID>/`` or ``.../child-NNNN/`` (built in ``tidal.contracts.paths``)."""
+    try:
+        return _backtest_prefix(job_id, child_index)
+    except ValueError as exc:
+        raise InvalidPath(str(exc)) from exc
 
 
 def split_container(path: str) -> tuple[str, str]:

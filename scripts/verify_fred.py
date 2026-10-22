@@ -25,8 +25,8 @@ from typing import Any  # Any: decoded JSON bodies from FRED, validated key by k
 import httpx
 
 from tidal.contracts.instruments import CATALOGUE_V1
-from tidal.ingest.sources.base import redact_url
-from tidal.ingest.sources.fred import BASE_URL, strip_api_key
+from tidal.ingest.sources.base import redact_url, strip_api_key
+from tidal.ingest.sources.fred import BASE_URL
 
 KEY_ENV = "TIDAL_SOURCES__FRED_API_KEY"
 LIVE_DIR = Path("tests/fixtures/fred/live")
@@ -56,7 +56,10 @@ def _get(client: httpx.Client, key: str, path: str, params: dict[str, str | int]
 
 def _record(out: Path, name: str, path: str, body: Any) -> None:
     out.mkdir(parents=True, exist_ok=True)
-    doc = {"url": redact_url(f"{BASE_URL}/{path}"), "body": strip_api_key(body)}
+    doc = {
+        "url": redact_url(f"{BASE_URL}/{path}"),
+        "body": strip_api_key(body, keep="observations"),
+    }
     (out / f"{name}.json").write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
 
 

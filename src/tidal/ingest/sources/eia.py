@@ -29,20 +29,20 @@ from tidal.common.logging import get_logger
 from tidal.common.timeutil import Clock, SystemClock
 from tidal.ingest.sources.base import (
     CONTENT_TYPE_JSON,
+    MAX_ATTEMPTS,
     RawChunk,
     persist_raw,
+    redact_url,
+    retry_delay,
     series_for,
     sha256_hex,
+    strip_credential_echo,
 )
 from tidal.storage.parquet_writer import ObjectStore
 
 BASE_URL = "https://api.eia.gov/v2"
 PAGE_LENGTH = 5000
 MAX_PAGES = 500
-MAX_ATTEMPTS = 5
-BACKOFF_BASE_S = 1.0
-MAX_BACKOFF_S = 60.0
-MAX_RETRY_AFTER_S = 300.0
 _HTTP_BAD_REQUEST = 400
 _HTTP_TOO_MANY = 429
 _HTTP_SERVER_ERROR = 500
@@ -63,7 +63,6 @@ PAGE_SCHEMA: Final = pa.schema(
 #: ``petroleum/pri/fut``); FUT1-4 instruments are backfill-only and requests are clipped here.
 EIA_FUTURES_LAST_DATE: Final = date(2024, 4, 5)
 _FUTURES_SERIES = re.compile(r"R(CL|NG)C\d")
-_KEY_RE = re.compile(r"(api_key=)[^&\s'\"]+", re.IGNORECASE)
 _log = get_logger(__name__)
 
 
@@ -79,55 +78,6 @@ class EiaUnavailable(DependencyUnavailable):
 
     slug = "eia-unavailable"
     title = "EIA unavailable"
-
-
-def redact_url(text: str) -> str:
-    """Mask the ``api_key`` query parameter in ``text`` (URLs, messages)."""
-    return _KEY_RE.sub(r"\1**********", text)
-
-
-def _retry_delay(attempt: int, retry_after: str | None, rng: np.random.Generator) -> float:
-    """Backoff capped at 60 s with jitter; a numeric ``Retry-After`` raises it, up to 300 s."""
-    delay = min(MAX_BACKOFF_S, BACKOFF_BASE_S * 2**attempt) * (0.5 + 0.5 * float(rng.random()))
-    if retry_after is not None and retry_after.strip().isdigit():
-        delay = min(max(delay, float(retry_after)), MAX_RETRY_AFTER_S)
-    return float(delay)
-
-
-def strip_api_key(body: object) -> object:
-    """Remove every ``api_key`` field below the top-level ``request`` object of a v2 response.
-
-    EIA may echo the query parameters (including the key) in ``request.params``. Only that
-    subtree is touched; ``response`` data is left as is.
-    """
-    if not isinstance(body, dict) or "request" not in body:
-        return body
-
-    def clean(node: object) -> object:
-        if isinstance(node, dict):
-            return {k: clean(v) for k, v in node.items() if str(k).lower() != "api_key"}
-        if isinstance(node, list):
-            return [clean(v) for v in node]
-        return node
-
-    return {**body, "request": clean(body["request"])}
-
-
-def strip_credential_echo(payload: bytes) -> bytes:
-    """Raw payload = verbatim response minus any credential echo.
-
-    Bytes are returned untouched unless an ``api_key`` field exists in ``request``; then the
-    document is re-serialised compactly (original key order, ``ensure_ascii=False``) so the sha256
-    and digest never depend on the key value. Unparseable bodies are returned as is.
-    """
-    try:
-        body = json.loads(payload)
-    except ValueError:
-        return payload
-    cleaned = strip_api_key(body)
-    if cleaned == body:
-        return payload
-    return json.dumps(cleaned, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
 class EiaSource:
@@ -179,7 +129,7 @@ class EiaSource:
                 retry_after = resp.headers.get("Retry-After")
             if attempt == MAX_ATTEMPTS - 1:
                 break
-            delay = _retry_delay(attempt, retry_after, self._rng)
+            delay = retry_delay(attempt, retry_after, self._rng)
             _log.warning(
                 "eia_retry", url=redact_url(url), status=status, attempt=attempt + 1, delay_s=delay
             )
@@ -211,7 +161,7 @@ class EiaSource:
                 "offset": offset,
                 "length": PAGE_LENGTH,
             }
-            payload = strip_credential_echo(self._get(url, params))
+            payload = strip_credential_echo(self._get(url, params), only="request")
             if self._key.get_secret_value().encode() in payload:
                 raise EiaUnavailable("EIA response echoes the credential outside request.params")
             fetched_at_ns = self._clock.now_ns()
