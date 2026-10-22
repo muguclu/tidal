@@ -475,4 +475,6 @@ def test_run_wires_a_remote_reader(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(app_module, "get_settings", lambda: settings)
     monkeypatch.setattr(uvicorn, "run", lambda app, **_: seen.update(app=app))
     app_module.run()
-    assert isinstance(seen["app"].state.reader, RemoteReader)  # type: ignore[attr-defined]
+    reader = seen["app"].state.reader  # type: ignore[attr-defined]
+    assert isinstance(reader, RemoteReader)
+    asyncio.run(reader.aclose())  # release the HTTP client

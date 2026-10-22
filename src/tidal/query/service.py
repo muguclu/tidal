@@ -11,7 +11,9 @@ Wire format (internal, not part of ``openapi.yaml``)
   done by the reader; this layer only carries it).
 - Streams: ``X-Tidal-Tier`` header, then frames ``[u64 big-endian length][Arrow IPC stream with one
   batch]`` and a final zero-length frame. A body that ends without the zero frame is a truncated
-  stream and raises ``DependencyUnavailable`` instead of looking complete. Memory is one frame.
+  stream and raises ``DependencyUnavailable`` instead of looking complete. A frame is capped at
+  64 MiB (both sides); the client holds the partial buffer plus one copy of the frame, so memory
+  is bounded by a few frames, never by the range.
 - Errors: RFC 7807 problem+json with the shared handlers; the client maps them back to typed
   errors. 401/403 from the query service are an API-to-query misconfiguration and surface to the
   caller as 503, never as the caller's own auth failure.
@@ -26,6 +28,7 @@ Authentication (api -> query)
 """
 
 import asyncio
+import json
 import struct
 from collections.abc import AsyncIterator, Sequence
 from contextlib import aclosing
@@ -36,11 +39,12 @@ import pyarrow as pa
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, Query, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from tidal.api.app import CorrelationMiddleware
 from tidal.api.deps import assert_auth_allowed
 from tidal.api.errors import CORRELATION_HEADER, register_exception_handlers
+from tidal.api.streaming import TIER_HEADER
 from tidal.common.config import Settings, get_settings
 from tidal.common.errors import (
     DependencyUnavailable,
@@ -55,13 +59,13 @@ from tidal.common.timeutil import clock_from_settings
 from tidal.contracts.instruments import AssetClass, Instrument, Source
 from tidal.contracts.models import Bar, LatestBar, Tick, Tier
 from tidal.contracts.schemas import Interval
+from tidal.query.limits import check_bars_range, check_ticks_range
 from tidal.query.protocols import Reader, Rows, RowStream
 
-TIER_HEADER: Final = "X-Tidal-Tier"
 FRAMES_MEDIA_TYPE: Final = "application/vnd.tidal.batches"
 _PREFIX: Final = "/internal/v1"
 _LEN: Final = struct.Struct(">Q")
-_MAX_FRAME: Final = 1 << 30  # sanity bound against a corrupt length prefix
+_MAX_FRAME: Final = 64 << 20  # 64 MiB: bound on one frame, checked by server and client
 _TIMEOUT: Final = httpx.Timeout(60.0, connect=5.0)
 
 logger = get_logger(__name__)
@@ -92,7 +96,10 @@ class ManagedIdentityTokenProvider:
     The azure-identity credential caches and refreshes tokens itself.
     """
 
-    def __init__(self, credential: Any = None) -> None:  # Any: azure AsyncTokenCredential
+    def __init__(
+        self,
+        credential: Any = None,  # Any: azure-identity AsyncTokenCredential (untyped import)
+    ) -> None:
         """Use ``credential`` or a lazily created ``ManagedIdentityCredential``."""
         self._credential = credential
 
@@ -167,12 +174,15 @@ class InstrumentRows(_Wire):
 
 # -- server -------------------------------------------------------------------------------------
 async def _frames(stream: RowStream) -> AsyncIterator[bytes]:
+    # Any: aclosing wants an object with aclose(); AsyncIterator does not declare it
     async with aclosing(cast("Any", stream.batches)) as batches:
         async for batch in batches:
             sink = pa.BufferOutputStream()
             with pa.ipc.new_stream(sink, batch.schema) as writer:
                 writer.write_batch(batch)
             data = sink.getvalue().to_pybytes()
+            if len(data) > _MAX_FRAME:
+                raise DependencyUnavailable("A result batch exceeds the stream frame limit.")
             yield _LEN.pack(len(data)) + data
     yield _LEN.pack(0)
 
@@ -213,11 +223,13 @@ def create_query_app(
     async def bars(
         instrument_id: iid, interval: Interval, start_ns: ns, end_ns: ns, as_of_ns: as_of = None
     ) -> Response:
+        check_bars_range(interval, start_ns, end_ns)
         got = await reader.read_bars(instrument_id, interval, start_ns, end_ns, as_of_ns=as_of_ns)
         return _json(BarRows.model_construct(tier=got.tier, rows=got.rows), got.tier)
 
     @router.get("/ticks")
     async def ticks(instrument_id: iid, start_ns: ns, end_ns: ns) -> Response:
+        check_ticks_range(start_ns, end_ns)
         got = await reader.read_ticks(instrument_id, start_ns, end_ns)
         return _json(TickRows.model_construct(tier=got.tier, rows=got.rows), got.tier)
 
@@ -225,12 +237,14 @@ def create_query_app(
     async def stream_bars(
         instrument_id: iid, interval: Interval, start_ns: ns, end_ns: ns, as_of_ns: as_of = None
     ) -> StreamingResponse:
+        check_bars_range(interval, start_ns, end_ns)
         return _stream(
             await reader.stream_bars(instrument_id, interval, start_ns, end_ns, as_of_ns=as_of_ns)
         )
 
     @router.get("/stream/ticks")
     async def stream_ticks(instrument_id: iid, start_ns: ns, end_ns: ns) -> StreamingResponse:
+        check_ticks_range(start_ns, end_ns)
         return _stream(await reader.stream_ticks(instrument_id, start_ns, end_ns))
 
     @router.get("/latest")
@@ -270,9 +284,9 @@ def create_query_app(
 def _raise_for_problem(status: int, body: bytes) -> None:
     """Map an internal problem response to a typed error (never echoing unvetted bodies)."""
     detail: str | None = None
+    if status == 400:  # noqa: PLR2004
+        logger.error("query_service_rejected_request", status=status, probable="wire drift")
     try:
-        import json  # noqa: PLC0415
-
         parsed = json.loads(body)
         if isinstance(parsed, dict) and isinstance(parsed.get("detail"), str):
             detail = parsed["detail"]
@@ -287,6 +301,15 @@ def _raise_for_problem(status: int, body: bytes) -> None:
         logger.error("query_service_rejected_api_credentials", status=status)
         raise DependencyUnavailable("The query service rejected the API's credentials.")
     raise DependencyUnavailable("The query service failed.")
+
+
+async def _parse[M: _Wire](model: type[M], content: bytes) -> M:
+    """Validate a response body off the event loop; a bad body is a dependency failure."""
+    try:
+        return await asyncio.to_thread(model.model_validate_json, content)
+    except ValidationError:
+        logger.error("query_service_invalid_response", model=model.__name__)
+        raise DependencyUnavailable("The query service sent an invalid response.") from None
 
 
 class RemoteReader:
@@ -307,11 +330,20 @@ class RemoteReader:
         headers: dict[str, str] = {}
         if cid := get_correlation_id():
             headers[CORRELATION_HEADER] = cid
-        if token := await self._tokens.token(self._audience):
+        try:
+            token = await self._tokens.token(self._audience)
+        except Exception as exc:  # any credential failure; only the type is logged
+            logger.error("query_token_acquisition_failed", error_type=type(exc).__name__)
+            raise DependencyUnavailable("Could not obtain a token for the query service.") from None
+        if token:
             headers["Authorization"] = f"Bearer {token}"
         return headers
 
-    async def _get(self, path: str, params: dict[str, Any]) -> httpx.Response:
+    async def _get(
+        self,
+        path: str,
+        params: dict[str, Any],  # Any: heterogeneous query values (str, int, list, None)
+    ) -> httpx.Response:
         clean = {k: v for k, v in params.items() if v is not None}
         try:
             resp = await self._client.get(
@@ -338,7 +370,7 @@ class RemoteReader:
             {"instrument_id": instrument_id, "interval": interval.value, "start_ns": start_ns,
              "end_ns": end_ns, "as_of_ns": as_of_ns},
         )  # fmt: skip
-        body = await asyncio.to_thread(BarRows.model_validate_json, resp.content)
+        body = await _parse(BarRows, resp.content)
         return Rows(body.rows, body.tier)
 
     async def read_ticks(self, instrument_id: str, start_ns: int, end_ns: int) -> Rows[Tick]:
@@ -346,10 +378,14 @@ class RemoteReader:
         resp = await self._get(
             "/ticks", {"instrument_id": instrument_id, "start_ns": start_ns, "end_ns": end_ns}
         )
-        body = await asyncio.to_thread(TickRows.model_validate_json, resp.content)
+        body = await _parse(TickRows, resp.content)
         return Rows(body.rows, body.tier)
 
-    async def _open_stream(self, path: str, params: dict[str, Any]) -> RowStream:
+    async def _open_stream(
+        self,
+        path: str,
+        params: dict[str, Any],  # Any: heterogeneous query values (str, int, None)
+    ) -> RowStream:
         clean = {k: v for k, v in params.items() if v is not None}
         request = self._client.build_request(
             "GET", _PREFIX + path, params=clean, headers=await self._headers()
@@ -385,6 +421,8 @@ class RemoteReader:
                         raise DependencyUnavailable("The query service sent a corrupt stream.")
                     if len(buf) < _LEN.size + n:
                         break
+                    # One copy on purpose: Arrow may alias the buffer, which must stay immutable
+                    # while the bytearray is compacted below.
                     frame = bytes(buf[_LEN.size : _LEN.size + n])
                     del buf[: _LEN.size + n]
                     with pa.ipc.open_stream(frame) as rdr:
@@ -429,7 +467,7 @@ class RemoteReader:
         resp = await self._get(
             "/latest", {"instrument_id": list(instrument_ids), "interval": interval.value}
         )
-        return LatestRows.model_validate_json(resp.content).rows
+        return (await _parse(LatestRows, resp.content)).rows
 
     async def instruments(
         self, *, asset_class: AssetClass | None = None, source: Source | None = None
@@ -440,15 +478,18 @@ class RemoteReader:
             {"asset_class": asset_class.value if asset_class else None,
              "source": source.value if source else None},
         )  # fmt: skip
-        return InstrumentRows.model_validate_json(resp.content).items
+        return (await _parse(InstrumentRows, resp.content)).items
 
     async def ping(self) -> None:
         """Raise when the query service (or its stores) is down."""
         await self._get("/ping", {})
 
     async def aclose(self) -> None:
-        """Close the HTTP client."""
+        """Close the HTTP client and the token provider (when it has ``close``)."""
         await self._client.aclose()
+        close = getattr(self._tokens, "close", None)
+        if close is not None:
+            await close()
 
 
 def remote_reader_from_settings(

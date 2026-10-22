@@ -167,8 +167,10 @@ async def test_api_reads_through_tidal_query_match_the_reader(
         latest = await c.get("/v1/latest", params={"instrument_id": IID})
         assert latest.headers["X-Tidal-Tier"] == "hot"
         assert latest.json()["rows"][0]["instrument_id"] == IID
-        miss = await c.get("/v1/bars", params={**window(first, cutoff), "instrument_id": "X.NOPE"})
-        assert miss.status_code in (400, 404)
+        miss = await c.get(
+            "/v1/bars", params={**window(first, cutoff), "instrument_id": "EIA.NOPE.SPOT"}
+        )
+        assert miss.status_code == 404
 
 
 class _Never:

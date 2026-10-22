@@ -18,20 +18,17 @@ from tidal.api.pagination import (
     page_of,
 )
 from tidal.api.routers.bars import (
-    DAY_NS,
     Format,
     TimeParam,
     market_data_ok,
     parse_range,
 )
 from tidal.api.streaming import TIER_HEADER, stream_response
-from tidal.common.errors import RangeTooLarge
 from tidal.contracts.instruments import InstrumentId
 from tidal.contracts.models import TicksResponse
 from tidal.contracts.schemas import TICK_V1
+from tidal.query.limits import check_ticks_range
 from tidal.query.protocols import Reader
-
-TICKS_MAX_NS = 31 * DAY_NS  # SPEC-04 §3
 
 router = APIRouter(prefix="/v1", tags=["market-data"])
 
@@ -58,8 +55,7 @@ async def get_ticks(  # noqa: PLR0917 - contract query parameters
 ) -> TicksResponse | StreamingResponse:
     """Ticks in ``[start, end)``; arrow/parquet stream the range, JSON is cursor-paginated."""
     start_ns, end_ns = parse_range(start, end)
-    if end_ns - start_ns > TICKS_MAX_NS:
-        raise RangeTooLarge("Ticks are limited to 31 days per call.")
+    check_ticks_range(start_ns, end_ns)
     if format is not Format.JSON:
         stream = await reader.stream_ticks(instrument_id, start_ns, end_ns)
         return stream_response(stream, TICK_V1, arrow=format is Format.ARROW)
