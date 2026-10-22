@@ -2,6 +2,11 @@
 
 SQLite stands in for the hot store and ``LocalStore`` + DuckDB for the cold one. The real SQL Server
 and Azurite (duckdb ``azure`` extension) paths are covered by ``tests/integration/query``.
+
+Two worlds back the properties. ``world``: Parquet below W_MAX, SQL from W_MIN plus late
+restatements of cold keys (written to SQL only). ``mid_world``: a migration caught between "rows
+deleted from SQL" and "watermark advanced", so SQL only holds rows from W_MAX while the watermark
+is anywhere in ``[W_MIN, W_MAX]``. Both must equal the pure-SQL baseline.
 """
 
 # ruff: noqa: PLC0415
@@ -19,20 +24,6 @@ import pyarrow as pa
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from query_support import (
-    BAR_WM_RANGE,
-    DAY,
-    INGEST_BASE,
-    N_DAYS,
-    T0,
-    TICK0,
-    TICK_WM_RANGE,
-    WTI,
-    build_baseline,
-    instrument_row,
-    split_stores,
-    sqlite_engine,
-)
 
 from tidal.common.config import Settings
 from tidal.common.errors import NotFound
@@ -45,9 +36,23 @@ from tidal.query.protocols import Reader, RowStream
 from tidal.query.reader import UnifiedReader, resolve_versions, tier_for
 from tidal.storage import parquet_writer as pw
 from tidal.storage import sql_repo as sr
+from unit.query.query_support import (
+    BAR_WM_RANGE,
+    DAY,
+    INGEST_BASE,
+    INTRADAY,
+    LATE_INGEST,
+    N_DAYS,
+    T0,
+    TICK0,
+    TICK_WM_RANGE,
+    WTI,
+    instrument_row,
+    make_world,
+    sqlite_engine,
+)
 
 SETTINGS = Settings.from_env({"TIDAL_ENV": "local"})
-ROUND = 10_000 * DAY
 
 
 def run[T](coro: Coroutine[Any, Any, T]) -> T:
@@ -64,9 +69,8 @@ def norm(table: pa.Table) -> list[tuple[Any, ...]]:
 
 
 class World:
-    def __init__(self, root: Path) -> None:
-        self.baseline = build_baseline()
-        self.hot = split_stores(self.baseline, pw.LocalStore(root))
+    def __init__(self, root: Path, *, mid_migration: bool = False) -> None:
+        self.baseline, self.hot = make_world(pw.LocalStore(root), mid_migration=mid_migration)
         self.reader = UnifiedReader(self.hot, duck.local_session(root), FixedClock(0), SETTINGS)
 
     def set_wm(self, bars: int | None, ticks: int | None) -> None:
@@ -79,6 +83,34 @@ class World:
         batches = [b async for b in stream.batches]
         return stream.tier, pa.Table.from_batches(batches) if batches else pa.table({})
 
+    def expected_tier(
+        self, want: pa.Table, hot_ts: list[Any], bounds: tuple[int, int], upper: int, wm: int
+    ) -> Tier:
+        """Independent tier rule: range vs watermark, mixed if SQL has rows below it or cold
+        has rows at/above it (``want`` keys below ``upper`` are in Parquet)."""
+        lo, hi = bounds
+        ts = want["ts_ns"].to_numpy()
+        cold_above = bool(((ts >= wm) & (ts < upper)).any())
+        if any(t < wm for t in hot_ts) or cold_above:
+            return Tier.MIXED
+        return tier_for(lo, hi, wm)
+
+    def check_bars(self, interval: Interval, lo: int, hi: int, as_of: int | None, wm: int) -> None:
+        """Reader (rows and stream) must equal the baseline for one range."""
+        want = self.baseline.read_bars(WTI, interval, lo, hi, as_of_ns=as_of)
+        hot = self.hot.read_bars(WTI, interval, lo, hi, as_of_ns=as_of)
+        rows = run(self.reader.read_bars(WTI, interval, lo, hi, as_of_ns=as_of))
+        tier = self.expected_tier(want, hot["ts_ns"].to_pylist(), (lo, hi), BAR_WM_RANGE[1], wm)
+        assert rows.tier is tier
+        assert [r.ts_ns for r in rows.rows] == want["ts_ns"].to_pylist()
+        assert [r.version for r in rows.rows] == want["version"].to_pylist()
+        assert [r.close for r in rows.rows] == want["close"].to_pylist()
+        stier, streamed = run(
+            self.stream_table(self.reader.stream_bars(WTI, interval, lo, hi, as_of_ns=as_of))
+        )
+        assert stier is tier_for(lo, hi, wm)
+        assert norm(streamed) == norm(want) if want.num_rows else streamed.num_rows == 0
+
 
 @pytest.fixture(scope="module")
 def world(tmp_path_factory: pytest.TempPathFactory) -> World:
@@ -87,68 +119,102 @@ def world(tmp_path_factory: pytest.TempPathFactory) -> World:
     return w
 
 
+@pytest.fixture(scope="module")
+def mid_world(tmp_path_factory: pytest.TempPathFactory) -> World:
+    return World(tmp_path_factory.mktemp("cold_mid"), mid_migration=True)
+
+
 def test_world_has_restated_versions_and_negative_prices(world: World) -> None:
     got = world.baseline.read_bars(WTI, Interval.D1, T0, T0 + N_DAYS * DAY)
-    assert got.column("version").to_numpy().max() == 3
+    assert got.column("version").to_numpy().max() >= 3  # restated in several ingest rounds
+    assert (got.column("ingested_at_ns").to_numpy() == LATE_INGEST).any()  # late restatements
     assert got.column("close").to_numpy().min() < 0
     assert isinstance(world.reader, Reader)
 
 
 # -- property: reader == pure-SQL baseline ----------------------------------------------------
+AS_OF = st.one_of(st.none(), st.integers(INGEST_BASE - DAY, LATE_INGEST + DAY))
+
+
 @settings(max_examples=200, deadline=None)
 @given(
     wm=st.floats(0, 1),
+    mid=st.booleans(),
     start=st.integers(-3 * DAY, (N_DAYS + 3) * DAY),
     length=st.integers(1, 1100 * DAY),
-    as_of=st.one_of(st.none(), st.integers(INGEST_BASE - DAY, INGEST_BASE + 2 * ROUND + DAY)),
+    as_of=AS_OF,
     tick_start=st.integers(-DAY, 8 * DAY),
     tick_len=st.integers(1, 9 * DAY),
 )
 def test_reader_equals_sql_baseline_over_random_ranges(
     world: World,
+    mid_world: World,
     *,
     wm: float,
+    mid: bool,
     start: int,
     length: int,
     as_of: int | None,
     tick_start: int,
     tick_len: int,
 ) -> None:
+    w = mid_world if mid else world
     bw = int(BAR_WM_RANGE[0] + wm * (BAR_WM_RANGE[1] - BAR_WM_RANGE[0]))
     tw = int(TICK_WM_RANGE[0] + wm * (TICK_WM_RANGE[1] - TICK_WM_RANGE[0]))
-    world.set_wm(bw, tw)
-    lo, hi = T0 + start, T0 + start + length
-    want = world.baseline.read_bars(WTI, Interval.D1, lo, hi, as_of_ns=as_of)
-    rows = run(world.reader.read_bars(WTI, Interval.D1, lo, hi, as_of_ns=as_of))
-    assert rows.tier is tier_for(lo, hi, bw)
-    assert [r.ts_ns for r in rows.rows] == want["ts_ns"].to_pylist()
-    assert [r.version for r in rows.rows] == want["version"].to_pylist()
-    assert [r.close for r in rows.rows] == want["close"].to_pylist()
-    tier, streamed = run(
-        world.stream_table(world.reader.stream_bars(WTI, Interval.D1, lo, hi, as_of_ns=as_of))
-    )
-    assert tier is rows.tier
-    if want.num_rows:
-        assert norm(streamed) == norm(want)
-    else:
-        assert streamed.num_rows == 0
+    w.set_wm(bw, tw)
+    lo = T0 + start
+    w.check_bars(Interval.D1, lo, lo + length, as_of, bw)
 
     tlo, thi = TICK0 + tick_start, TICK0 + tick_start + tick_len
-    twant = world.baseline.read_ticks(WTI, tlo, thi)
-    trows = run(world.reader.read_ticks(WTI, tlo, thi))
-    assert trows.tier is tier_for(tlo, thi, tw)
-    assert [(r.ts_ns, int(r.side), r.version) for r in trows.rows] == list(
+    twant = w.baseline.read_ticks(WTI, tlo, thi)
+    thot = w.hot.read_ticks(WTI, tlo, thi)
+    trows = run(w.reader.read_ticks(WTI, tlo, thi))
+    ttier = w.expected_tier(twant, thot["ts_ns"].to_pylist(), (tlo, thi), TICK_WM_RANGE[1], tw)
+    assert trows.tier is ttier
+    assert [(r.ts_ns, int(r.side), r.version, r.price) for r in trows.rows] == list(
         zip(
             twant["ts_ns"].to_pylist(),
             twant["side"].to_pylist(),
             twant["version"].to_pylist(),
+            twant["price"].to_pylist(),
             strict=True,
         )
     )
-    ttier, tstream = run(world.stream_table(world.reader.stream_ticks(WTI, tlo, thi)))
-    assert ttier is trows.tier
+    stier, tstream = run(w.stream_table(w.reader.stream_ticks(WTI, tlo, thi)))
+    assert stier is tier_for(tlo, thi, tw)
     if twant.num_rows:
         assert norm(tstream) == norm(twant)
+
+
+@settings(max_examples=100, deadline=None)
+@given(
+    wm=st.floats(0, 1),
+    mid=st.booleans(),
+    interval=st.sampled_from(sorted(INTRADAY)),
+    offset=st.integers(-2, 40),
+    length_steps=st.integers(1, 3 * 24 * 60),
+    as_of=AS_OF,
+)
+def test_monthly_partitioned_bars_across_a_year_boundary(
+    world: World,
+    mid_world: World,
+    *,
+    wm: float,
+    mid: bool,
+    interval: Interval,
+    offset: int,
+    length_steps: int,
+    as_of: int | None,
+) -> None:
+    """1h / 1m bars live in month partitions; ranges cross 2019-12 / 2020-01 and the watermark."""
+    w = mid_world if mid else world
+    start, n, step = INTRADAY[interval]
+    bw = int(BAR_WM_RANGE[0] + wm * (BAR_WM_RANGE[1] - BAR_WM_RANGE[0]))
+    boundary = T0 + 365 * DAY  # 2020-01-01: every other example puts the watermark on it
+    mark = boundary if offset % 2 else bw
+    w.set_wm(mark, None)
+    lo = start + (offset * n // 40) * step  # offset 40 = past the end of the data
+    w.check_bars(interval, lo, lo + length_steps * step, as_of, mark)
 
 
 # -- unit ------------------------------------------------------------------------------------
@@ -175,7 +241,7 @@ def test_resolve_versions_keeps_max_version_per_key() -> None:
 
 def test_cold_only_range_is_served_from_parquet_with_negative_value(tmp_path: Path) -> None:
     """WTI 2020-04-20 settled at -37.63; it must survive a cold read."""
-    from query_support import bars_table
+    from unit.query.query_support import bars_table
 
     day = 1_587_340_800 * 10**9
     store = pw.LocalStore(tmp_path)
@@ -277,3 +343,21 @@ def test_duck_factory_paths_and_credential_checks(tmp_path: Path) -> None:
         )
     with pytest.raises(duck.ColdStoreUnavailable):
         duck.session_from_settings(SETTINGS)  # local env without a connection string
+
+
+def test_sessions_are_locked_down(tmp_path: Path) -> None:
+    import duckdb
+
+    local = duck.local_session(tmp_path)
+    with pytest.raises(duckdb.Error, match="locked"):
+        local.query("SET autoinstall_known_extensions = true", [])
+    try:  # LOAD only (no INSTALL): works when the extension is already in the local cache
+        az = duck.azure_session(
+            account_url="http://127.0.0.1:10000/devstoreaccount1",
+            managed_identity=False,
+            connection_string="UseDevelopmentStorage=true",
+        )
+    except duck.ColdStoreUnavailable:
+        pytest.skip("azure extension is not installed in this environment")
+    with pytest.raises(duckdb.Error, match="locked"):
+        az.query("SET azure_storage_connection_string = 'x'", [])

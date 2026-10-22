@@ -1,12 +1,15 @@
-"""Unified reader: SQL hot store plus Parquet cold store, split at the watermark (SPEC-03 §5).
+"""Unified reader: SQL hot store plus Parquet cold store (SPEC-03 §5).
 
-Cold rows (``ts_ns < watermark``) come from DuckDB over hive-partitioned Parquet, hot rows from SQL;
-both are concatenated with polars and versions are resolved per data-contracts §7 (latest, or the
-max version with ``ingested_at_ns <= as_of``). Streaming reads walk the range in fixed time slices
-so memory is bounded by one slice, never by the range.
+Both stores are read over the requested range (SQL first, see ``UnifiedReader._slice``), then
+concatenated with polars and versions are resolved per data-contracts §7 (latest, or the max
+version with ``ingested_at_ns <= as_of``). The ``migration_watermark`` decides the reported tier;
+the tier becomes ``mixed`` when SQL still held rows below the watermark. Streaming reads walk the
+range in fixed time slices so memory is bounded by one slice, never by the range, and report the
+tier derived from the range and the watermark alone.
 """
 
 import asyncio
+import math
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
@@ -186,18 +189,26 @@ class UnifiedReader:
         assert isinstance(out, pl.DataFrame)  # noqa: S101 - narrowing for mypy
         return out
 
-    def _slice(self, p: _Plan, lo: int, hi: int) -> pl.DataFrame:
-        """Rows of ``[lo, hi)``: cold below the watermark, hot at/above it, versions resolved."""
+    def _slice(self, p: _Plan, lo: int, hi: int) -> tuple[pl.DataFrame, bool]:
+        """Rows of ``[lo, hi)`` with versions resolved, plus whether both tiers contributed.
+
+        SQL is read first and over the whole range, then Parquet over the whole range. Migration
+        (SPEC-03 §2) writes Parquet, then deletes from SQL, then advances the watermark, so a
+        row is always in at least one of the two reads, even mid-migration (rows deleted from SQL,
+        watermark not yet advanced) and even when a restatement was written to SQL below the
+        watermark. Rows present in both tiers collapse in :func:`resolve_versions`. The watermark
+        only labels the tier: the flag is true when SQL returned rows below it or Parquet
+        returned rows at/above it.
+        """
+        if lo >= hi:
+            return _empty(p.kind), False
+        hot = self._hot(p, lo, hi)
+        cold = self._cold(p, lo, hi)
         wm = p.wm
-        parts: list[pl.DataFrame] = []
-        if wm is not None and lo < wm and lo < hi:
-            parts.append(self._cold(p, lo, min(hi, wm)))
-        if (wm is None or hi > wm) and lo < hi:
-            parts.append(self._hot(p, lo if wm is None else max(lo, wm), hi))
-        if not parts:
-            return _empty(p.kind)
+        mixed = wm is not None and bool((hot["ts_ns"] < wm).any() or (cold["ts_ns"] >= wm).any())
         dtypes = pl.Schema({c: _DTYPES.get(c, pl.Float64()) for c in p.kind.columns})
-        return resolve_versions(pl.concat([x.cast(dtypes) for x in parts]), p.kind.key)
+        both = pl.concat([hot.cast(dtypes), cold.cast(dtypes)])
+        return resolve_versions(both, p.kind.key), mixed
 
     @staticmethod
     def _arrow(df: pl.DataFrame, p: _Plan) -> pa.Table:
@@ -228,13 +239,13 @@ class UnifiedReader:
 
         def run() -> Rows[Bar]:
             p = self._plan(_BARS, instrument_id, interval, as_of_ns)
-            df = self._slice(p, start_ns, end_ns)
-            tier = tier_for(start_ns, end_ns, p.wm)
+            df, mixed = self._slice(p, start_ns, end_ns)
+            tier = Tier.MIXED if mixed else tier_for(start_ns, end_ns, p.wm)
             rows = [
                 Bar.model_construct(
                     ts=from_ts_ns(r["ts_ns"]), ts_ns=r["ts_ns"], open=r["open"], high=r["high"],
                     low=r["low"], close=r["close"],
-                    volume=None if r["volume"] != r["volume"] else r["volume"],
+                    volume=None if math.isnan(r["volume"]) else r["volume"],
                     quality=r["quality"], version=r["version"],
                 )
                 for r in df.iter_rows(named=True)
@@ -248,8 +259,8 @@ class UnifiedReader:
 
         def run() -> Rows[Tick]:
             p = self._plan(_TICKS, instrument_id, None, None)
-            df = self._slice(p, start_ns, end_ns)
-            tier = tier_for(start_ns, end_ns, p.wm)
+            df, mixed = self._slice(p, start_ns, end_ns)
+            tier = Tier.MIXED if mixed else tier_for(start_ns, end_ns, p.wm)
             rows = [
                 Tick.model_construct(
                     ts=from_ts_ns(r["ts_ns"]), ts_ns=r["ts_ns"], price=r["price"], size=r["size"],
@@ -273,7 +284,7 @@ class UnifiedReader:
             lo = start
             while lo < end:
                 hi = min(end, lo + step)
-                df = await asyncio.to_thread(self._slice, p, lo, hi)
+                df, _ = await asyncio.to_thread(self._slice, p, lo, hi)
                 if df.height:
                     for batch in self._arrow(df, p).to_batches(max_chunksize=_BATCH_ROWS):
                         yield batch
@@ -324,7 +335,7 @@ class UnifiedReader:
                 bar = Bar.model_construct(
                     ts=from_ts_ns(row["ts_ns"]), ts_ns=row["ts_ns"], open=row["open"],
                     high=row["high"], low=row["low"], close=row["close"],
-                    volume=None if vol is None else vol, quality=row["quality"],
+                    volume=vol, quality=row["quality"],
                     version=row["version"],
                 )  # fmt: skip
                 out.append(LatestBar(instrument_id=iid, interval=interval, bar=bar))

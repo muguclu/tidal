@@ -8,7 +8,13 @@ Backends
   settings). With ``use_managed_identity`` a ``credential_chain`` secret (Managed Identity first)
   is created.
 
-Extension install: ``INSTALL azure`` downloads ``azure.duckdb_extension`` (~5 s) into
+Hardening: after setup every session runs ``SET autoinstall_known_extensions=false``,
+``autoload_known_extensions=false`` and ``lock_configuration=true``. Outside ``TIDAL_ENV=local``
+only ``LOAD azure`` runs (no ``INSTALL``, no network fetch): the T-305 image must bake
+``azure.duckdb_extension`` into a fixed ``extension_directory`` (``~/.duckdb/extensions/...`` of the
+image user, or one set via the ``extension_directory`` option) at build time.
+
+Extension install (local only): ``INSTALL azure`` downloads ``azure.duckdb_extension`` (~5 s) into
 ``~/.duckdb/extensions/<duckdb version>/<platform>/`` on first use and needs outbound HTTPS to
 ``extensions.duckdb.org``; later runs load it from that cache, so an offline host works once the
 cache is warm (bake it into the image, or set ``extension_directory``). The extension is ABI-bound
@@ -97,15 +103,32 @@ class DuckSession:
             raise ColdStoreUnavailable("cold store unreachable") from exc
 
 
+def _harden(conn: duckdb.DuckDBPyConnection) -> None:
+    """No implicit extension downloads; freeze settings so queries cannot change them."""
+    conn.execute("SET autoinstall_known_extensions = false")
+    conn.execute("SET autoload_known_extensions = false")
+    conn.execute("SET lock_configuration = true")
+
+
 def local_session(root: Path) -> DuckSession:
     """Session reading the ``LocalStore`` tree under ``root``."""
-    return DuckSession(duckdb.connect(), local_root=root, container_ping="")
+    conn = duckdb.connect()
+    _harden(conn)
+    return DuckSession(conn, local_root=root, container_ping="")
 
 
 def azure_session(
-    *, account_url: str, managed_identity: bool, connection_string: str | None
+    *,
+    account_url: str,
+    managed_identity: bool,
+    connection_string: str | None,
+    allow_install: bool = False,
 ) -> DuckSession:
-    """Session over Azurite/Azure Blob via the ``azure`` extension (see module docstring)."""
+    """Session over Azurite/Azure Blob via the ``azure`` extension (see module docstring).
+
+    ``allow_install`` (local dev/tests only) runs ``INSTALL azure`` first; otherwise the extension
+    must already be present in the image's ``extension_directory`` and only ``LOAD`` runs.
+    """
     account = (urlparse(account_url).hostname or "").split(".")[0]
     if managed_identity and not _ACCOUNT.fullmatch(account):  # DDL cannot be parameterised
         raise ColdStoreUnavailable("storage account name is not a valid Azure account")
@@ -113,7 +136,8 @@ def azure_session(
         raise ColdStoreUnavailable("no storage credentials: need MI or a connection string")
     conn = duckdb.connect()
     try:
-        conn.execute("INSTALL azure")
+        if allow_install:
+            conn.execute("INSTALL azure")
         conn.execute("LOAD azure")
         if managed_identity:
             conn.execute(
@@ -122,6 +146,7 @@ def azure_session(
             )
         else:
             conn.execute("SET GLOBAL azure_storage_connection_string = ?", [connection_string])
+        _harden(conn)
     except duckdb.Error as exc:
         raise ColdStoreUnavailable("cannot load the duckdb azure extension") from exc
     return DuckSession(
@@ -136,5 +161,8 @@ def session_from_settings(settings: Settings, *, local_root: Path | None = None)
     s = settings.storage
     cs = s.connection_string.get_secret_value() if s.connection_string else None
     return azure_session(
-        account_url=s.account_url, managed_identity=s.use_managed_identity, connection_string=cs
+        account_url=s.account_url,
+        managed_identity=s.use_managed_identity,
+        connection_string=cs,
+        allow_install=settings.env == "local",
     )

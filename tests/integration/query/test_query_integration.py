@@ -7,9 +7,10 @@ pure-SQL baseline) and the Azurite container holds the cold Parquet tree.
 # ruff: noqa: PLC0415
 
 import asyncio
+import os
 import re
-import sys
 import time
+import uuid
 from collections.abc import Coroutine, Iterator
 from pathlib import Path
 from typing import Any
@@ -22,9 +23,6 @@ from testcontainers.community.mssql import SqlServerContainer
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "unit" / "query"))
-import query_support as qs
-
 from tidal.common.config import Settings
 from tidal.common.timeutil import FixedClock
 from tidal.contracts.models import Tier
@@ -34,6 +32,7 @@ from tidal.query.reader import UnifiedReader, tier_for
 from tidal.storage import layout
 from tidal.storage import parquet_writer as pw
 from tidal.storage import sql_repo as sr
+from unit.query import query_support as qs
 
 pytestmark = pytest.mark.integration
 
@@ -42,7 +41,18 @@ PASSWORD = "Tidal_t3st_Passw0rd!"  # noqa: S105 - throwaway container credential
 AZURITE_KEY = (  # public Azurite dev key
     "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="
 )
-SETTINGS = Settings.from_env({"TIDAL_ENV": "local"})
+
+
+def _settings() -> Settings:
+    """Settings reject unknown TIDAL_* keys in the process environment; hide the test-only ones."""
+    hidden = {k: os.environ.pop(k) for k in list(os.environ) if k.startswith("TIDAL_TEST_")}
+    try:
+        return Settings.from_env({"TIDAL_ENV": "local"})
+    finally:
+        os.environ.update(hidden)
+
+
+SETTINGS = _settings()
 
 
 def _odbc_driver() -> str:
@@ -56,38 +66,73 @@ def _odbc_driver() -> str:
     return str(found[-1])
 
 
-def _engine(host: str, port: str, database: str) -> Engine:
+def _engine(server: str, password: str, database: str) -> Engine:
     odbc = (
-        f"DRIVER={{{_odbc_driver()}}};SERVER={host},{port};DATABASE={database};UID=sa;"
-        f"PWD={{{PASSWORD}}};TrustServerCertificate=yes"
+        f"DRIVER={{{_odbc_driver()}}};SERVER={server};DATABASE={database};UID=sa;"
+        f"PWD={{{password}}};TrustServerCertificate=yes"
     )
     return create_engine(URL.create("mssql+pyodbc", query={"odbc_connect": odbc}))
 
 
+def _wait_for_login(eng: Engine, seconds: float) -> None:
+    deadline = time.monotonic() + seconds
+    while True:  # the server accepts TCP before it accepts logins
+        try:
+            with eng.connect():
+                return
+        except Exception:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(2)
+
+
 @pytest.fixture(scope="module")
 def engines() -> Iterator[tuple[Engine, Engine]]:
-    """(hot, baseline) engines on two databases of one SQL Server container."""
+    """(hot, baseline) engines on two throwaway databases.
+
+    ``TIDAL_TEST_SQL_URL`` (``host,port``, password in ``TIDAL_TEST_SQL_PASSWORD`` or
+    ``TIDAL_SQL__PASSWORD``) reuses a running SQL Server; otherwise a testcontainer is started.
+    """
+    shared = os.environ.get("TIDAL_TEST_SQL_URL")
+    if shared:
+        password = os.environ.get("TIDAL_TEST_SQL_PASSWORD") or os.environ.get(
+            "TIDAL_SQL__PASSWORD"
+        )
+        if not password:
+            pytest.skip("TIDAL_TEST_SQL_URL set but no TIDAL_TEST_SQL_PASSWORD")
+        yield from _two_databases(shared, password)
+        return
     container = SqlServerContainer("mcr.microsoft.com/mssql/server:2022-latest", password=PASSWORD)
     # SQL Server needs well over the default 120 s on a busy dev box: wait on its own log line.
     container.waiting_for(
         LogMessageWaitStrategy("ready for client connections").with_startup_timeout(480)
     )
     with container as c:
-        host, port = c.get_container_host_ip(), str(c.get_exposed_port(1433))
-        master = _engine(host, port, "master")
-        deadline = time.monotonic() + 90
-        while True:  # the server accepts TCP before it accepts logins
-            try:
-                with master.connect():
-                    break
-            except Exception:
-                if time.monotonic() > deadline:
-                    raise
-                time.sleep(2)
+        server = f"{c.get_container_host_ip()},{c.get_exposed_port(1433)}"
+        yield from _two_databases(server, PASSWORD)
+
+
+def _two_databases(server: str, password: str) -> Iterator[tuple[Engine, Engine]]:
+    master = _engine(server, password, "master")
+    _wait_for_login(master, 90)
+    suffix = uuid.uuid4().hex[:10]
+    names = (f"tidal_q_hot_{suffix}", f"tidal_q_base_{suffix}")
+    with master.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        for name in names:
+            conn.execute(text(f"CREATE DATABASE [{name}]"))
+    engines = _engine(server, password, names[0]), _engine(server, password, names[1])
+    try:
+        yield engines
+    finally:
+        for eng in engines:
+            eng.dispose()
         with master.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-            conn.execute(text("CREATE DATABASE hot"))
-            conn.execute(text("CREATE DATABASE base"))
-        yield _engine(host, port, "hot"), _engine(host, port, "base")
+            for name in names:
+                conn.execute(
+                    text(f"ALTER DATABASE [{name}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE")
+                )
+                conn.execute(text(f"DROP DATABASE [{name}]"))
+        master.dispose()
 
 
 @pytest.fixture(scope="module")
@@ -113,12 +158,11 @@ class Stack:
         for eng in engines:
             sr.apply_migrations(eng, MIGRATIONS)
             sr.SqlRepository(eng).upsert_instruments([qs.instrument_row()])
-        source = qs.build_baseline()
-        qs.load_hot(source, hot)
-        qs.load_hot(source, base, everything=True)
         service = BlobServiceClient.from_connection_string(azurite_cs)
         service.create_container(layout.CONTAINER_MARKETDATA)
-        qs.write_cold(source, pw.AzureBlobStore(service))
+        baseline, hot_src = qs.make_world(pw.AzureBlobStore(service), mid_migration=False)
+        qs.copy_rows(hot_src, hot)  # hot rows plus late restatements of cold keys
+        qs.copy_rows(baseline, base)
         self.hot, self.base = sr.SqlRepository(hot), sr.SqlRepository(base)
         self.reader = UnifiedReader(
             self.hot,
@@ -163,7 +207,11 @@ def test_bars_equal_sql_baseline_across_the_watermark(
     lo, hi = qs.T0 + d0 * qs.DAY, qs.T0 + d1 * qs.DAY
     want = stack.base.read_bars(qs.WTI, Interval.D1, lo, hi, as_of_ns=as_of)
     got = _run(stack.reader.read_bars(qs.WTI, Interval.D1, lo, hi, as_of_ns=as_of))
-    assert got.tier is tier_for(lo, hi, WM_BAR)
+    # SQL still holds late restatements below the watermark, which makes such ranges mixed.
+    hot_ts = stack.hot.read_bars(qs.WTI, Interval.D1, lo, hi)["ts_ns"].to_numpy()
+    hot_below = bool((hot_ts < WM_BAR).any())
+    cold_above = hi > WM_BAR and lo < qs.BAR_WM_RANGE[1]  # Parquet also holds days up to W_MAX
+    assert got.tier is (Tier.MIXED if hot_below or cold_above else tier_for(lo, hi, WM_BAR))
     assert [(r.ts_ns, r.version, r.close) for r in got.rows] == list(
         zip(
             want["ts_ns"].to_pylist(),
@@ -193,6 +241,6 @@ def test_ticks_equal_sql_baseline_and_stream_matches(stack: Stack) -> None:
 def test_negative_price_survives_cold_read_and_ping(stack: Stack) -> None:
     stack.hot.set_watermark("md.bar_hot", WM_BAR)
     cold = _run(stack.reader.read_bars(qs.WTI, Interval.D1, qs.T0, WM_BAR))
-    assert cold.tier is Tier.COLD
+    assert cold.tier in (Tier.COLD, Tier.MIXED)  # mixed: late restatements remain in SQL
     assert min(b.close for b in cold.rows) < 0
     _run(stack.reader.ping())
