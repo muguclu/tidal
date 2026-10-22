@@ -19,8 +19,9 @@ Model (per instrument, parameters in ``synthetic_params.yaml``)
   size 0).
 * **Fault injection**: ``outlier_rate`` of ticks get a fat-finger displacement of 5-25 % of the
   level; ``gap_rate`` of the nominal ticks are dropped in geometric runs and the first row after
-  each run carries ``GAP_BEFORE``. Every row carries ``SYNTHETIC``; ``validate_and_flag`` then adds
-  ``NEGATIVE``/``OUTLIER``. Real model jumps can also be flagged ``OUTLIER`` (intended).
+  each run carries ``GAP_BEFORE``; injected outliers are flagged ``OUTLIER`` directly. Every row
+  gets ``SYNTHETIC`` from ``validate_and_flag`` (the only place), which also adds ``NEGATIVE`` and
+  its own ``OUTLIER`` findings. Real model jumps can also be flagged ``OUTLIER`` (intended).
 
 Determinism and stream keys
 ---------------------------
@@ -29,23 +30,46 @@ deterministic children of the root seed (the stateless equivalent of ``SeedSeque
 order of generation never matters and years/instruments can run in parallel):
 
 * ``(crc32(instrument_id), 0)``            -> daily path stream
-* ``(crc32(instrument_id), year, month)``  -> tick stream of one instrument-month (child of the
-  ``(instrument, year)`` node)
+* ``(crc32(instrument_id), year, month)``  -> month stream: per-day tick counts and jump times
+  (child of the ``(instrument, year)`` node)
+* ``(crc32(instrument_id), year, month, calendar_day_index)`` -> one stream per business day for
+  all tick-level draws. Because each day owns its stream, chunking cannot change any value.
 
 ``crc32`` of the id is used instead of the catalogue position so keys never change when the
-catalogue is extended. ``ingested_at_ns`` comes from the injected clock, never from wall time.
-Output is one TICK_V1 table per instrument-month (about 0.6M rows at L rate, bounded memory).
+catalogue is extended (a test asserts no collisions across ``SYN.*``). ``ingested_at_ns`` comes
+from the injected clock, never from wall time. Floats may differ in the last bits across numpy
+versions or platforms, so byte-equal output is guaranteed within one environment only; a pinned
+golden hash covers the integer columns.
+
+Chunking: a month is yielded as several tables of whole business days, cut greedily at
+``CHUNK_ROWS`` nominal ticks from the drawn tick counts (data-derived, never timing-derived).
+Concatenating the chunks gives the same ticks for any ``chunk_rows``; only the validator's rolling
+OUTLIER window restarts per chunk. Gap runs end at the day boundary.
+
+Performance (measured on Windows, 6 logical cores, numpy 2.x, polars validator included, T-104 fix)
+---------------------------------------------------------------------------------------------
+* Worst month: ``SYN.EURUSD.TICK`` 2022-04 at L rate, default seed (81 % crisis days): 2.46M rows
+  in 21 tables of at most 126k rows; 1.1-1.4M rows/s single process.
+* Peak memory of that month: 250 MB Windows peak working set (whole process incl. interpreter,
+  polars, pyarrow); tracemalloc peak (numpy/python allocations only) 23 MB. A process that
+  generates 48 sampled L months in a row peaked at 276 MB. ``WORKER_PEAK_BYTES`` = 300 MiB.
+* L scale (1.5B rows, 2400 units): single process 1.2-1.4M rows/s, 2 workers 1.83M rows/s
+  (13.6 min measured for 29M sampled rows, extrapolated), so about 14 min with 2 workers.
+  Extrapolation to 8 workers at that efficiency is about 4 min; it was NOT measured, because
+  pools of 3+ workers died with ``BrokenProcessPool`` on this machine (cause not diagnosed; serial
+  runs of the same units are fine).
+* Whole run under 2 GB: ``max_workers_for_memory()`` = 6 workers (2 GiB / 300 MiB, parent excluded).
 
 Source protocol: ``Source`` lives in T-102's ``base.py``; until then this module exposes the plain
-functions ``plan`` and ``generate``.
+functions ``plan``, ``generate`` and ``generate_unit``.
 """
 
 import zlib
 from collections.abc import Iterator
-from datetime import date
+from datetime import date, timedelta
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, NamedTuple
 
 import numpy as np
 import pyarrow as pa
@@ -67,6 +91,9 @@ _ANCHOR_DAY: Final = ANCHOR.toordinal() - _EPOCH_DAY
 _NS_DAY: Final = 86_400 * 10**9
 _NS_HOUR: Final = 3_600 * 10**9
 _SESSION_GRID: Final = 1440  # minutes
+CHUNK_ROWS: Final = 100_000  # nominal ticks per yielded table (whole business days)
+#: Measured peak working set of one worker process (see module docstring), rounded up.
+WORKER_PEAK_BYTES: Final = 300 * 1024**2
 _OUTLIER_MIN, _OUTLIER_MAX = 0.05, 0.25
 _Triple = tuple[float, float, float]
 
@@ -154,21 +181,40 @@ def _scale_cfg(scale: str) -> dict[str, int]:
     return scales[scale]  # type: ignore[no-any-return]
 
 
-def plan(scale: str, start: date, end: date) -> list[tuple[str, int, int]]:
-    """Work units ``(instrument_id, year, month)`` for ``scale`` over ``[start, end]`` inclusive.
+class WorkUnit(NamedTuple):
+    """One instrument-month; ``start``/``end`` are the clip bounds of a partial edge month."""
+
+    instrument_id: str
+    year: int
+    month: int
+    start: date | None = None  # inclusive; None = whole month from day 1
+    end: date | None = None  # inclusive; None = whole month to its last day
+
+
+def plan(scale: str, start: date, end: date) -> list[WorkUnit]:
+    """Work units for ``scale`` over ``[start, end]`` inclusive.
 
     Instruments: the first N ``SYN.*`` catalogue rows. Years: the last N years of the range
-    (all of them if shorter). Months: those overlapping the range. Order: instrument, year, month.
+    (all of them if shorter). Months: those overlapping the range; the first/last month carry
+    clip bounds when partial (feed them to ``generate_unit``). Order: instrument, year, month.
     """
     cfg = _scale_cfg(scale)
     years = range(max(start.year, end.year - cfg["years"] + 1), end.year + 1)
-    return [
-        (inst, year, month)
-        for inst in synthetic_instruments()[: cfg["instruments"]]
+    months = [
+        (year, month)
         for year in years
         for month in range(1, 13)
-        if (year, month) >= (start.year, start.month) and (year, month) <= (end.year, end.month)
+        if (start.year, start.month) <= (year, month) <= (end.year, end.month)
     ]
+    first = start if start.day > 1 else None
+    last = end if (end + timedelta(days=1)).month == end.month else None
+    units = []
+    for inst in synthetic_instruments()[: cfg["instruments"]]:
+        for year, month in months:
+            clip_start = first if (year, month) == (start.year, start.month) else None
+            clip_end = last if (year, month) == (end.year, end.month) else None
+            units.append(WorkUnit(inst, year, month, clip_start, clip_end))
+    return units
 
 
 def expected_ticks(scale: str, instrument_id: str) -> float:
@@ -269,7 +315,80 @@ def _day_selection(year: int, month: int, start: date | None, end: date | None) 
     return np.arange(first, last) - _ANCHOR_DAY
 
 
-def _month_ticks(
+class _Day(NamedTuple):
+    """Daily-layer inputs of one business day."""
+
+    cal: int  # calendar-day index into the daily path
+    n: int  # nominal tick count
+    regime: int
+    jump_u: float  # activity-time position of the day's jump
+
+
+def _day_ticks(
+    rng: np.random.Generator, p: InstrumentParams, path: DailyPath, day: _Day
+) -> dict[str, np.ndarray]:
+    """All ticks of one business day (about 120k rows at most at L rate); fully vectorised."""
+    n = day.n
+    inj = _raw()["injection"]
+    u = np.sort(rng.random(n))  # ordered arrival times in activity time
+    cdf, edges = _session_cdf(p.session_start_h, p.session_end_h)
+    ts = (day.cal + _ANCHOR_DAY) * _NS_DAY + (np.interp(u, cdf, edges) * _NS_HOUR).astype(np.int64)
+    # Brownian bridge in activity time from the day's open to its close
+    dw = rng.standard_normal(n) * np.sqrt(np.diff(u, prepend=0.0))
+    cs = np.cumsum(dw)
+    w_end = cs[-1] + rng.standard_normal() * np.sqrt(1.0 - u[-1])
+    bridge = cs - u * w_end
+    jump, ret = float(path.jump[day.cal]), float(path.ret[day.cal])
+    x = (
+        (path.x_close[day.cal] - ret)
+        + (ret - jump) * u
+        + jump * (u >= day.jump_u)
+        + p.sigma_diffusive[day.regime] * bridge
+    )
+    level = np.exp(x)
+    half = 0.5e-4 * p.spread_bps * p.spread_regime_mult[day.regime] * level
+    kind = rng.random(n)
+    is_trade = kind < p.trade_share
+    side = np.where(is_trade, 0, np.where(kind < (1 + p.trade_share) / 2, 1, 2)).astype(np.int8)
+    sign = np.where(is_trade, rng.choice([-1.0, 1.0], size=n), np.where(side == 1, -1.0, 1.0))
+    price = level - p.shift + sign * half
+    out = injection_mask_outliers(rng, n, float(inj["outlier_rate"]))
+    shock = rng.choice([-1.0, 1.0], size=n) * rng.uniform(_OUTLIER_MIN, _OUTLIER_MAX, n)
+    price = np.where(out, price + shock * level, price)
+    size = np.where(is_trade, p.size_median * np.exp(0.8 * rng.standard_normal(n)), 0.0)
+    dropped = injection_mask_gaps(rng, n, float(inj["gap_rate"]), float(inj["gap_mean_len"]))
+    after_gap = np.zeros(n, dtype=bool)
+    after_gap[1:] = dropped[:-1] & ~dropped[1:]
+    # injected outliers are flagged here (also inside the validator's warm-up window); the
+    # validator ORs its own findings on top. SYNTHETIC is set only by validate_and_flag.
+    quality = after_gap * int(QualityFlag.GAP_BEFORE) + out * int(QualityFlag.OUTLIER)
+    keep = ~dropped
+    return {
+        "ts_ns": ts[keep],
+        "price": price[keep],
+        "size": size[keep].astype(np.float32),
+        "side": side[keep],
+        "quality": quality[keep].astype(np.int8),
+    }
+
+
+def _chunks(counts: np.ndarray, max_rows: int) -> list[range]:
+    """Greedy day blocks of at most ``max_rows`` nominal ticks (a single day may exceed it).
+
+    Boundaries depend only on the drawn tick counts, never on timing or memory.
+    """
+    blocks, first, total = [], 0, 0
+    for i, c in enumerate(counts.tolist()):
+        if total and total + c > max_rows:
+            blocks.append(range(first, i))
+            first, total = i, 0
+        total += c
+    if first < counts.size:
+        blocks.append(range(first, counts.size))
+    return blocks
+
+
+def _month_chunks(
     instrument_id: str,
     year: int,
     month: int,
@@ -278,79 +397,36 @@ def _month_ticks(
     scale: str,
     start: date | None,
     end: date | None,
-) -> dict[str, np.ndarray]:
+    max_rows: int,
+) -> Iterator[dict[str, np.ndarray]]:
     p = load_params(instrument_id)
     path = daily_path(instrument_id, seed)
     cal = _day_selection(year, month, start, end)
     cal = cal[path.business[cal]]
-    rng = _rng(seed, _crc(instrument_id), year, month)
-    inj = _raw()["injection"]
-    assert isinstance(inj, dict)  # noqa: S101
+    rng = _rng(seed, _crc(instrument_id), year, month)  # month stream: counts and jump positions
     regime = path.regime[cal].astype(np.intp)
     base_rate = expected_ticks(scale, instrument_id) / (
         BUSINESS_DAYS_PER_YEAR * float(p.stationary @ np.asarray(p.regime_activity))
     )
     counts = rng.poisson(base_rate * np.asarray(p.regime_activity)[regime])
-    n = int(counts.sum())
-    day = np.repeat(np.arange(cal.size), counts)
-    # sorted uniforms inside each day = ordered arrival times in activity time
-    u = np.sort(rng.random(n) + day) - day
-    cdf, edges = _session_cdf(p.session_start_h, p.session_end_h)
-    t_ns = (np.interp(u, cdf, edges) * _NS_HOUR).astype(np.int64)
-    ts = (cal + _ANCHOR_DAY)[day] * _NS_DAY + t_ns
-    ts = np.maximum.accumulate(ts - np.arange(n)) + np.arange(n)  # strictly increasing (PK)
-    # Brownian bridge in activity time, per day, segmented cumsum
-    prev_u = np.where(
-        np.arange(n) == np.repeat(np.cumsum(counts) - counts, counts), 0.0, np.roll(u, 1)
-    )
-    dw = rng.standard_normal(n) * np.sqrt(u - prev_u)
-    last_u = np.zeros(cal.size)
-    np.maximum.at(last_u, day, u)
-    w_end = np.bincount(day, weights=dw, minlength=cal.size) + rng.standard_normal(
-        cal.size
-    ) * np.sqrt(1.0 - last_u)
-    starts = np.cumsum(counts) - counts
-    cs = np.cumsum(dw)
-    offset = np.where(starts > 0, cs[np.maximum(starts - 1, 0)] if n else 0.0, 0.0)
-    bridge = cs - offset[day] - u * w_end[day]
-    sigma = p.sigma_diffusive[regime]
-    jump = path.jump[cal]
     jump_u = rng.random(cal.size)
-    x_open = path.x_close[cal] - path.ret[cal]
-    x = (
-        x_open[day]
-        + (path.ret[cal] - jump)[day] * u
-        + jump[day] * (u >= jump_u[day])
-        + sigma[day] * bridge
-    )
-    level = np.exp(x)
-    mid = level - p.shift
-    half = 0.5e-4 * p.spread_bps * np.asarray(p.spread_regime_mult)[regime][day] * level
-    kind = rng.random(n)
-    is_trade = kind < p.trade_share
-    side = np.where(is_trade, 0, np.where(kind < (1 + p.trade_share) / 2, 1, 2)).astype(np.int8)
-    sign = np.where(is_trade, rng.choice([-1.0, 1.0], size=n), np.where(side == 1, -1.0, 1.0))
-    price = mid + sign * half
-    out = injection_mask_outliers(rng, n, float(inj["outlier_rate"]))
-    price = np.where(
-        out,
-        price
-        + rng.choice([-1.0, 1.0], size=n) * rng.uniform(_OUTLIER_MIN, _OUTLIER_MAX, n) * level,
-        price,
-    )
-    size = np.where(is_trade, p.size_median * np.exp(0.8 * rng.standard_normal(n)), 0.0)
-    dropped = injection_mask_gaps(rng, n, float(inj["gap_rate"]), float(inj["gap_mean_len"]))
-    after_gap = np.zeros(n, dtype=bool)
-    after_gap[1:] = dropped[:-1] & ~dropped[1:]
-    quality = np.where(after_gap, int(QualityFlag.GAP_BEFORE), 0)
-    keep = ~dropped
-    return {
-        "ts_ns": ts[keep],
-        "price": price[keep],
-        "size": size[keep].astype(np.float32),
-        "side": side[keep],
-        "quality": (quality[keep] | int(QualityFlag.SYNTHETIC)).astype(np.int8),
-    }
+    carry = -(2**62)
+    for block in _chunks(counts, max_rows):
+        parts = []
+        for i in block:
+            if counts[i] == 0:
+                continue
+            day = _Day(int(cal[i]), int(counts[i]), int(regime[i]), float(jump_u[i]))
+            day_rng = _rng(seed, _crc(instrument_id), year, month, day.cal)  # one stream per day
+            parts.append(_day_ticks(day_rng, p, path, day))
+        if not parts:
+            continue
+        cols = {k: np.concatenate([part[k] for part in parts]) for k in parts[0]}
+        del parts
+        idx = np.arange(cols["ts_ns"].size)  # strictly increasing ts (PK), carried across chunks
+        cols["ts_ns"] = np.maximum(np.maximum.accumulate(cols["ts_ns"] - idx), carry + 1) + idx
+        carry = int(cols["ts_ns"][-1])
+        yield cols
 
 
 def generate(
@@ -363,32 +439,73 @@ def generate(
     clock: Clock,
     start: date | None = None,
     end: date | None = None,
+    chunk_rows: int = CHUNK_ROWS,
 ) -> Iterator[pa.Table]:
-    """Yield the validated ``TICK_V1`` table(s) of one instrument-month (one table per call).
+    """Yield validated ``TICK_V1`` tables of one instrument-month, each of about ``chunk_rows``.
 
-    ``start``/``end`` (inclusive, ``TIDAL_SYNTH__START/END``) clip the month; they change the number
-    of days drawn, hence are part of the determinism key. ``ingested_at_ns`` is ``clock.now_ns()``.
-    Output is sorted by (strictly increasing) ``ts_ns`` and already passed ``validate_and_flag``.
+    The month is cut into blocks of whole business days (see ``_chunks``), so memory is bounded
+    by the block, and the cut points are a pure function of the seed. Tables are consecutive and
+    strictly increasing in ``ts_ns`` across chunks. ``start``/``end`` (inclusive,
+    ``TIDAL_SYNTH__START/END``) clip the month and change which days exist, hence are part of the
+    determinism key. ``ingested_at_ns`` is ``clock.now_ns()``. Every table already passed
+    ``validate_and_flag(synthetic=True)``; its rolling OUTLIER window restarts per chunk.
     """
     if not 2000 <= year <= LAST_YEAR:  # noqa: PLR2004
         msg = f"year {year} outside generator range 2000..{LAST_YEAR}"
         raise ConfigError(msg)
-    cols = _month_ticks(instrument_id, year, month, seed=seed, scale=scale, start=start, end=end)
-    n = cols["ts_ns"].size
-    if n == 0:
-        return
-    inst = pa.DictionaryArray.from_arrays(np.zeros(n, dtype=np.int16), pa.array([instrument_id]))
-    table = pa.Table.from_arrays(
-        [
-            pa.array(cols["ts_ns"]),
-            inst,
-            pa.array(cols["price"]),
-            pa.array(cols["size"]),
-            pa.array(cols["side"]),
-            pa.array(cols["quality"]),
-            pa.array(np.full(n, clock.now_ns(), dtype=np.int64)),
-            pa.array(np.ones(n, dtype=np.int16)),
-        ],
-        schema=TICK_V1,
+    now = clock.now_ns()
+    chunks = _month_chunks(
+        instrument_id,
+        year,
+        month,
+        seed=seed,
+        scale=scale,
+        start=start,
+        end=end,
+        max_rows=chunk_rows,
     )
-    yield validate_and_flag(table, synthetic=True)
+    for cols in chunks:
+        n = cols["ts_ns"].size
+        inst = pa.DictionaryArray.from_arrays(
+            np.zeros(n, dtype=np.int16), pa.array([instrument_id])
+        )
+        table = pa.Table.from_arrays(
+            [
+                pa.array(cols["ts_ns"]),
+                inst,
+                pa.array(cols["price"]),
+                pa.array(cols["size"]),
+                pa.array(cols["side"]),
+                pa.array(cols["quality"]),
+                pa.array(np.full(n, now, dtype=np.int64)),
+                pa.array(np.ones(n, dtype=np.int16)),
+            ],
+            schema=TICK_V1,
+        )
+        yield validate_and_flag(table, synthetic=True)
+
+
+def generate_unit(
+    unit: WorkUnit, *, seed: int, scale: str, clock: Clock, chunk_rows: int = CHUNK_ROWS
+) -> Iterator[pa.Table]:
+    """``generate`` for one ``plan`` entry (passes the clip bounds of partial edge months)."""
+    return generate(
+        unit.instrument_id,
+        unit.year,
+        unit.month,
+        seed=seed,
+        scale=scale,
+        clock=clock,
+        start=unit.start,
+        end=unit.end,
+        chunk_rows=chunk_rows,
+    )
+
+
+def max_workers_for_memory(budget_bytes: int = 2 * 1024**3) -> int:
+    """Parallel workers (at least 1) whose measured peaks fit ``budget_bytes`` for the whole run.
+
+    Uses ``WORKER_PEAK_BYTES`` (measured Windows peak working set of a worker incl. interpreter,
+    polars and pyarrow, on the worst L-rate month; see the module docstring).
+    """
+    return max(1, budget_bytes // WORKER_PEAK_BYTES)

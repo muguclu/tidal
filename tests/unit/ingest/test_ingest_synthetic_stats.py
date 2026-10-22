@@ -1,6 +1,7 @@
 """Synthetic generator statistics: regime-vol targets (+-10 %), injection rates, U-shape."""
 
 import numpy as np
+import pyarrow as pa
 import pytest
 
 from tidal.common.timeutil import FixedClock
@@ -48,7 +49,9 @@ def test_outlier_and_gap_injection_rates() -> None:
 
 
 def test_pipeline_flags_reflect_injected_faults() -> None:
-    (table,) = syn.generate("SYN.WTI.TICK", 2022, 4, seed=3, scale="L", clock=FixedClock(0))
+    table = pa.concat_tables(
+        syn.generate("SYN.WTI.TICK", 2022, 4, seed=3, scale="L", clock=FixedClock(0))
+    )
     quality = table["quality"].to_numpy()
     n = table.num_rows
     assert int(((quality & GAP) != 0).sum()) == pytest.approx(n * 1e-3 / 20, rel=0.5)
@@ -58,7 +61,9 @@ def test_pipeline_flags_reflect_injected_faults() -> None:
 
 
 def test_u_shaped_intraday_activity() -> None:
-    (table,) = syn.generate("SYN.BRENT.TICK", 2021, 5, seed=2, scale="L", clock=FixedClock(0))
+    table = pa.concat_tables(
+        syn.generate("SYN.BRENT.TICK", 2021, 5, seed=2, scale="L", clock=FixedClock(0))
+    )
     hours = (table["ts_ns"].to_numpy() % NS_DAY) / 3_600_000_000_000
     p = syn.load_params("SYN.BRENT.TICK")
     assert hours.min() >= p.session_start_h
@@ -71,7 +76,9 @@ def test_u_shaped_intraday_activity() -> None:
 
 def test_tick_daily_close_matches_daily_layer() -> None:
     """Last trade of each day is within bridge noise + half spread of the daily-layer close."""
-    (table,) = syn.generate("SYN.HH.TICK", 2021, 5, seed=2, scale="L", clock=FixedClock(0))
+    table = pa.concat_tables(
+        syn.generate("SYN.HH.TICK", 2021, 5, seed=2, scale="L", clock=FixedClock(0))
+    )
     ts, price, side = (table[c].to_numpy() for c in ("ts_ns", "price", "side"))
     day = ts // NS_DAY
     path = syn.daily_path("SYN.HH.TICK", 2)

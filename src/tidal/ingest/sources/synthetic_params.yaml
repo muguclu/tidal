@@ -1,4 +1,4 @@
-# Calibration parameters for the synthetic tick generator (SPEC-01 section 4, T-104).
+# Generator parameters for the synthetic tick generator (SPEC-01 section 4, T-104).
 #
 # CALIBRATION STATUS - READ THIS BEFORE QUOTING ANY NUMBER
 # --------------------------------------------------------
@@ -19,6 +19,11 @@
 # Power: price = X - shift where X is a positive GBM; X-returns have the stated vol, so price
 # returns are larger and the price can go below zero when X < shift.
 # Regimes are ordered calm, stressed, crisis.
+#
+# Performance note (measured, T-104; details in synthetic.py docstring): worst L month
+# (SYN.EURUSD.TICK 2022-04, 2.46M rows) peaks at 250 MB working set per worker process, about
+# 1.1-1.4M rows/s per process; full L run about 14 min with 2 workers (extrapolated), and
+# max_workers_for_memory() = 6 keeps the whole run under 2 GB.
 #
 # Tick-rate choices (not fixed by the contract; documented here): the config contract fixes only the
 # total per scale. We use ticks_per_instrument_year (sum over used instruments / years matches
