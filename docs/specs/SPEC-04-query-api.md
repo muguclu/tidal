@@ -24,7 +24,10 @@ api/streaming.py      arrow / parquet streaming responses
 
 ## 3. Rules
 - Phase 1: routers built against `FakeReader`/`FakeBus` implementing the same protocols as real ones.
-- Validation: max range per call (`ticks` ≤ 31 d; `bars 1s` ≤ 7 d; `1d` unlimited) → `413` otherwise.
+- Validation: max range per call (`ticks` ≤ 31 d; `bars 1s` ≤ 7 d; `bars 1m` ≤ 366 d; `1h`/`1d` unlimited) → `413`
+  otherwise. `/spreads` additionally returns `413` when the joined result exceeds `limit` (max 100 000); `leg_a = leg_b`
+  → `400`. `fill=ffill` fills only between real bars and is JSON-only (`400` with arrow/parquet).
+- `/latest` omits unknown instruments (no `404`); results are hot-only.
 - `fill=ffill` only in API layer; storage never forward-fills (business-knowledge §3).
 - Rate limit: 60 req/min per principal (in-memory token bucket; documented limitation for multi-instance).
 - OpenTelemetry: one span per request + child spans for SQL / Blob / Service Bus; `tier` as span attribute.

@@ -251,7 +251,6 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /v1/spreads:
@@ -579,7 +578,8 @@ components:
         close: { type: number }
         volume:
           type: [number, "null"]
-          description: Null when the source has no volume (NaN to null, data-contracts section 3.1).
+          minimum: 0
+          description: Null when the source has no volume (NaN to null, data-contracts section 3.1); otherwise >= 0 (section 3).
         quality:
           type: integer
           minimum: 0
