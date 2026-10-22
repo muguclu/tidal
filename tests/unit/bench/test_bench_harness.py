@@ -4,7 +4,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-import benchenv  # puts the repo root on sys.path
 import pytest
 from benchmarks.storage.run import F5Format, OracleMismatchError, run_benchmark
 from benchmarks.storage.workloads import (
@@ -16,11 +15,6 @@ from benchmarks.storage.workloads import (
     parse_ids,
     values_match,
 )
-
-
-@pytest.fixture(scope="session")
-def tiny_dataset(tmp_path_factory: pytest.TempPathFactory) -> Dataset:
-    return benchenv.make_tiny(tmp_path_factory)
 
 
 def test_registry_has_w1_to_w6_with_definitions() -> None:

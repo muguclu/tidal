@@ -19,8 +19,8 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from benchmarks.storage.results_schema import ResultRow, read_results
 
+from benchmarks.storage.results_schema import ResultRow, read_results
 from tidal.finops.fetch_prices import PriceBook, load_prices
 
 GIB: Final = 1024**3

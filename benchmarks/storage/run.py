@@ -26,6 +26,7 @@ import duckdb
 import numpy as np
 import polars as pl
 import pyarrow as pa
+
 from benchmarks.storage.results_schema import ResultRow, write_results
 from benchmarks.storage.workloads import (
     DATA_ROOT,
@@ -39,7 +40,6 @@ from benchmarks.storage.workloads import (
     parse_ids,
     values_match,
 )
-
 from tidal import __version__
 from tidal.common.errors import ConfigError
 from tidal.storage import layout

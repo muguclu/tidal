@@ -3,7 +3,6 @@
 from pathlib import Path
 from typing import Any
 
-import benchenv  # noqa: F401  (puts the repo root on sys.path)
 import pytest
 from benchmarks.storage import report
 from benchmarks.storage.results_schema import ResultRow, read_results, write_results
