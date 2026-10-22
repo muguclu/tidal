@@ -4,6 +4,7 @@
 import hashlib
 import json
 import os
+import re
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -561,7 +562,9 @@ def test_root_cli_registers_ingest_and_synth() -> None:
     root = build_app()
     assert RUNNER.invoke(root, ["ingest", "--help"]).exit_code == 0
     out = RUNNER.invoke(root, ["synth", "--help"])
-    assert out.exit_code == 0 and "--scale" in out.output
+    # CI terminals make rich emit ANSI styling that can split option names; compare plain text.
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", out.output)
+    assert out.exit_code == 0 and "--scale" in plain
 
 
 def test_commands_log_a_correlation_id(
