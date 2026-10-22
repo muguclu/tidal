@@ -61,7 +61,9 @@ marketdata/v1/{dataset}/instrument={instrument_id}/year={YYYY}/month={MM}/part-{
 | sort order | `ts_ns` ascending, declared in `sorting_columns` metadata |
 | key-value metadata | `tidal.schema=TICK_V1`, `tidal.writer_version`, `tidal.source_hash` |
 
-## 4. Blob index tags (used for tiering)
+## 4. Blob index tags (used for tiering) (v1.2, ADR-0015)
+
+Minor bump (v1.2) because no deployed consumer queries the retired tags (grep of the code base; nothing is deployed yet).
 
 Two tags, written on parts of the `ticks` dataset only (ADR-0015; `retag.TAGGED_DATASETS`). Parts of
 `bars_*` and every `_manifest.json` are untagged and stay Hot.

@@ -53,3 +53,10 @@ d. **No tiering (all Hot).** Net 0 by definition. Gives up the at-rest saving 0.
 * Lifecycle rules (`age_band` + `compacted`) need no change; the Terraform comment listing five tags is stale.
 * Storage-layout §4 changes (contract change, `contract-change` label).
 * The margin at S is small (+0.0010 EUR/month); the numbers are modelled until T-503.
+
+## Rollout
+Run `tidal tiering retag` (T-211) **before** the lifecycle policy (T-207) is first applied: it clears
+the tags of all `bars_*` parts, so no bars part ever matches a rule and none leaves Hot. If the policy
+was already applied while bars were tagged, bars parts that moved to Cool/Cold must be set back to Hot
+by hand after retag; that costs tier-change operations and retrieval, and Cool/Cold early-deletion
+fees can apply if they are rewritten within the minimum retention.

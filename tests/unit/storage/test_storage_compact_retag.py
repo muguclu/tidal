@@ -4,6 +4,7 @@
 # ruff: noqa: F811 - the shared fixtures are imported by name and used as arguments
 
 import io
+import json
 import re
 from contextlib import contextmanager
 from pathlib import Path
@@ -274,11 +275,118 @@ def test_compaction_skips_single_part_untagged_partitions_via_the_manifest(
     assert again.skipped == again.partitions > 0 and again.parts_written == 0
 
 
-def test_compaction_does_not_skip_a_single_uncompacted_tick_part(migrated: Env) -> None:
+def test_compaction_does_not_skip_a_single_uncompacted_tick_part(
+    migrated: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
     e = migrated
     path = tick_parts(e)[0]
+    reads: list[str] = []
+    real_read = e.store.read
+
+    def spy(p: str) -> bytes:
+        reads.append(p)
+        return real_read(p)
+
+    monkeypatch.setattr(e.store, "read", spy)
     res = run_compact(e, "ticks")
     assert res.skipped == 0 and e.tagger.get_tags(path)["compacted"] == "true"
+    assert path in reads  # the part was read and verified, not just tagged
+
+
+def manifest_names(e: Env, path: str) -> list[str]:
+    part = layout.parse_md_path(path)
+    mpath = layout.md_manifest_path(part.dataset, part.instrument_id, part.year, part.month)
+    return [x["name"] for x in json.loads(e.store.read(mpath))["parts"]]
+
+
+def split_first_tick_part(e: Env) -> tuple[int, int]:
+    """Replace the first tick part by two halves (compaction has something to merge)."""
+    path = tick_parts(e)[0]
+    part = layout.parse_md_path(path)
+    table = pq.read_table(io.BytesIO(e.store.read(path)))
+    e.store.delete(path)
+    e.tagger.discard(path)
+    half = table.num_rows // 2
+    for chunk in (table.slice(0, half), table.slice(half)):
+        written = write_partition(e.store, dataset="ticks", instrument_id=qs.WTI, year=part.year,
+                                  month=part.month, batches=[chunk], source_hash="h")  # fmt: skip
+        tiering.tag_partition(
+            e.store, e.tagger, 2020, "ticks", qs.WTI, part.year, part.month, written
+        )
+    return part.year, part.month
+
+
+def test_crash_after_the_delete_step_then_rerun_leaves_a_current_manifest(
+    migrated: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    e = migrated
+    year, month = split_first_tick_part(e)
+
+    def boom(*a: Any, **k: Any) -> None:
+        raise Boom
+
+    monkeypatch.setattr(compact_mod, "update_manifest", boom)
+    with pytest.raises(Boom):
+        run_compact(e, "ticks")  # old parts deleted, manifest still lists them
+    monkeypatch.undo()
+    (only,) = tiering.part_paths(e.store, "ticks", qs.WTI, year, month)
+    assert manifest_names(e, only) != [only.rsplit("/", 1)[1]]  # stale
+    assert e.tagger.get_tags(only)["compacted"] == "true"
+    res = run_compact(e, "ticks")  # a skip would leave the manifest stale
+    assert res.skipped < res.partitions
+    assert manifest_names(e, only) == [only.rsplit("/", 1)[1]]
+
+
+def test_a_deleted_manifest_of_a_compacted_tick_partition_is_rebuilt_not_skipped(
+    migrated: Env,
+) -> None:
+    e = migrated
+    run_compact(e, "ticks")
+    path = tick_parts(e)[0]
+    part = layout.parse_md_path(path)
+    e.store.delete(layout.md_manifest_path("ticks", qs.WTI, part.year, part.month))
+    res = run_compact(e, "ticks")
+    assert res.skipped == 0 and res.partitions == 1
+    assert manifest_names(e, path) == [path.rsplit("/", 1)[1]]
+
+
+def test_a_compacted_tick_partition_with_an_appended_uncompacted_part_is_merged(
+    migrated: Env,
+) -> None:
+    e = migrated
+    run_compact(e, "ticks")
+    path = tick_parts(e)[0]
+    part = layout.parse_md_path(path)
+    table = pq.read_table(io.BytesIO(e.store.read(path)))
+    written = write_partition(e.store, dataset="ticks", instrument_id=qs.WTI, year=part.year,
+                              month=part.month, batches=[table.slice(0, 5)],
+                              source_hash="late")  # fmt: skip
+    tiering.tag_partition(e.store, e.tagger, 2020, "ticks", qs.WTI, part.year, part.month, written)
+    assert e.tagger.get_tags(written[0])["compacted"] == "false"
+    before = logical(e)
+    res = run_compact(e, "ticks")
+    assert res.skipped < res.partitions and res.merged >= 1
+    (only,) = tiering.part_paths(e.store, "ticks", qs.WTI, part.year, part.month)
+    assert e.tagger.get_tags(only)["compacted"] == "true"
+    assert logical(e) == before
+
+
+@pytest.mark.parametrize("damage", ["missing", "mismatched"])
+def test_a_bars_single_part_with_a_bad_manifest_is_not_skipped(migrated: Env, damage: str) -> None:
+    e = migrated
+    run_compact(e)
+    path = parts(e)[0]
+    mpath = layout.md_manifest_path(DS, qs.WTI, 2019, 0)
+    good = e.store.read(mpath)
+    e.store.delete(mpath)
+    if damage == "mismatched":
+        bad = e.root / "bad-manifest.json"
+        bad.write_bytes(json.dumps({"parts": [{"name": "part-9999.parquet"}]}).encode())
+        e.store.put_new(mpath, bad)
+    res = run_compact(e)
+    assert 0 < res.skipped < res.partitions
+    assert json.loads(e.store.read(mpath)) == json.loads(good)  # rebuilt
+    assert manifest_names(e, path) == [path.rsplit("/", 1)[1]]
 
 
 def test_compaction_collapses_equal_duplicates_and_keeps_the_earliest_ingest(

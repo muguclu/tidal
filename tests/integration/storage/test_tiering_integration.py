@@ -304,6 +304,8 @@ def test_compaction_and_retag_on_azurite(stack: Stack) -> None:
     (only,) = tiering.part_paths(stack.store, "bars_1d", qs.WTI, 2019, 0)
     assert stack.tagger.get_tags(only) == {}  # bars are untagged (ADR-0015)
     assert sorted(set(cold_rows(stack.store))) == before
+    # Fixture assumption: the small baseline holds ticks only in 2020 starting 2020-01-30
+    # (qs.TICK0), so partition 2020-01 exists; every tick part is 2020 data.
     ticks = tiering.part_paths(stack.store, "ticks", qs.WTI, 2020, 1)
     assert ticks
     res = compact(stack.engine, stack.store, stack.tagger, stack.clock, "ticks")
@@ -319,7 +321,12 @@ def test_compaction_and_retag_on_azurite(stack: Stack) -> None:
     stack.tagger.set_tags(only, {"dataset": "bars_1d", "age_band": "hot", "compacted": "true"})
     later = FixedClock(NOW + 4 * 366 * 86_400 * 10**9)
     moved = retag(stack.store, stack.tagger, later, stack.engine)
-    assert moved.changed >= 2
+    all_ticks = [p for p in stack.store.list("marketdata/v1/ticks/") if p.endswith(".parquet")]
+    assert all(layout.parse_md_path(p).year == 2020 for p in all_ticks)
+    # every tick part ages hot -> cool (2020 vs clock year 2024); the legacy 2020-01 tick part also
+    # drops its retired tags (same single write); the legacy bars part is cleared; other bars
+    # parts are untagged and unchanged.
+    assert moved.changed == len(all_ticks) + 1
     assert stack.tagger.get_tags(only) == {}
     assert stack.tagger.get_tags(tick) == {"age_band": "cool", "compacted": "true"}
     assert retag(stack.store, stack.tagger, later, stack.engine).changed == 0
