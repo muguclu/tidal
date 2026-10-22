@@ -6,7 +6,7 @@
 Cold = a fresh connection per run (the OS page cache is NOT dropped, so cold understates a truly
 cold read); warm = one untimed priming run, then repeats on the same connection. W1 is a fresh
 store per run. The data source (reading the cached dataset) is part of W1 wall time for every
-format alike. Formats F0-F4/F6 plug in through ``FORMATS`` (T-202/T-203).
+format alike. Formats plug in through ``FORMATS`` (``formats/``: SQL F0-F2, T-203 adds files).
 """
 
 import argparse
@@ -27,6 +27,7 @@ import numpy as np
 import polars as pl
 import pyarrow as pa
 
+from benchmarks.storage.formats import SQL_FORMATS
 from benchmarks.storage.results_schema import ResultRow, write_results
 from benchmarks.storage.workloads import (
     DATA_ROOT,
@@ -198,7 +199,7 @@ class F5Format:
         shutil.rmtree(self.workdir, ignore_errors=True)
 
 
-FORMATS: dict[str, Callable[[Path], Format]] = {"F5": F5Format}  # T-202/T-203 register F0-F4, F6
+FORMATS: dict[str, Callable[[Path], Format]] = {**SQL_FORMATS, "F5": F5Format}  # T-203: F3, F4, F6
 
 
 def env_info() -> dict[str, str]:
