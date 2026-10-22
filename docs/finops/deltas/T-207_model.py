@@ -1,3 +1,4 @@
+# ruff: noqa: T201, E501, PLR2004  # standalone report script: prints the delta tables
 """Deterministic cost model behind docs/finops/deltas/T-207.md (CLAUDE.md 2.2: no number comes from a model).
 
 Run from the repository root (stdlib + pyyaml, no randomness, no network):
@@ -73,7 +74,9 @@ def model(inst: int, years: int, gb: float) -> dict[str, float]:
             m[f"{lab}_tags{n}"] = parts * n
             m[f"{lab}_tagcost{n}"] = parts * n / 1e4 * TAG
             m[f"{lab}_net{n}"] = (
-                m["saving"] - m[f"{lab}_tagcost{n}"] - (m[f"{lab}_comp_yr"] + m[f"{lab}_cross_yr"]) / 12
+                m["saving"]
+                - m[f"{lab}_tagcost{n}"]
+                - (m[f"{lab}_comp_yr"] + m[f"{lab}_cross_yr"]) / 12
             )
     return m
 
@@ -92,15 +95,24 @@ R = {s: model(*v) for s, v in SCALES.items()}
 
 
 def row(label: str, key: str, fmt: str) -> None:
+    """Print one markdown table row of a per-scale result."""
     print(f"| {label} | " + " | ".join(format(R[s][key], fmt) for s in SCALES) + " |")
 
 
 print(f"prices used (EUR): hot {HOT} cool {COOL} cold {COLD} GB-month; tag {TAG}/10K tags-month;")
-print(f"  write/10K cool {COOL_W} cold {COLD_W}; read/10K cool {COOL_R} cold {COLD_R}; cool data write/GB {COOL_WGB};")
-print(f"  retrieval/GB cool {COOL_RET} cold {COLD_RET}; cold early delete {COLD_ED} per GB-month (x3 = 90 d)")
+print(
+    f"  write/10K cool {COOL_W} cold {COLD_W}; read/10K cool {COOL_R} cold {COLD_R}; cool data write/GB {COOL_WGB};"
+)
+print(
+    f"  retrieval/GB cool {COOL_RET} cold {COLD_RET}; cold early delete {COLD_ED} per GB-month (x3 = 90 d)"
+)
 print("\n## Byte split by age_band (ages 1..years)\n| | S | M | L |\n|---|---|---|---|")
 print("| data years | " + " | ".join(str(SCALES[s][1]) for s in SCALES) + " |")
-print("| hot / cool / cold | " + " | ".join(f"{R[s]['fh']:.2f} / {R[s]['fc']:.2f} / {R[s]['fd']:.2f}" for s in SCALES) + " |")
+print(
+    "| hot / cool / cold | "
+    + " | ".join(f"{R[s]['fh']:.2f} / {R[s]['fc']:.2f} / {R[s]['fd']:.2f}" for s in SCALES)
+    + " |"
+)
 print("\n## Parts and bytes\n| | S | M | L |\n|---|---|---|---|")
 print("| GB | " + " | ".join(str(SCALES[s][2]) for s in SCALES) + " |")
 row("parts, ticks only", "ticks", ".0f")
@@ -109,7 +121,10 @@ print("\n## At rest (EUR/month)\n| | S | M | L |\n|---|---|---|---|")
 row("all Hot", "allhot", ".4f")
 row("tiered by age_band", "tiered", ".4f")
 row("saving", "saving", ".4f")
-for lab, title in (("all", "All five datasets tagged, 5 tags (current) and 2 tags"), ("tk", "Ticks-only tagged (bars untagged)")):
+for lab, title in (
+    ("all", "All five datasets tagged, 5 tags (current) and 2 tags"),
+    ("tk", "Ticks-only tagged (bars untagged)"),
+):
     print(f"\n## {title}\n| | S | M | L |\n|---|---|---|---|")
     row("tagged parts", "allp" if lab == "all" else "ticks", ".0f")
     row("tags at 5/part", f"{lab}_tags5", ".0f")
@@ -129,13 +144,32 @@ for lab, title in (("all", "All five datasets tagged, 5 tags (current) and 2 tag
     row("net EUR/month at 2 tags", f"{lab}_net2", "+.4f")
 
 print("\n## Sensitivity: 45,000 parts at L (the earlier unsupported part count)")
-for lab, (_h, fc, fd) in (("T-121 20-year split 0.15/0.35/0.50", (0.15, 0.35, 0.5)), ("age_band split of L", split(20))):
+for lab, (_h, fc, fd) in (
+    ("T-121 20-year split 0.15/0.35/0.50", (0.15, 0.35, 0.5)),
+    ("age_band split of L", split(20)),
+):
     ops = 45000 * fc / 1e4 * COOL_W + 45000 * fd / 1e4 * COLD_W
     print(f"{lab}: one-off {ops + 15 * fc * COOL_WGB:.4f} EUR (ops {ops:.4f})")
-print(f"\n## Early deletion maxima (EUR/GB): cold {3 * COLD_ED:.4f} (3 x per-GB-month meter), cool {COOL:.4f} (derived)")
-print("\n## Break-even average part size, MB (tags + yearly compaction read ops = saving; one-off not amortised)")
+print(
+    f"\n## Early deletion maxima (EUR/GB): cold {3 * COLD_ED:.4f} (3 x per-GB-month meter), cool {COOL:.4f} (derived)"
+)
+print(
+    "\n## Break-even average part size, MB (tags + yearly compaction read ops = saving; one-off not amortised)"
+)
 print("| tags per part | S | M | L |\n|---|---|---|---|")
 for n in (5, 2):
-    print(f"| {n} | " + " | ".join(format(breakeven_mb(n, R[s]["fc"], R[s]["fd"]), ".2f") for s in SCALES) + " |")
-print("| avg ticks part (MB) | " + " | ".join(format(SCALES[s][2] * 1000 / R[s]["ticks"], ".2f") for s in SCALES) + " |")
-print("| avg part, all five datasets (MB) | " + " | ".join(format(SCALES[s][2] * 1000 / R[s]["allp"], ".2f") for s in SCALES) + " |")
+    print(
+        f"| {n} | "
+        + " | ".join(format(breakeven_mb(n, R[s]["fc"], R[s]["fd"]), ".2f") for s in SCALES)
+        + " |"
+    )
+print(
+    "| avg ticks part (MB) | "
+    + " | ".join(format(SCALES[s][2] * 1000 / R[s]["ticks"], ".2f") for s in SCALES)
+    + " |"
+)
+print(
+    "| avg part, all five datasets (MB) | "
+    + " | ".join(format(SCALES[s][2] * 1000 / R[s]["allp"], ".2f") for s in SCALES)
+    + " |"
+)
