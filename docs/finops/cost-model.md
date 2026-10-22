@@ -26,6 +26,23 @@ Rows marked with a delta are MODELLED from `docs/finops/prices.yaml` (captured 2
 | Budget + action group + TF state | — / email / LRS few KB | 0 / 0 / < 0.01 | same | free (T-125, T-008 deltas) |
 | **Total** | | **≈ 40–100** | **≈ 25** (≈ 13 with `enable_app_service=false`) | |
 
+### Composed so far: `envs/dev` (T-126)
+
+Subtotal of the components that `infra/terraform/envs/dev` composes today: storage, Key Vault, ACR, Azure SQL,
+Service Bus, Log Analytics + App Insights, budget/action group (plus resource group and identities, 0). Every figure is a
+sum of the rows above; nothing new is estimated.
+
+| Subtotal (EUR/month) | Active month | Parked month |
+|---|---|---|
+| Composed, SQL on the free offer (`use_free_offer = true`, default) | ≈ 4.45 – 4.68 (0 + 0.02 + 0.001 + 4.40 + 0.03–0.26) plus Log Analytics, bounded by the 0.2 GB/day cap and not yet priced | ≈ 4.45 (0 + 0.02 + 0 + 4.40 + < 0.03) |
+| Composed, SQL at list price (free offer off) | ≈ 18.4 – 48.9 (the line above + 13.95–44.25) | ≈ 8.3 (the line above + 3.85) |
+| Not yet composed (T-306 AKS, T-309 App Service + Container Apps, T-310 VM + Logic App, T-404 network) | rows AKS ×4, Container Apps, App Service, VM, Logic App above | same rows |
+
+The **Total** row above stays the target for the full environment; the subtotal above is what a plan of `envs/dev`
+costs before the compute modules land. Log Analytics is excluded from the sums because its per-GB price is pinned in
+T-501 (`docs/finops/deltas/T-120.md`); the first 5 GB/month are free per the row above. Service Bus Standard
+(`enable_ingest_topic = true`) is not in the subtotal (not yet priced, T-502b).
+
 Observations to act on (before Phase 3):
 - App Service B1 and ACR Basic dominate the parked cost → `enable_app_service` flag to delete when parked;
   consider keeping images in GHCR during development and pushing to ACR only for demos (document trade-off).

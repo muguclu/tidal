@@ -1,0 +1,7 @@
+# Copy to backend.hcl and fill in the values printed by `terraform output backend_config` in
+# infra/terraform/bootstrap. The file holds no secrets (Entra auth), but *.hcl is not git-ignored,
+# so keep the real backend.hcl out of commits.
+resource_group_name  = "rg-tidal-tfstate"
+storage_account_name = "sttidaltfstateab12" # placeholder; use the real bootstrap output
+container_name       = "tfstate"
+key                  = "dev.tfstate"
