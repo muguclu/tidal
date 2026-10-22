@@ -4,19 +4,36 @@ locals {
   # Project is fixed to tidal (tags validation enforces it); alphanumeric only as ACR requires.
   registry_name = "acrtidal${var.env}${var.name_suffix}"
 
-  # Task definition. Two steps: (1) untagged manifests past retention; (2) sha-* CI tags past retention.
-  # v* release tags and any other tag never match a filter, so they are kept forever.
-  # Quotes protect the regex from the shell. {{.Run.Registry}} is an ACR Tasks run variable.
+  # Tag filters passed to `acr purge --filter '<repo regex>:<tag regex>'`. --filter selects TAGS TO DELETE, so the
+  # tag regex must never be broad: a `.*` here would delete v* release tags.
+  #  - untagged_step_tag_filter matches no tag at all (a tag is never empty), so step 1 removes only manifests
+  #    that are untagged and older than the cutoff. (`--untagged-only` would say this directly, but support in the
+  #    acr-cli bundled with ACR Tasks is UNVERIFIED, so the no-match filter is used; it works on every version.)
+  #  - sha_step_tag_filter matches only CI commit tags; their manifests are removed too once they are untagged.
+  untagged_step_tag_filter = "^$"
+  sha_step_tag_filter      = "^sha-.*$"
+
+  # Task definition. v* release tags (and every non-sha tag) never match a filter, so they are kept forever.
+  # Quotes protect the regex from the shell. {{.Run.Registry}} is an ACR Tasks run variable; the run authenticates
+  # with the task run token, so no identity or credential is configured.
   purge_task_yaml = <<-YAML
     version: v1.1.0
     steps:
-      - cmd: acr purge --registry {{.Run.Registry}} --filter '${var.purge_repository_regex}:.*' --untagged --ago ${var.untagged_retention_days}d
+      - cmd: acr purge --registry {{.Run.Registry}} --filter '${var.purge_repository_regex}:${local.untagged_step_tag_filter}' --untagged --ago ${var.untagged_retention_days}d
         disableWorkingDirectoryOverride: true
         timeout: 3600
-      - cmd: acr purge --registry {{.Run.Registry}} --filter '${var.purge_repository_regex}:sha-.*' --ago ${var.sha_tag_retention_days}d --untagged
+      - cmd: acr purge --registry {{.Run.Registry}} --filter '${var.purge_repository_regex}:${local.sha_step_tag_filter}' --untagged --ago ${var.sha_tag_retention_days}d
         disableWorkingDirectoryOverride: true
         timeout: 3600
   YAML
+}
+
+# Guard: refuse a broad tag filter that would delete release tags.
+check "tag_filters_are_narrow" {
+  assert {
+    condition     = !contains([".*", "^.*$", ".+", "^.+$", ""], local.sha_step_tag_filter) && !contains([".*", "^.*$", ".+", "^.+$"], local.untagged_step_tag_filter)
+    error_message = "A purge tag filter of .* would delete v* release tags. Keep the filters narrow."
+  }
 }
 
 resource "azurerm_container_registry" "this" {
@@ -33,7 +50,6 @@ resource "azurerm_container_registry" "this" {
   #checkov:skip=CKV_AZURE_163:Defender for Cloud image scanning is a subscription-level plan, not a registry setting; out of scope for this module
   #checkov:skip=CKV_AZURE_139:Public endpoint stays on by design: private endpoints and network rules need Premium; access is Entra ID + RBAC only (admin and anonymous pull off)
   #checkov:skip=CKV_AZURE_237:Dedicated data endpoints are Premium-only
-  #checkov:skip=CKV_AZURE_160:Customer-managed key encryption needs Premium; Microsoft-managed keys suffice
   sku = "Basic"
 
   # SPEC-06 section 2: admin user disabled, pulls only via managed identity (AcrPull/AcrPush role assignments: T-403/T-306).
@@ -65,10 +81,7 @@ resource "azurerm_container_registry_task" "purge" {
   enabled               = true
   timeout_in_seconds    = 3600
 
-  # No credentials: the task authenticates with its own system-assigned identity.
-  identity {
-    type = "SystemAssigned"
-  }
+  # No identity and no registry_credential: {{.Run.Registry}} tasks authenticate with the run token.
 
   platform {
     os = "Linux"
@@ -85,11 +98,4 @@ resource "azurerm_container_registry_task" "purge" {
   }
 
   tags = local.tags
-}
-
-# The task identity needs delete rights, scoped to this registry only (least privilege).
-resource "azurerm_role_assignment" "purge_task_acr_delete" {
-  scope                = azurerm_container_registry.this.id
-  role_definition_name = "AcrDelete"
-  principal_id         = azurerm_container_registry_task.purge.identity[0].principal_id
 }

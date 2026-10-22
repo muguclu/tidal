@@ -52,13 +52,13 @@ variable "purge_schedule" {
 }
 
 variable "purge_repository_regex" {
-  description = "Regular expression of repositories the purge task touches (acr purge --filter '<regex>:<tag regex>'); keeps the task scoped to Tidal images. Must not contain a single quote or whitespace."
+  description = "Anchored regular expression of repositories the purge task touches (the repository part of acr purge --filter '<repo regex>:<tag regex>'); keeps the task scoped to Tidal images. Must start with ^tidal and end with $, contain no single quote or whitespace."
   type        = string
-  default     = "tidal.*"
+  default     = "^tidal.*$"
 
   validation {
-    condition     = length(var.purge_repository_regex) > 0 && !can(regex("['\\s]", var.purge_repository_regex))
-    error_message = "purge_repository_regex must be non-empty and contain no single quote or whitespace."
+    condition     = can(regex("^\\^tidal[^'\\s]*[$]$", var.purge_repository_regex))
+    error_message = "purge_repository_regex must start with ^tidal, end with $, and contain no single quote or whitespace (so it can never match all repositories)."
   }
 }
 
