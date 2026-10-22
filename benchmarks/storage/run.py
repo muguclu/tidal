@@ -127,7 +127,7 @@ class F5Format:
         out: list[str] = []
         for inst in p["instruments"]:
             for y, m in p["months"]:
-                out += self.store.list_paths(layout.md_partition_prefix("ticks", inst, y, m))
+                out += list(self.store.list(layout.md_partition_prefix("ticks", inst, y, m)))
         return [str(self.store.root / f) for f in sorted(out)]
 
     def io_profile(self, workload: str, params: Mapping[str, Any]) -> WorkloadResult:  # Any: JSON

@@ -114,7 +114,7 @@ class Dataset:
             store.root / p
             for y, m in months
             for store in stores
-            for p in store.list_paths(layout.md_partition_prefix("ticks", inst, y, m))
+            for p in store.list(layout.md_partition_prefix("ticks", inst, y, m))
         ]
 
     def read_partition(self, part: Part, *, restated: bool = False) -> list[pa.Table]:
@@ -123,7 +123,7 @@ class Dataset:
             return self._mem[(part, restated)]
         inst, y, m = part
         store = self.restate if restated else self.base
-        paths = store.list_paths(layout.md_partition_prefix("ticks", inst, y, m))
+        paths = list(store.list(layout.md_partition_prefix("ticks", inst, y, m)))
         return [pq.read_table(store.root / p).cast(TICK_V1) for p in paths]
 
     def preloaded(self) -> "Dataset":
@@ -149,7 +149,7 @@ class Dataset:
 
 
 def _hash_store(store: LocalStore, h: "hashlib._Hash") -> None:
-    for rel in store.list_paths(""):
+    for rel in store.list(layout.CONTAINER_MARKETDATA):
         t = pq.read_table(store.root / rel, columns=["ts_ns", "price", "version"])
         for c in ("ts_ns", "price", "version"):
             h.update(t.column(c).to_numpy().tobytes())
@@ -223,7 +223,7 @@ def _generate(spec: DatasetSpec, out: Path) -> None:
 def _restate(spec: DatasetSpec, base: LocalStore, store: LocalStore, part: Part) -> None:
     """Re-publish ``restate_rate`` of the partition as version 2 (new price, later ingest)."""
     inst, y, m = part
-    paths = base.list_paths(layout.md_partition_prefix("ticks", inst, y, m))
+    paths = list(base.list(layout.md_partition_prefix("ticks", inst, y, m)))
     t = pa.concat_tables([pq.read_table(base.root / p).cast(TICK_V1) for p in paths])
     seq = np.random.SeedSequence(spec.seed, spawn_key=(0xBE9C, 1))
     rng = np.random.Generator(np.random.PCG64(seq))
