@@ -463,3 +463,16 @@ async def test_fake_reader_unknown_instrument_and_stream(reader: FakeReader) -> 
     assert batches[1].column("close")[0].as_py() == -37.63
     ticks = await reader.stream_ticks("EIA.WTI.SPOT", 0, 1)
     assert [b async for b in ticks.batches] == []
+
+
+def test_run_wires_a_remote_reader(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``run()`` serves a ``create_app`` whose reader is a ``RemoteReader`` (no server started)."""
+    import tidal.api.app as app_module  # noqa: PLC0415
+    from tidal.query.service import RemoteReader  # noqa: PLC0415
+
+    seen: dict[str, object] = {}
+    settings = Settings.from_env({"TIDAL_ENV": "local", "TIDAL_AUTH__DISABLED": "true"})
+    monkeypatch.setattr(app_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(uvicorn, "run", lambda app, **_: seen.update(app=app))
+    app_module.run()
+    assert isinstance(seen["app"].state.reader, RemoteReader)  # type: ignore[attr-defined]
