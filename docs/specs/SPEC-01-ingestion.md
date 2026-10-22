@@ -33,15 +33,19 @@ cold store (Parquet) according to age.
 - Per instrument: GBM with regime switching (2–3 Markov regimes: calm / stressed / crisis), Merton
   jumps, intraday seasonality (U-shaped activity), ticks arrive as a Poisson process with time-varying
   intensity. Power instrument allows negative prices (shifted process).
-- Calibrated: daily realised vol per regime matched to real Brent/HH history (±10 %); calibration
-  parameters in `ingest/sources/synthetic_params.yaml`.
+- Price level: GBM with a weak mean-reverting pull in log space (AR(1), half-life ≈ 350 business days) so
+  20-year paths stay plausible; power uses a shifted process (`exp(x) − offset`).
+- Parameters in `ingest/sources/synthetic_params.yaml`. **v1 targets are judgemental** (order of magnitude of
+  commonly quoted daily vols) and the generator is verified to hit its own targets within ±10 %.
+  **Calibration to real Brent/HH realised vol per regime (±10 %) is T-108**, after EIA ingest (T-105) exists.
 - Injects 0.01 % outliers and 0.1 % gaps (documented, flagged `SYNTHETIC`).
 - Date range from `TIDAL_SYNTH__START/END` (default 2005-01-01 … 2025-12-31). The range is part of the
   determinism key. Because synthetic data ends before "today", hot-window demos run with
   `TIDAL_CLOCK__NOW` set inside the range (e.g. `2025-12-31T23:59:59Z`).
 - **Deterministic:** `numpy.random.Generator(PCG64(seed))`, one child stream per (instrument, year) via
   `SeedSequence.spawn` ⇒ years can be generated **in parallel** and still be reproducible.
-- Streams output in monthly chunks; memory bounded (< 2 GB at L scale).
+- Streams output in monthly chunks; memory bounded: peak RSS < 2 GB **for the whole run** at L scale (the
+  ingest CLI caps worker count accordingly).
 
 ## 5. Acceptance criteria
 - [ ] Backfill EIA Brent, WTI, Henry Hub and FRED EUR/USD from first available date; row counts logged
