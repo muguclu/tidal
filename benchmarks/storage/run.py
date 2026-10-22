@@ -6,7 +6,7 @@
 Cold = a fresh connection per run (the OS page cache is NOT dropped, so cold understates a truly
 cold read); warm = one untimed priming run, then repeats on the same connection. W1 is a fresh
 store per run. The data source (reading the cached dataset) is part of W1 wall time for every
-format alike. Formats F0-F4/F6 plug in through ``FORMATS`` (T-202/T-203).
+format alike. Formats plug in through ``FORMATS`` (``formats/``: SQL F0-F2, T-203 adds files).
 """
 
 import argparse
@@ -27,6 +27,7 @@ import numpy as np
 import polars as pl
 import pyarrow as pa
 
+from benchmarks.storage.formats import SQL_FORMATS
 from benchmarks.storage.results_schema import ResultRow, write_results
 from benchmarks.storage.workloads import (
     DATA_ROOT,
@@ -198,7 +199,7 @@ class F5Format:
         shutil.rmtree(self.workdir, ignore_errors=True)
 
 
-FORMATS: dict[str, Callable[[Path], Format]] = {"F5": F5Format}  # T-202/T-203 register F0-F4, F6
+FORMATS: dict[str, Callable[[Path], Format]] = {**SQL_FORMATS, "F5": F5Format}  # T-203: F3, F4, F6
 
 
 def env_info() -> dict[str, str]:
@@ -271,11 +272,13 @@ def run_benchmark(
             if not queries:
                 continue
             fmt = factory(tmp / fid)
-            fmt.load(ds)
-            at_rest = fmt.size_bytes()
-            for wid in queries:
-                rows += _run_query(spec, ds, fmt, wid, runs=runs, at_rest=at_rest)
-            fmt.teardown()
+            try:  # a failed load/query must not leak tables or containers
+                fmt.load(ds)
+                at_rest = fmt.size_bytes()
+                for wid in queries:
+                    rows += _run_query(spec, ds, fmt, wid, runs=runs, at_rest=at_rest)
+            finally:
+                fmt.teardown()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     env = env_info()
@@ -298,12 +301,14 @@ def _run_w1(
     samples: list[tuple[float, float]] = []
     for r in range(runs):
         fmt = factory(work / str(r))
-        wall, cpu, stats = _time(lambda f=fmt: f.load(sub))  # type: ignore[misc]
-        if stats.rows != want:
-            raise OracleMismatchError(f"W1 {fmt.id}: wrote {stats.rows} rows, expected {want}")
-        samples.append((wall, cpu))
-        size = fmt.size_bytes()
-        fmt.teardown()
+        try:
+            wall, cpu, stats = _time(lambda f=fmt: f.load(sub))  # type: ignore[misc]
+            if stats.rows != want:
+                raise OracleMismatchError(f"W1 {fmt.id}: wrote {stats.rows} rows, expected {want}")
+            samples.append((wall, cpu))
+            size = fmt.size_bytes()
+        finally:
+            fmt.teardown()
     return _row(
         spec, fmt, wl="W1", cache="n/a", samples=samples, rows=int(want), at_rest=size, res=None
     )
