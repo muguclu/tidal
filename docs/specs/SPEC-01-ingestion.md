@@ -51,7 +51,8 @@ cold store (Parquet) according to age.
 - [ ] Backfill EIA Brent, WTI, Henry Hub and FRED EUR/USD from first available date; row counts logged
       and asserted against source totals.
 - [ ] WTI 2020-04-20 stored as negative with `NEGATIVE` flag (golden test): `EIA.WTI.FUT1` −37.63, `EIA.WTI.SPOT` −36.98.
-- [ ] `tidal synth --scale S --seed 1` twice ⇒ identical file hashes.
+- [ ] `tidal synth --scale S --seed 1` twice with the same `TIDAL_CLOCK__NOW` ⇒ identical file hashes (the clock
+      sets `ingested_at_ns` and the hot/cold split); re-running into the same store writes nothing new.
 - [ ] Generating L scale on 8 cores finishes < 60 min locally; peak RSS < 2 GB.
 - [ ] Re-running daily ingest with unchanged source writes 0 rows.
 - [ ] Restated value produces version 2 and `as_of` query returns version 1 for earlier knowledge time.

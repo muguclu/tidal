@@ -36,7 +36,13 @@ def _load(target: str) -> typer.Typer | None:
 
 def build_app(subcommands: dict[str, str] = SUBCOMMANDS) -> typer.Typer:
     """Build the root CLI from the sub-command groups that are currently available."""
-    root = typer.Typer(name="tidal", no_args_is_help=True, help="Tidal platform CLI.")
+    root = typer.Typer(
+        name="tidal",
+        no_args_is_help=True,
+        help="Tidal platform CLI.",
+        # Never print locals in tracebacks: they can hold connection strings or keys.
+        pretty_exceptions_show_locals=False,
+    )
 
     @root.callback()
     def _root() -> None:
