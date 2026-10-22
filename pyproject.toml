@@ -66,7 +66,7 @@ bench = ["matplotlib>=3.9"]
 load = ["locust>=2.32"]
 
 [tool.uv]
-default-groups = ["dev"]
+default-groups = ["dev", "bench"]  # bench: report charts are unit-tested (T-201)
 
 [build-system]
 requires = ["uv_build>=0.11,<0.12"]
@@ -76,7 +76,7 @@ build-backend = "uv_build"
 minversion = "8.0"
 testpaths = ["tests"]
 # tests/ is on sys.path so shared fakes import as `fakes.*` in any import mode.
-pythonpath = ["tests"]
+pythonpath = ["tests", "."]
 addopts = ["--strict-markers", "--strict-config", "-ra"]
 xfail_strict = true
 markers = [
@@ -90,7 +90,7 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-source = ["tidal"]
+source = ["tidal", "benchmarks"]
 branch = true
 
 [tool.coverage.report]
