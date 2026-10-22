@@ -76,8 +76,8 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | ID | Title | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|
 | T-201 | Benchmark harness | T-105 | `benchmarks/storage/{run,workloads,report}.py`, `benchmarks/conftest.py` | workloads W1–W6 pluggable; results schema | done |
-| T-202 | SQL formats F0–F2 | T-201 | `benchmarks/storage/formats/sql_*.py`, `benchmarks/storage/formats/__init__.py`, `FORMATS` registry and run/W1 teardown (`try/finally`) in `benchmarks/storage/run.py` | loaders + workloads; identical W2 aggregates | todo |
-| T-203 | File formats F3–F6 | T-201 | `benchmarks/storage/formats/file_*.py`, F5 move out of `benchmarks/storage/run.py`, F3–F6 registration in `benchmarks/storage/formats/__init__.py` | incl. zstd & row-group sweep | todo |
+| T-202 | SQL formats F0–F2 | T-201 | `benchmarks/storage/formats/sql_*.py`, `benchmarks/storage/formats/__init__.py`, `FORMATS` registry and run/W1 teardown (`try/finally`) in `benchmarks/storage/run.py` | loaders + workloads; identical W2 aggregates | done |
+| T-203 | File formats F3–F6 | T-201 | `benchmarks/storage/formats/file_*.py`, F5 move out of `benchmarks/storage/run.py`, F3–F6 registration in `benchmarks/storage/formats/__init__.py` | incl. zstd & row-group sweep | done |
 | T-204 | Run S/M + report | T-202, T-203, T-501 | `docs/finops/results/storage-benchmark-*.md`, `img/`, `.github/workflows/bench.yml` | SPEC-02 §6 criteria | todo |
 
 ### Lane B — tiering (data-engineer, infra-engineer)
@@ -91,7 +91,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 ### Lane C — API on real data (api-engineer)
 | ID | Title | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|
-| T-209 | Wire reader; split `tidal-query` service | T-111, T-208 | `src/tidal/api/routers/*` (read), `src/tidal/query/service.py` | `X-Tidal-Tier` correct; internal call via MI | todo |
+| T-209 | Wire reader; split `tidal-query` service | T-111, T-208 | `src/tidal/api/routers/*` (read), `src/tidal/query/service.py`, `src/tidal/api/app.py` (run/lifespan), `docker-compose.yml` (query service) | `X-Tidal-Tier` correct; internal call via MI | done |
 | T-210 | Arrow/Parquet streaming, as_of, fill | T-209 | `src/tidal/api/streaming.py` +tests | 10M rows RSS < 500 MB | todo |
 
 **Gate G2**
@@ -134,7 +134,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | ID | Title | Agent | Lane | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|---|---|
 | T-401 | Entra app registrations & roles | infra-engineer | W4/L1 | T-126 | `modules/entra_app/**` | 4 app roles, group assignment | todo |
-| T-402 | Real JWT auth + role tests | api-engineer | W4/L2 | T-401 | `src/tidal/api/auth.py` +tests | SPEC-04 auth criteria; implements the async `validate_bearer_token` seam (T-110); local-only `TIDAL_AUTH__JWKS_URL` override for `.data/dev-jwks/jwks.json` (config-contract change); HMAC cursor key from Key Vault so cursors survive restarts/replicas | todo |
+| T-402 | Real JWT auth + role tests | api-engineer | W4/L2 | T-401 | `src/tidal/api/auth.py` +tests | SPEC-04 auth criteria; implements the async `validate_bearer_token` seam (T-110); local-only `TIDAL_AUTH__JWKS_URL` override for `.data/dev-jwks/jwks.json` (config-contract change); HMAC cursor key from Key Vault so cursors survive restarts/replicas; tidal-query app registration + app role (e.g. Tidal.Query.Read) assigned only to id-api, or azp/appid check; https or NetworkPolicy for api→query outside local | todo |
 | T-403 | RBAC assignments + drift check | infra-engineer | W4/L1 | T-401 | `modules/identity/rbac.tf`, `scripts/rbac-export.sh` | matrix = SPEC-06 §2; CI diff | todo |
 | T-404 | Private networking flag | infra-engineer | W4/L1 | T-403 | `modules/network/**` | PEs for Blob/SQL/KV; flag off = no cost | todo |
 | T-405 | Supply-chain hardening | platform-engineer | W4/L3 | T-307 | Dockerfile, Helm values, CI scans | SPEC-06 §5 | todo |
