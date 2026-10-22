@@ -14,11 +14,13 @@ provider "azurerm" {
     }
 
     resource_group {
-      # `terraform destroy` must remove the whole environment, including resources created outside
-      # Terraform (for example AKS node resource group content added later).
+      # `terraform destroy` must remove the whole environment even when the group still holds resources
+      # that Terraform does not track (for example items created by the platform itself).
       prevent_deletion_if_contains_resources = false
     }
   }
 }
 
-provider "azapi" {}
+provider "azapi" {
+  subscription_id = var.subscription_id
+}

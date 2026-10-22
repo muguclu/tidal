@@ -90,14 +90,25 @@ Agents and CI never run these. CI runs `plan` read-only once `AZURE_PLAN_CLIENT_
    ```
 5. **Write the outputs to `.env.cloud`** at the repo root (git-ignored through `.env.*`; never commit it):
    ```bash
+   umask 077
    {
      terraform output -json tidal_config           | jq -r 'to_entries[] | "\(.key)=\(.value)"'
      terraform output -json tidal_config_sensitive | jq -r 'to_entries[] | "\(.key)=\(.value)"'
    } > ../../../../.env.cloud
    ```
    The connection string is a secret: keep file permissions private and delete the file when the cloud window ends.
-6. **Map identities in SQL** (after the first apply, as a member of the admin group): `CREATE USER [id-api] FROM
-   EXTERNAL PROVIDER` and the other grants from SPEC-06 section 2.
+6. **Map identities in SQL** (after the first apply). Connect as a member of the admin group (Entra token) and map each
+   identity by its **client id** (`identities.<name>.client_id`, also `IDENTITY_CLIENT_ID_*`). The server has no
+   system-assigned identity, so it cannot resolve names through Microsoft Graph and the `OBJECT_ID` clause is mandatory.
+   Public access is on without firewall rules, so open a temporary rule for your IP first and delete it afterwards:
+   ```bash
+   MYIP=$(curl -s https://api.ipify.org)
+   az sql server firewall-rule create -g rg-tidal-dev -s <sql server name> -n tmp-operator --start-ip-address "$MYIP" --end-ip-address "$MYIP"
+   # as an admin-group member, in the tidal database:
+   #   CREATE USER [id-api] FROM EXTERNAL PROVIDER WITH OBJECT_ID='<client id of id-api>';
+   #   then the role grants from SPEC-06 section 2
+   az sql server firewall-rule delete -g rg-tidal-dev -s <sql server name> -n tmp-operator
+   ```
 7. **Teardown** at the end of the cloud window: `terraform destroy -var-file=dev.tfvars` removes everything except
    bootstrap. The Key Vault stays soft-deleted for 7 days (purge protection).
 
