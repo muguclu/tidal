@@ -83,7 +83,7 @@ variable "enable_private_networking" {
 }
 
 variable "allow_azure_services" {
-  description = "Create the 0.0.0.0 Allow Azure services firewall rule. It admits traffic from any Azure subscription, so it is off by default; use it only until private networking lands. Ignored when enable_private_networking is true. A 0.0.0.0/0 public rule is never created."
+  description = "Create the 0.0.0.0 Allow Azure services firewall rule. It allows Azure IPs of any tenant to reach the server on TDS (Entra-only authentication still applies), so it is off by default. Prefer specific IP rules until T-404 (private networking). Ignored when enable_private_networking is true. A 0.0.0.0/0 public rule is never created."
   type        = bool
   default     = false
 }

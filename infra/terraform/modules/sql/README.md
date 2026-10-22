@@ -5,14 +5,14 @@ auto-pause 60 min, 32 GB, zone redundancy off, Local backups (SPEC-07 section 2)
 
 - Entra-only: `azuread_authentication_only = true`; there is no `administrator_login_password` anywhere. Pass an Entra group
   (recommended) as `entra_admin_login` / `entra_admin_object_id`. Workload identities are mapped in the database with
-  `CREATE USER [id-api] FROM EXTERNAL PROVIDER` (T-106 migrations), no SQL logins (SPEC-06 section 2).
+  `CREATE USER [id-api] FROM EXTERNAL PROVIDER` (T-403), no SQL logins (SPEC-06 section 2).
 - TLS 1.2 minimum. `public_network_access_enabled` is `!enable_private_networking` (SPEC-06 section 4); the private endpoint belongs to the Phase 4 network module.
-- Firewall: no rules by default. `allow_azure_services = true` adds the 0.0.0.0 "Allow Azure services" rule, which admits traffic from any Azure subscription; use it only until private networking lands. A 0.0.0.0/0 rule is never created.
+- Firewall: no rules by default. `allow_azure_services = true` adds the 0.0.0.0 "Allow Azure services" rule, which allows Azure IPs of any tenant to reach the server on TDS (Entra-only authentication still applies). Prefer specific IP rules until T-404 (private networking); use this only as a stopgap. A 0.0.0.0/0 rule is never created.
 - Config contract: output `server_fqdn` is `TIDAL_SQL__SERVER`, `database_name` is `TIDAL_SQL__DATABASE`; the app uses `TIDAL_SQL__AUTH=entra_mi`.
-- Free offer (LOCAL-DEV section 2, ADR-0011): `use_free_offer` (default true, dev-only lever; set false for prod or when the subscription already has 10 free databases) applies `useFreeLimit = true` and `freeLimitExhaustionBehavior = "AutoPause"` through an `azapi_update_resource` (API `Microsoft.Sql/servers/databases@2025-01-01`), because azurerm 4.81.0 and 5.10.0 have no native arguments (upstream PRs 32055 and 32277). When they ship, set them on `azurerm_mssql_database`, delete the azapi resource and provider, and `terraform state rm` it (no recreate). Caveat: the offer is normally chosen at database creation; acceptance as an update on a just-created database is unverified. If the first dev apply rejects it, switch the database to an `azapi_resource` with the same properties. Costs: `docs/finops/deltas/T-123.md`.
+- Free offer (LOCAL-DEV section 2, ADR-0011): `use_free_offer` (default true, dev-only lever; set false for prod or when the subscription already has 10 free databases) sets `useFreeLimit = var.use_free_offer` (and `freeLimitExhaustionBehavior = "AutoPause"` when on, omitted when off) through an `azapi_update_resource` (API `Microsoft.Sql/servers/databases@2025-01-01`), because azurerm 4.81.0 and 5.10.0 have no native arguments (upstream PRs 32055 and 32277). When they ship, set them on `azurerm_mssql_database`, delete the azapi resource and provider, and add `removed { from = azapi_update_resource.free_offer  lifecycle { destroy = false } }` (no recreate). The resource carries `replace_triggered_by = [azurerm_mssql_database.tidal]`; confirm that behaviour on the first dev apply. Caveat: the offer is normally chosen at database creation; acceptance as an update on a just-created database is unverified. If the first dev apply rejects it, switch the database to an `azapi_resource` with the same properties. Costs: `docs/finops/deltas/T-123.md`.
 - `server_name_suffix` is required (3 to 8 lowercase alphanumerics) because the server name is globally unique; the env composition supplies it.
 - SQL user mapping (`CREATE USER ... FROM EXTERNAL PROVIDER`) is left to T-403; this module only sets the Entra admin.
-- Checkov skips (inline, with reasons): public access and private endpoint (Phase 4 flag), auditing and vulnerability assessment (T-506), zone redundancy (cost), ledger, optional 0.0.0.0 rule. The tflint `prevent_destroy` rule is disabled so dev environments can be destroyed.
+- Checkov skips (inline, with reasons): public access and private endpoint (Phase 4 flag), auditing and vulnerability assessment (T-407), zone redundancy (cost), ledger, optional 0.0.0.0 rule. The tflint `prevent_destroy` rule is disabled so dev environments can be destroyed.
 - Out of scope here: TDE with a customer-managed key (service-managed TDE stays on).
 
 Usage: see `examples/basic`.
@@ -33,7 +33,7 @@ Usage: see `examples/basic`.
 | `azurerm_mssql_server.this` | resource |
 | `azurerm_mssql_database.tidal` | resource |
 | `azurerm_mssql_firewall_rule.allow_azure_services` | resource (count 0 by default) |
-| `azapi_update_resource.free_offer` | resource (count 1 when `use_free_offer`) |
+| `azapi_update_resource.free_offer` | resource (always; reverts the offer when `use_free_offer = false`) |
 
 ## Inputs
 

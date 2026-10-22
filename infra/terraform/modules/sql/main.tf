@@ -7,13 +7,13 @@ locals {
 }
 
 # Entra-only: no administrator_login / administrator_login_password anywhere (SPEC-06 section 2).
-# Workload identities are mapped in the database with CREATE USER [id-x] FROM EXTERNAL PROVIDER (T-106 migrations).
+# Workload identities are mapped in the database with CREATE USER [id-x] FROM EXTERNAL PROVIDER (T-403).
 resource "azurerm_mssql_server" "this" {
   # checkov:skip=CKV_AZURE_113: public access follows enable_private_networking (SPEC-06 section 4); it is on until Phase 4 and access is Entra-only over TLS 1.2 with no firewall rules by default.
   # checkov:skip=CKV2_AZURE_45: the private endpoint belongs to the Phase 4 network module and is created when enable_private_networking is true.
-  # checkov:skip=CKV_AZURE_23: server auditing needs a Log Analytics or storage sink; deferred to T-506 (security hardening).
-  # checkov:skip=CKV_AZURE_24: audit retention is part of the same auditing configuration; deferred to T-506.
-  # checkov:skip=CKV2_AZURE_2: vulnerability assessment needs auditing and a storage account (Defender for SQL cost); deferred to T-506.
+  # checkov:skip=CKV_AZURE_23: server auditing needs a Log Analytics or storage sink; deferred to T-407.
+  # checkov:skip=CKV_AZURE_24: audit retention is part of the same auditing configuration; deferred to T-407.
+  # checkov:skip=CKV2_AZURE_2: vulnerability assessment needs auditing and a storage account (Defender for SQL cost); deferred to T-407.
   name                = local.server_name
   resource_group_name = var.resource_group_name
   location            = var.location
@@ -73,21 +73,29 @@ resource "azurerm_mssql_firewall_rule" "allow_azure_services" {
 # Free offer (ADR-0011, LOCAL-DEV section 2): 100k vCore-s + 32 GB per month, AutoPause at the limit.
 # azurerm 4.81.0 has no native arguments (upstream PRs 32055 / 32277 open), so azapi sets the properties.
 # When azurerm ships use_free_limit / free_limit_exhaustion_behavior: set them on azurerm_mssql_database,
-# remove this resource and the azapi provider, and `terraform state rm` the azapi resource (no recreate).
+# remove this resource and the azapi provider, and keep the state clean in IaC with:
+#   removed {
+#     from = azapi_update_resource.free_offer
+#     lifecycle { destroy = false }
+#   }
 # API version 2025-01-01 (GA) carries useFreeLimit / freeLimitExhaustionBehavior in the azapi 2.13.0 embedded schema.
 # Caveat: the offer is normally chosen at creation. Whether the API accepts it as an update on the just-created
 # database is not verified (no Azure credentials in this task). If the first dev apply rejects it, replace
 # azurerm_mssql_database with an azapi_resource carrying the same properties plus the SKU settings.
 resource "azapi_update_resource" "free_offer" {
-  count = var.use_free_offer ? 1 : 0
-
+  # Always created so that use_free_offer = false actually reverts the property in Azure.
   type        = "Microsoft.Sql/servers/databases@2025-01-01"
   resource_id = azurerm_mssql_database.tidal.id
 
   body = {
     properties = {
-      useFreeLimit                = true
-      freeLimitExhaustionBehavior = "AutoPause"
+      useFreeLimit                = var.use_free_offer
+      freeLimitExhaustionBehavior = var.use_free_offer ? "AutoPause" : null
     }
+  }
+
+  # Re-apply the properties whenever the database is replaced. Confirm on the first dev apply.
+  lifecycle {
+    replace_triggered_by = [azurerm_mssql_database.tidal]
   }
 }
