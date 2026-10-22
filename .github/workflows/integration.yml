@@ -1,0 +1,142 @@
+name: integration
+
+# Runs `pytest -m integration` against real SQL Server and Azurite containers (T-128).
+# Advisory, NOT a required check: branch protection is unchanged. It still reports a clear
+# pass/fail on the PR. `pull_request` (never `pull_request_target`) so forks get no write token.
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/integration/**"
+      - "benchmarks/**"
+      - "sql/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/integration.yml"
+  workflow_dispatch:
+  schedule:
+    - cron: "43 2 * * *" # nightly, with the heavy crash-injection settings
+
+concurrency:
+  group: integration-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  UV_LOCKED: "1"
+  # Same tags as docker-compose.yml. Keep them in step.
+  SQL_IMAGE: mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04
+  AZURITE_IMAGE: mcr.microsoft.com/azure-storage/azurite:3.37.0
+  # Microsoft apt repo signing key (packages.microsoft.com), verified before it is trusted.
+  MS_KEY_FPR: BC528686B50D79E339D3721CEB3E94ADBE1229CF
+  MSODBCSQL_VERSION: "18.6.2.1-1"
+
+jobs:
+  integration:
+    name: integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 75 # crash-injection suite alone is ~20 min on PRs
+    env:
+      # Crash-injection knobs (T-206). Harmless until that suite is merged.
+      TIDAL_TEST_CRASH_EXAMPLES: ${{ github.event_name == 'schedule' && '40' || '4' }}
+      TIDAL_TEST_CRASH_FULL: ${{ github.event_name == 'schedule' && '1' || '0' }}
+      # A missing ODBC driver / SQL password / Azurite fails instead of skipping (tests/integration/conftest.py).
+      TIDAL_TEST_REQUIRE_SQL: "1"
+      # Azurite's public, documented devstoreaccount1 key (allow-listed in .gitleaks.toml).
+      TIDAL_TEST_AZURITE_CS: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;" # gitleaks:allow
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+        with:
+          python-version-file: .python-version
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install ODBC Driver 18 for SQL Server (pinned, signing key verified)
+        run: |
+          set -euo pipefail
+          . /etc/os-release
+          curl -fsSL https://packages.microsoft.com/keys/microsoft.asc -o "$RUNNER_TEMP/microsoft.asc"
+          fpr="$(gpg --show-keys --with-colons "$RUNNER_TEMP/microsoft.asc" | awk -F: '$1=="fpr"{print $10}')"
+          if ! grep -qx "$MS_KEY_FPR" <<<"$fpr"; then
+            echo "Microsoft signing key fingerprint mismatch: $fpr" >&2
+            exit 1
+          fi
+          sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/microsoft-prod.gpg "$RUNNER_TEMP/microsoft.asc"
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/${VERSION_ID}/prod ${VERSION_CODENAME} main" \
+            | sudo tee /etc/apt/sources.list.d/mssql-release.list >/dev/null
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y --no-install-recommends unixodbc "msodbcsql18=${MSODBCSQL_VERSION}"
+          odbcinst -q -d | grep -F "ODBC Driver 18 for SQL Server"
+
+      # Service containers cannot take a password generated at run time, so both backends are
+      # started with `docker run`. The SA password exists only for this run and is masked.
+      - name: Generate the SA password
+        run: |
+          set -euo pipefail
+          pw="Aa1-$(openssl rand -hex 16)"
+          echo "::add-mask::$pw"
+          {
+            echo "TIDAL_TEST_SQL_PASSWORD=$pw"
+            echo "TIDAL_SQL__PASSWORD=$pw"
+            echo "TIDAL_TEST_SQL_URL=127.0.0.1,1433"
+          } >> "$GITHUB_ENV"
+
+      - name: Start SQL Server 2022 and Azurite
+        run: |
+          set -euo pipefail
+          # -e NAME (no value) passes the variable from this shell, so it never hits the command line.
+          export MSSQL_SA_PASSWORD="$TIDAL_SQL__PASSWORD"
+          docker run -d --name sql -e ACCEPT_EULA=Y -e MSSQL_PID=Developer -e MSSQL_SA_PASSWORD \
+            -p 127.0.0.1:1433:1433 "$SQL_IMAGE"
+          docker run -d --name azurite -p 127.0.0.1:10000:10000 "$AZURITE_IMAGE" \
+            azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
+          export SQLCMDPASSWORD="$TIDAL_SQL__PASSWORD"
+          for _ in $(seq 1 30); do
+            if docker exec -e SQLCMDPASSWORD sql /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -Q "SELECT 1" -b -o /dev/null; then
+              sql_ok=1; break
+            fi
+            sleep 4
+          done
+          [ "${sql_ok:-0}" = 1 ] || { echo "SQL Server did not become healthy" >&2; docker logs sql | tail -n 40; exit 1; }
+          for _ in $(seq 1 15); do
+            if (exec 3<>/dev/tcp/127.0.0.1/10000) 2>/dev/null; then azurite_ok=1; break; fi
+            sleep 2
+          done
+          [ "${azurite_ok:-0}" = 1 ] || { echo "Azurite did not become reachable" >&2; docker logs azurite | tail -n 40; exit 1; }
+
+      - run: uv sync --locked
+
+      - name: Run integration tests
+        env:
+          TIDAL_STORAGE__CONNECTION_STRING: ${{ env.TIDAL_TEST_AZURITE_CS }}
+        # pytest-timeout is not a dependency (ADR-0007); the job timeout-minutes is the backstop.
+        run: >-
+          uv run pytest -m integration --no-cov
+          --junitxml="$RUNNER_TEMP/junit-integration.xml"
+          -p no:cacheprovider
+
+      - name: Upload JUnit XML
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: junit-integration
+          path: ${{ runner.temp }}/junit-integration.xml
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Container logs on failure
+        if: failure()
+        run: |
+          docker logs --tail 60 sql || true
+          docker logs --tail 60 azurite || true
+
+      - name: Stop containers
+        if: always()
+        run: docker rm -f sql azurite || true
