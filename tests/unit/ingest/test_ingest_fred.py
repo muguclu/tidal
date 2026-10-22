@@ -96,7 +96,7 @@ def test_pagination_two_pages_saved(tmp_path: Path) -> None:
     assert paths[0].startswith("raw/fred/dexuseu/19990104-")
     assert paths[1].startswith("raw/fred/dexuseu/19990107-")
     assert paths[0].endswith(".json.gz")
-    assert store.list_paths("raw/fred/") == sorted(paths)
+    assert list(store.list("raw/fred/")) == sorted(paths)
     assert gzip.decompress((tmp_path / paths[0]).read_bytes()) == PAGE1
 
 
@@ -110,7 +110,7 @@ def test_raw_saved_even_if_parse_fails(tmp_path: Path) -> None:
     bad = b'{"count":1,"observations":[{"date":"1999-01-04","value":"x"}]}'
     src, _, store = make(tmp_path, lambda _: httpx.Response(200, content=bad))
     (chunk,) = run(src)
-    assert store.list_paths("raw/fred/") == [raw_blob_path(chunk)]
+    assert list(store.list("raw/fred/")) == [raw_blob_path(chunk)]
     v = parse_fred_page(chunk.payload, "DEXUSEU").column("value").to_numpy().tolist()
     assert math.isnan(v[0])
 
@@ -118,9 +118,9 @@ def test_raw_saved_even_if_parse_fails(tmp_path: Path) -> None:
 def test_refetch_is_idempotent(tmp_path: Path) -> None:
     src, _, store = make(tmp_path, Server())
     run(src)
-    before = {p: (tmp_path / p).read_bytes() for p in store.list_paths("raw/")}
+    before = {p: (tmp_path / p).read_bytes() for p in list(store.list("raw/"))}
     run(src)
-    assert {p: (tmp_path / p).read_bytes() for p in store.list_paths("raw/")} == before
+    assert {p: (tmp_path / p).read_bytes() for p in list(store.list("raw/"))} == before
 
 
 def test_changed_payload_same_day_gets_distinct_blob(tmp_path: Path) -> None:
@@ -130,7 +130,7 @@ def test_changed_payload_same_day_gets_distinct_blob(tmp_path: Path) -> None:
     (second,) = run(src)
     assert first.day == second.day
     assert raw_blob_path(first) != raw_blob_path(second)
-    assert {raw_blob_path(first), raw_blob_path(second)} <= set(store.list_paths("raw/"))
+    assert {raw_blob_path(first), raw_blob_path(second)} <= set(store.list("raw/"))
 
 
 @pytest.mark.parametrize("status", [429, 500, 503])
@@ -209,7 +209,7 @@ def test_key_in_query_but_never_in_logs_or_paths(tmp_path: Path) -> None:
     assert server.requests[0].url.params["api_key"] == KEY
     assert logs
     assert KEY not in repr(logs)
-    assert all(KEY not in p for p in store.list_paths("raw/"))
+    assert all(KEY not in p for p in list(store.list("raw/")))
 
 
 def test_redact_url() -> None:
@@ -297,7 +297,7 @@ def test_key_echo_stripped_before_digest_and_storage(tmp_path: Path) -> None:
         assert c.sha256 == hashlib.sha256(c.payload).hexdigest()
         assert "api_key" not in json.loads(c.payload)
         assert json.loads(c.payload)["observations"]  # data untouched
-    for path in store_a.list_paths("raw/"):
+    for path in list(store_a.list("raw/")):
         assert b"KEYAAAAAAAA" not in gzip.decompress((tmp_path / "a" / path).read_bytes())
 
 
@@ -312,7 +312,7 @@ def test_key_elsewhere_refused(tmp_path: Path) -> None:
     src, _, store = make(tmp_path, lambda _: httpx.Response(200, content=leak))
     with pytest.raises(FredUnavailable):
         run(src)
-    assert store.list_paths("raw/") == []
+    assert list(store.list("raw/")) == []
 
 
 def test_3xx_is_not_success(tmp_path: Path) -> None:

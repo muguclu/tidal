@@ -7,10 +7,11 @@ is about one row group regardless of the partition size.
 
 # ruff: noqa: N818
 
+import contextlib
 import os
 import shutil
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Protocol
@@ -20,7 +21,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from tidal import __version__
-from tidal.common.errors import TidalError
+from tidal.common.errors import NotFound, TidalError
 from tidal.contracts.schemas import SCHEMAS, pyarrow_write_kwargs
 from tidal.storage import layout
 
@@ -70,13 +71,37 @@ class ImmutableFileExists(TidalError):
 class ObjectStore(Protocol):
     """Minimal blob store: container-qualified paths, create-only writes."""
 
-    def list_paths(self, prefix: str) -> list[str]:
-        """Return all existing paths starting with ``prefix``."""
-        ...
-
     def put_new(self, path: str, local_file: Path) -> None:
         """Upload ``local_file``; raise :class:`ImmutableFileExists` if ``path`` exists."""
         ...
+
+    def read(self, path: str) -> bytes:
+        """Return the object's bytes; raise :class:`~tidal.common.errors.NotFound` if absent."""
+        ...
+
+    def exists(self, path: str) -> bool:
+        """Whether the object at ``path`` exists."""
+        ...
+
+    def list(self, prefix: str) -> Iterator[str]:
+        """Yield existing paths starting with ``prefix``, sorted.
+
+        ``prefix`` must name a container (``"c"``, ``"c/"``, ``"c/dir/na"``); ``""`` raises
+        :class:`~tidal.storage.layout.InvalidPath`. A missing container lists nothing.
+        """
+        ...
+
+    def delete(self, path: str) -> None:
+        """Delete exactly the object at ``path``; idempotent (absent is fine)."""
+        ...
+
+
+def _split_prefix(prefix: str) -> tuple[str, str]:
+    """``(container, name_prefix)`` of a listing prefix; the container is mandatory."""
+    container, _, name = prefix.partition("/")
+    if not container:
+        raise layout.InvalidPath("listing needs a container prefix, got an empty one")
+    return container, name
 
 
 class LocalStore:
@@ -84,18 +109,11 @@ class LocalStore:
 
     def __init__(self, root: Path) -> None:
         """Create a store under ``root``."""
-        self.root = root
-
-    def list_paths(self, prefix: str) -> list[str]:
-        """List existing files below the directory prefix (ending in ``/``)."""
-        base = self.root / prefix
-        if not base.is_dir():
-            return []
-        return sorted(p.relative_to(self.root).as_posix() for p in base.rglob("*") if p.is_file())
+        self.root = root.resolve()
 
     def put_new(self, path: str, local_file: Path) -> None:
         """Copy then ``os.link``: atomic, and fails if the destination already exists."""
-        dest = self.root / path
+        dest = self._file(path)
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_name(dest.name + ".tmp")
         shutil.copyfile(local_file, tmp)
@@ -106,6 +124,40 @@ class LocalStore:
         finally:
             tmp.unlink(missing_ok=True)
 
+    def _file(self, path: str) -> Path:
+        """Resolve ``path`` under the root; reject anything escaping it."""
+        full = (self.root / path).resolve()
+        if not full.is_relative_to(self.root) or full == self.root:
+            raise layout.InvalidPath(f"path escapes the store root: {path!r}")
+        return full
+
+    def read(self, path: str) -> bytes:
+        """Read the file's bytes."""
+        try:
+            return self._file(path).read_bytes()
+        except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
+            raise NotFound(f"{path} not found") from None
+
+    def exists(self, path: str) -> bool:
+        """Whether a file exists at ``path``."""
+        return self._file(path).is_file()
+
+    def list(self, prefix: str) -> Iterator[str]:
+        """Yield files whose path starts with ``prefix`` (string prefix, like blob listing)."""
+        container, _ = _split_prefix(prefix)
+        base = self._file(container)
+        if not base.is_dir():
+            return iter(())
+        found = (p.relative_to(self.root).as_posix() for p in base.rglob("*") if p.is_file())
+        return iter(sorted(p for p in found if p.startswith(prefix)))
+
+    def delete(self, path: str) -> None:
+        """Remove the single file at ``path`` if present; a directory is refused."""
+        full = self._file(path)
+        if full.is_dir():
+            raise layout.InvalidPath(f"{path!r} is a directory, not an object")
+        full.unlink(missing_ok=True)
+
 
 class AzureBlobStore:
     """Azure Blob store over an injected ``BlobServiceClient`` (Azurite or a real account)."""
@@ -113,12 +165,6 @@ class AzureBlobStore:
     def __init__(self, service: "BlobServiceClient") -> None:
         """Wrap ``service``; credentials are the caller's concern."""
         self.service = service
-
-    def list_paths(self, prefix: str) -> list[str]:
-        """List blobs whose name starts with the prefix's blob part."""
-        container, name = layout.split_container(prefix)
-        client = self.service.get_container_client(container)
-        return [f"{container}/{b.name}" for b in client.list_blobs(name_starts_with=name)]
 
     def put_new(self, path: str, local_file: Path) -> None:
         """Upload with ``overwrite=False``."""
@@ -132,6 +178,41 @@ class AzureBlobStore:
         except ResourceExistsError:
             raise ImmutableFileExists(f"{path} already exists") from None
 
+    def read(self, path: str) -> bytes:
+        """Download the blob."""
+        from azure.core.exceptions import ResourceNotFoundError  # noqa: PLC0415
+
+        container, name = layout.split_container(path)
+        try:
+            return bytes(self.service.get_blob_client(container, name).download_blob().readall())
+        except ResourceNotFoundError:
+            raise NotFound(f"{path} not found") from None
+
+    def exists(self, path: str) -> bool:
+        """Whether the blob exists."""
+        container, name = layout.split_container(path)
+        return bool(self.service.get_blob_client(container, name).exists())
+
+    def list(self, prefix: str) -> Iterator[str]:
+        """Yield blob paths starting with ``prefix``, sorted."""
+        from azure.core.exceptions import ResourceNotFoundError  # noqa: PLC0415
+
+        container, name = _split_prefix(prefix)
+        client = self.service.get_container_client(container)
+        try:
+            names = sorted(b.name for b in client.list_blobs(name_starts_with=name or None))
+        except ResourceNotFoundError:
+            return iter(())
+        return iter([f"{container}/{n}" for n in names])
+
+    def delete(self, path: str) -> None:
+        """Delete the one blob (no snapshots option, so nothing else is touched); idempotent."""
+        from azure.core.exceptions import ResourceNotFoundError  # noqa: PLC0415
+
+        container, name = layout.split_container(path)
+        with contextlib.suppress(ResourceNotFoundError):
+            self.service.get_blob_client(container, name).delete_blob()
+
 
 def schema_name_for(dataset: str) -> str:
     """Contract schema name of a dataset (``ticks`` -> TICK_V1, bars -> BAR_V1)."""
@@ -143,7 +224,7 @@ def schema_name_for(dataset: str) -> str:
 def next_seq(store: ObjectStore, prefix: str) -> int:
     """Next free ``part-`` number in a partition (0 if it is empty)."""
     seqs = []
-    for p in store.list_paths(prefix):
+    for p in store.list(prefix):
         try:
             part = layout.parse_md_path(p)
         except layout.InvalidPath:

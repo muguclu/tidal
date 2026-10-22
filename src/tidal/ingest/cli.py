@@ -421,7 +421,7 @@ def _group_state(store: ObjectStore, units: Sequence[syn.WorkUnit]) -> str:
 
     def has(dataset: str, month: int) -> bool:
         prefix = layout.md_partition_prefix(dataset, iid, year, month)
-        return any(p.endswith(".parquet") for p in store.list_paths(prefix))
+        return any(p.endswith(".parquet") for p in store.list(prefix))
 
     if has("bars_1d", 0):
         return "done"

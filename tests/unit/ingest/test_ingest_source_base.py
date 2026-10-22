@@ -59,7 +59,7 @@ def test_persist_raw_gzip_idempotent(tmp_path: Path) -> None:
     assert persist_raw(c, store) is True
     assert persist_raw(c, store) is False  # path exists -> no new write
     assert gzip.decompress((tmp_path / raw).read_bytes()) == c.payload
-    assert store.list_paths("raw/eia/") == [raw]
+    assert list(store.list("raw/eia/")) == [raw]
 
 
 def test_persist_raw_same_sha_seen_skips_write(tmp_path: Path) -> None:
@@ -82,7 +82,7 @@ def test_different_payload_same_day_is_new_blob(tmp_path: Path) -> None:
     assert persist_raw(chunk(b'{"v":1}'), store) is True
     assert persist_raw(chunk(b'{"v":2}'), store) is True
     assert persist_raw(chunk(b'{"v":2}'), store) is False
-    assert len(store.list_paths("raw/eia/")) == 2
+    assert len(list(store.list("raw/eia/"))) == 2
 
 
 FIXTURES = Path(__file__).parents[2] / "fixtures"

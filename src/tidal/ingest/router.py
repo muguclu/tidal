@@ -21,13 +21,12 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from sqlalchemy import select
 
-from tidal.common.errors import ConfigError
 from tidal.common.timeutil import Clock
 from tidal.contracts.instruments import CATALOGUE_V1
 from tidal.contracts.schemas import BAR_V1, QualityFlag
 from tidal.storage import layout
 from tidal.storage import sql_repo as sr
-from tidal.storage.parquet_writer import AzureBlobStore, LocalStore, ObjectStore, write_partition
+from tidal.storage.parquet_writer import ObjectStore, write_partition
 
 DAY_NS: Final = 86_400 * 10**9
 _VALUES: Final = ("open", "high", "low", "close", "volume", "trade_count")
@@ -46,17 +45,8 @@ class Routed:
 
 
 def read_part(store: ObjectStore, path: str, columns: list[str] | None = None) -> pa.Table:
-    """Read (selected ``columns`` of) one part from a ``LocalStore`` or ``AzureBlobStore``.
-
-    Special-cases the two stores until ``ObjectStore.read()`` exists (follow-up T-116).
-    """
-    if isinstance(store, LocalStore):
-        return pq.read_table(store.root / path, columns=columns)
-    if isinstance(store, AzureBlobStore):
-        container, name = layout.split_container(path)
-        data = store.service.get_blob_client(container, name).download_blob().readall()
-        return pq.read_table(io.BytesIO(data), columns=columns)
-    raise ConfigError(f"store {type(store).__name__} cannot be read")
+    """Read (selected ``columns`` of) one part through ``store.read``."""
+    return pq.read_table(io.BytesIO(store.read(path)), columns=columns)
 
 
 def _plan_cold(incoming: pa.Table, existing: pa.Table | None) -> pa.Table:
@@ -204,7 +194,7 @@ class Router:
                 prefix = layout.md_partition_prefix(dataset, iid, year, month)
                 parts = [
                     read_part(self.store, p, ["ts_ns", "version", *_VALUES])
-                    for p in self.store.list_paths(prefix)
+                    for p in self.store.list(prefix)
                     if p.endswith(".parquet")
                 ]
                 part = _plan_cold(part, pa.concat_tables(parts) if parts else None)

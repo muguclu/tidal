@@ -170,13 +170,13 @@ def test_golden_wti_negative_print_spot_and_fut1(engine: Engine, tmp_path: Path)
         row = c.execute(sr.instrument.select().where(sr.instrument.c.instrument_id == WTI)).one()
     assert (row.first_ts_ns, row.last_ts_ns) == (ns("2020-04-16"), ns("2020-04-23"))
     # raw pages were stored before normalisation
-    assert any(p.startswith("raw/eia/rwtc/") for p in ctx.store.list_paths("raw/"))
+    assert any(p.startswith("raw/eia/rwtc/") for p in list(ctx.store.list("raw/")))
 
 
 def test_golden_negative_print_in_cold_parquet(engine: Engine, tmp_path: Path) -> None:
     ctx = make_ctx(engine, tmp_path, "2021-01-01", fixture_upstream(), hot_days=30)
     cli.backfill(ctx, "eia", None, [WTI])
-    [path] = [p for p in ctx.store.list_paths("marketdata/") if p.endswith(".parquet")]
+    [path] = [p for p in list(ctx.store.list("marketdata/")) if p.endswith(".parquet")]
     assert path == f"marketdata/v1/bars_1d/instrument={WTI}/year=2020/month=00/part-00000.parquet"
     table = read_part(ctx.store, path)
     i = table.column("ts_ns").to_pylist().index(ns("2020-04-20"))
@@ -318,7 +318,7 @@ def test_build_store_local_default_and_azure_variants(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     store = cli.build_store(Settings.from_env({"TIDAL_ENV": "local"}))
-    assert isinstance(store, LocalStore) and store.root == cli.LOCAL_ROOT
+    assert isinstance(store, LocalStore) and store.root == cli.LOCAL_ROOT.resolve()
 
     created: list[str] = []
 

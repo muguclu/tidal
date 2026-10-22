@@ -11,6 +11,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from tidal.common.errors import NotFound
 from tidal.contracts.schemas import BAR_V1, PARQUET_ENCODINGS, TICK_V1
 from tidal.storage import layout
 from tidal.storage import parquet_writer as pw
@@ -248,3 +249,47 @@ def test_writer_is_called_with_contract_page_and_codec_settings(
     assert seen["data_page_size"] == 1 << 20
     assert seen["compression"] == "zstd" and seen["compression_level"] == 6
     assert seen["write_statistics"] is True
+
+
+def test_local_store_read_list_delete(tmp_path: Path) -> None:
+    store = pw.LocalStore(tmp_path / "root")
+    src = tmp_path / "f.bin"
+    src.write_bytes(b"PAR1xyz")
+    paths = ["c/v1/b/part-00001.parquet", "c/v1/a/part-00000.parquet", "c/v1x/part-00000.parquet"]
+    for p in paths:
+        store.put_new(p, src)
+    assert store.read(paths[0]) == b"PAR1xyz"
+    assert store.exists(paths[0]) and not store.exists("c/v1/nope")
+    with pytest.raises(NotFound):
+        store.read("c/v1/nope")
+    assert list(store.list("c/v1/")) == sorted(paths[:2])
+    assert list(store.list("c/v1")) == sorted(paths)
+    assert list(store.list("zzz/")) == []
+    store.delete(paths[0])
+    store.delete(paths[0])  # idempotent
+    assert not store.exists(paths[0]) and store.exists(paths[1])
+    with pytest.raises(layout.InvalidPath):
+        store.delete("../f.bin")
+    with pytest.raises(layout.InvalidPath):
+        store.read("c/../../x")
+
+
+def test_local_store_relative_root_and_guards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    store = pw.LocalStore(Path("./.data"))
+    src = tmp_path / "f.bin"
+    src.write_bytes(b"x")
+    store.put_new("c/a/p.bin", src)
+    assert list(store.list("c")) == list(store.list("c/")) == ["c/a/p.bin"]
+    assert list(store.list("nocontainer")) == []
+    with pytest.raises(layout.InvalidPath):
+        list(store.list(""))
+    assert store.read("c/a/p.bin") == b"x" and store.exists("c/a/p.bin")
+    with pytest.raises(layout.InvalidPath):
+        store.delete("c/a")  # a directory
+    with pytest.raises(layout.InvalidPath):
+        store.put_new("../escape.bin", src)
+    store.delete("c/a/p.bin")
+    assert not store.exists("c/a/p.bin")
