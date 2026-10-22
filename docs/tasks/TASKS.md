@@ -33,11 +33,11 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 ### Lane A — data (data-engineer)
 | ID | Title | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|
-| T-101 | Time & epoch utils, quality flags | T-005 | `src/tidal/common/timeutil.py`, `src/tidal/ingest/validate.py` +tests | property tests: ISO↔ns round-trip, DST edges; flag logic incl. negative & outlier | todo |
-| T-102 | Source protocol + EIA client | T-101 | `src/tidal/ingest/sources/{base,eia}.py` +tests | pagination, retry/backoff, raw saved; recorded HTTP fixtures (vcr) | todo |
+| T-101 | Time & epoch utils, quality flags | T-005 | `src/tidal/common/timeutil.py`, `src/tidal/ingest/validate.py` +tests | property tests: ISO↔ns round-trip, DST edges; flag logic incl. negative & outlier | done |
+| T-102 | Source protocol + EIA client | T-101 | `src/tidal/ingest/sources/{base,eia}.py` +tests | pagination, retry/backoff, raw saved; recorded HTTP fixtures (vcr) | done |
 | T-103 | FRED client | T-102 | `src/tidal/ingest/sources/fred.py` +tests | same pattern as EIA | todo |
-| T-104 | Synthetic generator | T-101 | `src/tidal/ingest/sources/synthetic*.py`, `synthetic_params.yaml` +tests | SPEC-01 §4 criteria; determinism hash test; L-scale perf note | todo |
-| T-106 | Parquet writer, layout, SQL repo | T-003 | `src/tidal/storage/{layout,parquet_writer,sql_repo}.py`, `sql/migrations/**` +tests | writer settings = storage-layout §3 (asserted via pyarrow metadata); SQL DDL = data-contracts §6 | todo |
+| T-104 | Synthetic generator | T-101 | `src/tidal/ingest/sources/synthetic*.py`, `synthetic_params.yaml` +tests | SPEC-01 §4 criteria; determinism hash test; L-scale perf note | done |
+| T-106 | Parquet writer, layout, SQL repo | T-003 | `src/tidal/storage/{layout,parquet_writer,sql_repo}.py`, `sql/migrations/**` +tests | writer settings = storage-layout §3 (asserted via pyarrow metadata); SQL DDL = data-contracts §6 | done |
 | T-107 | Tick → bar aggregation | T-104, T-106 | `src/tidal/storage/aggregate.py` +tests | data-contracts §3.2; property test: bars from ticks == naive groupby; streams monthly | todo |
 | T-108 | Calibrate synthetic params to real data | T-105 | `src/tidal/ingest/sources/synthetic_params.yaml`, `scripts/calibrate_synthetic.py` +tests | Brent/HH daily realised vol per regime from ingested EIA history; params within ±10 %; method documented | todo |
 | T-105 | Normaliser, router, ingest CLI | T-102, T-104, T-106, T-107 | `src/tidal/ingest/{normalise,router,cli}.py` +tests | backfill 20+ yrs local (spot + FUT1–4 + FX); WTI negative golden test; idempotent daily run; injected clock | todo |
@@ -45,22 +45,24 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 ### Lane B — infra (infra-engineer)
 | ID | Title | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|
-| T-120 | Modules: resource_group, log_analytics, identity | T-008 | `infra/terraform/modules/{resource_group,log_analytics,identity}/**` | tflint/checkov clean; LA daily cap | todo |
-| T-121 | Modules: storage (+containers), key_vault | T-120 | `modules/{storage,key_vault}/**` | shared key disabled, RBAC KV, containers per layout §1 | todo |
+| T-120 | Modules: resource_group, log_analytics, identity | T-008 | `infra/terraform/modules/{resource_group,log_analytics,identity}/**` | tflint/checkov clean; LA daily cap | done |
+| T-121 | Modules: storage (+containers), key_vault | T-120 | `modules/{storage,key_vault}/**` | shared key disabled, RBAC KV, containers per layout §1 | done |
 | T-122 | Module: acr (+purge task) | T-120 | `modules/acr/**` | Basic, admin off, weekly purge | todo |
-| T-123 | Module: sql (serverless, Entra-only) | T-120 | `modules/sql/**` | auto-pause 60, min 0.5 vCore | todo |
-| T-124 | Module: servicebus (queues per contract) | T-120 | `modules/servicebus/**` | queue settings = messaging-contract §1 | todo |
+| T-123 | Module: sql (serverless, Entra-only) | T-120 | `modules/sql/**` | auto-pause 60, min 0.5 vCore | done |
+| T-124 | Module: servicebus (queues per contract) | T-120 | `modules/servicebus/**` | queue settings = messaging-contract §1 | done |
 | T-125 | Module: budget + action group | T-120 | `modules/budget/**` | €60, 50/80/100 % | todo |
-| T-127 | iac.yml workflow | T-008 | `.github/workflows/iac.yml` | fmt/validate/tflint/checkov on PRs touching `infra/**`; plan step skipped until `NEEDS-CLOUD` OIDC exists | todo |
+| T-127 | iac.yml workflow | T-008 | `.github/workflows/iac.yml` | fmt/validate/tflint/checkov on PRs touching `infra/**`; plan step skipped until `NEEDS-CLOUD` OIDC exists | done |
 | T-126 | envs/dev composition + first plan | T-121…T-125 | `infra/terraform/envs/dev/**`, `docs/finops/cost-model.md` | `terraform validate` clean; `NEEDS-CLOUD`: plan clean, human applies, outputs → config | todo |
 
 ### Lane C — api & local stack
 | ID | Title | Agent | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|---|
-| T-110 | API skeleton, errors, health, fakes | api-engineer | T-004, T-005 | `src/tidal/api/{app,deps,errors}.py`, `api/routers/health.py`, `src/tidal/query/protocols.py`, `tests/fakes/**` | problem+json (`RequestValidationError` → 400, not 422; serialise `Problem` with `exclude_none=True`); DI to fakes; `run()` entrypoint; wires oasdiff step in ci.yml (`openapi-diff` job) | todo |
-| T-111 | Read routers on fakes | api-engineer | T-110 | `api/routers/{instruments,bars,ticks,latest,spreads}.py` +tests | oasdiff = 0; schemathesis green | todo |
-| T-112 | docker-compose local stack | platform-engineer | T-001 | `docker-compose.yml`, `deploy/docker/Dockerfile` (dev stage), `deploy/local/**` (incl. `sb-config.json`), `.env.example` | `docker compose up` gives Azurite, one SQL Server container shared by Tidal and the SB emulator, SB emulator, api | todo |
-| T-113 | Local JWKS + dev token script | api-engineer | T-005 | `scripts/dev-token.py`, `tests/fakes/jwks/**` | mints RS256 tokens per role for local/tests; keys generated at runtime, never committed | todo |
+| T-110 | API skeleton, errors, health, fakes | api-engineer | T-004, T-005 | `src/tidal/api/{app,deps,errors}.py`, `api/routers/health.py`, `src/tidal/query/protocols.py`, `tests/fakes/**` | problem+json (`RequestValidationError` → 400, not 422; serialise `Problem` with `exclude_none=True`); DI to fakes; `run()` entrypoint; wires oasdiff step in ci.yml (`openapi-diff` job) | done |
+| T-111 | Read routers on fakes | api-engineer | T-110 | `api/routers/{instruments,bars,ticks,latest,spreads}.py` +tests | oasdiff = 0; schemathesis green | done |
+| T-112 | docker-compose local stack | platform-engineer | T-001 | `docker-compose.yml`, `deploy/docker/Dockerfile` (dev stage), `deploy/local/**` (incl. `sb-config.json`), `.env.example` | `docker compose up` gives Azurite, one SQL Server container shared by Tidal and the SB emulator, SB emulator, api | done |
+| T-114 | `TIDAL_ENV` fails closed | architect | T-005 | `docs/contracts/config-contract.md`, `src/tidal/common/config.py` +tests, `.env.example` | `TIDAL_ENV` has no default (unset → startup error); compose/.env set `local` | todo |
+| T-115 | Shared source helpers; layout-built backtest prefixes | data-engineer | T-103 | `src/tidal/ingest/sources/{base,eia}.py`, `src/tidal/contracts/messages.py` +tests | eia.py uses base retry/redact helpers; `BacktestJob` prefix check uses `layout.backtest_prefix` | todo |
+| T-113 | Local JWKS + dev token script | api-engineer | T-005 | `scripts/dev-token.py`, `tests/fakes/jwks/**` | mints RS256 tokens per role for local/tests; keys generated at runtime, never committed | done |
 
 **Gate G1**
 
@@ -130,7 +132,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | ID | Title | Agent | Lane | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|---|---|
 | T-401 | Entra app registrations & roles | infra-engineer | W4/L1 | T-126 | `modules/entra_app/**` | 4 app roles, group assignment | todo |
-| T-402 | Real JWT auth + role tests | api-engineer | W4/L2 | T-401 | `src/tidal/api/auth.py` +tests | SPEC-04 auth criteria | todo |
+| T-402 | Real JWT auth + role tests | api-engineer | W4/L2 | T-401 | `src/tidal/api/auth.py` +tests | SPEC-04 auth criteria; implements the async `validate_bearer_token` seam (T-110); local-only `TIDAL_AUTH__JWKS_URL` override for `.data/dev-jwks/jwks.json` (config-contract change); HMAC cursor key from Key Vault so cursors survive restarts/replicas | todo |
 | T-403 | RBAC assignments + drift check | infra-engineer | W4/L1 | T-401 | `modules/identity/rbac.tf`, `scripts/rbac-export.sh` | matrix = SPEC-06 §2; CI diff | todo |
 | T-404 | Private networking flag | infra-engineer | W4/L1 | T-403 | `modules/network/**` | PEs for Blob/SQL/KV; flag off = no cost | todo |
 | T-405 | Supply-chain hardening | platform-engineer | W4/L3 | T-307 | Dockerfile, Helm values, CI scans | SPEC-06 §5 | todo |
@@ -145,7 +147,8 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 
 | ID | Title | Agent | Lane | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|---|---|
-| T-501 | Price snapshot | finops-analyst | early (W1) | — | `docs/finops/prices.yaml`, `src/tidal/finops/fetch_prices.py` | westeurope prices pinned with date | todo |
+| T-502b | Price snapshot additions | finops-analyst | T-501 | `src/tidal/finops/fetch_prices.py`, `docs/finops/prices.yaml` +tests | Service Bus Standard base + operations, ACR Tasks run-minutes meters | todo |
+| T-501 | Price snapshot | finops-analyst | early (W1) | — | `docs/finops/prices.yaml`, `src/tidal/finops/fetch_prices.py` | westeurope prices pinned with date | done |
 | T-502 | Cost export + report generator | finops-analyst | W5/L1 | T-126 | `src/tidal/finops/cost_report.py`, `modules/cost_export/**`, `.github/workflows/cost.yml` | weekly report generated (RG-scoped export) | todo |
 | T-503 | Measure C1–C3 | finops-analyst | W5/L1 | T-204, T-207 | `docs/finops/results/c1-c3.md` | numbers + evidence | todo |
 | T-504 | Measure C4–C10 (+ load test) | finops-analyst + test-engineer | W5/L1 | T-311 | `tests/load/**`, `docs/finops/results/c4-c10.md` | numbers + evidence | todo |
