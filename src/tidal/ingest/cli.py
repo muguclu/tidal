@@ -386,6 +386,11 @@ def synth_cmd(
     are skipped (resume).
     """
     if typer_ctx.invoked_subcommand is not None:
+        if any(v is not None for v in (scale, seed, workers)) or require_empty:
+            raise typer.BadParameter(
+                f"options of `tidal synth` do not apply to `{typer_ctx.invoked_subcommand}`; "
+                "give them to the subcommand"
+            )
         return
     with correlation_scope():
         try:

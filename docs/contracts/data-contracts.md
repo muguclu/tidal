@@ -194,5 +194,5 @@ instead of `ts_ns` (`md.bar_baseline`), to show the epoch + compression gain hon
 
 ## Changelog
 
-- **v1.1.1 (T-117, ADR-0013)**: clarification only, no schema change. The v1 daily catalogue (`EIA.*`, `FRED.*`)
+- **v1 clarification (T-117, ADR-0013)**: no version bump, no, no schema change. The v1 daily catalogue (`EIA.*`, `FRED.*`)
   is sourced synthetically; ids are unchanged, `SYNTHETIC` is set on every row. EIA's end-of-futures note removed.

@@ -57,6 +57,10 @@ cold store (Parquet) according to age.
 - Spot: OU deviation around a stylised anchor curve, Student-t(5) shocks, stress-window vol multipliers, Brent/WTI
   correlated. Futures: carry falls (towards backwardation) as price rises, plus seasonality (Henry Hub) and basis
   noise, so M1-M2 spreads change sign. Deterministic episode: WTI spot -37.0 / FUT1 -37.6 on 2020-04-20.
+- A re-run with a later clock may duplicate rows that were hot into cold (same bars, different hot/cold split);
+  tiering (T-205) reconciles this.
+- `ref.instrument.description` keeps vendor naming (`EIA RBRTE, ...`) for id stability; the `SYNTHETIC` quality flag is
+  authoritative for provenance.
 - Parameters in `synthetic_params.yaml` (`daily_history`); same PCG64 stream scheme as §4; a bar never depends on the
   requested range.
 

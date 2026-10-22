@@ -1,6 +1,6 @@
 # TASKS — Tidal backlog
 
-Status legend: `todo` · `doing` · `review` · `done` · `blocked`
+Status legend: `todo` · `doing` · `review` · `done` · `blocked` · `superseded`
 Columns: **Wave/Lane** (see PARALLELISM.md) · **Deps** (must be `done`) · **Owns** (only files this
 task may create/modify; `+tests` = matching files under `tests/`).
 Every task's PR must reference its ID and tick its "Done when" items.

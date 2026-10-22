@@ -32,6 +32,7 @@ Option 2, because each host choice can be defended by workload shape and a cost 
 exactly the story the role asks for.
 
 ## Consequences
+- (Note 2026-10-22: the `tidal-ingest` entrypoint was removed by ADR-0013; real-source ingestion no longer exists.)
 - One image with five entrypoints (`tidal-api`, `tidal-query`, `tidal-worker`, `tidal-ingest`,
   `tidal-tiering`) keeps the build single; image size is measured in T-305 (target ≤ 500 MB).
 - Query ingress: **external with Entra token validation** (audience `TIDAL_QUERY__AUDIENCE`) while

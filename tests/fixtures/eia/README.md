@@ -9,8 +9,8 @@ because no API key was available (T-102); replace with vcrpy cassettes once a ke
 `scripts/verify_eia.py --record`) go in `live/`.
 
 Status of "recorded HTTP fixtures (vcr)": waived by the orchestrator until an API key exists. The
-hand-made fixtures plus `verify_eia.py --record` (unit-tested) stand in; the live recording is a
-NEEDS-KEY follow-up before gate G1. vcrpy is not used. Raw payload = verbatim response minus any
+hand-made fixtures plus `verify_eia.py --record` (unit-tested) stand in; no live recording will be made
+(ADR-0013). vcrpy is not used. Raw payload = verbatim response minus any
 `api_key` echo in `request.params`.
 
 ADR-0013: `scripts/verify_eia.py` was deleted and no live recordings will be made; these fixtures only back the unwired reference client.

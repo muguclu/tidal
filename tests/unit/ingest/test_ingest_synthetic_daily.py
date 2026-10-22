@@ -13,6 +13,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.pool import StaticPool
+from typer.testing import CliRunner
 
 from tidal.common.config import Settings
 from tidal.common.errors import ConfigError
@@ -108,19 +109,24 @@ def test_a_bar_does_not_depend_on_the_requested_range() -> None:
 
 
 def test_wti_negative_price_episode_on_2020_04_20() -> None:
-    df = frame(WTI)
     day = to_ts_ns(datetime(2020, 4, 20, tzinfo=UTC))
-    row = df.filter(pl.col("ts_ns") == day).row(0, named=True)
-    assert row["close"] < 0
-    assert row["quality"] & int(QualityFlag.NEGATIVE)
-    fut1 = frame("EIA.WTI.FUT1").filter(pl.col("ts_ns") == day).row(0, named=True)
-    fut2 = frame("EIA.WTI.FUT2").filter(pl.col("ts_ns") == day).row(0, named=True)
-    assert fut1["close"] < 0 < fut2["close"]  # extreme contango at the front
+    neg = int(QualityFlag.NEGATIVE)
+
+    def on_day(iid: str) -> dict[str, Any]:
+        return frame(iid).filter(pl.col("ts_ns") == day).row(0, named=True)
+
+    spot, fut1, fut2 = on_day(WTI), on_day("EIA.WTI.FUT1"), on_day("EIA.WTI.FUT2")
+    assert spot["close"] == -37.0
+    assert fut1["close"] == -37.6
+    assert fut2["close"] > 0  # extreme contango at the front
+    assert spot["quality"] & neg
+    assert fut1["quality"] & neg
+    df = frame(WTI)
     prev = df.filter(pl.col("ts_ns") == day - sd.NS_DAY * 3).row(0, named=True)  # Friday
     assert prev["close"] > 0
-    # no other negative close; flags only on the episode day and the next day's open/low
     assert df.filter(pl.col("close") < 0).height == 1
-    assert df.filter(pl.col("quality") & int(QualityFlag.NEGATIVE) > 0).height <= 2
+    # episode day + next day (its open is the negative close, so its low is negative too)
+    assert df.filter(pl.col("quality") & neg > 0).height == 2
     assert frame("EIA.BRENT.SPOT").filter(pl.col("low") <= 0).height == 0
 
 
@@ -219,3 +225,9 @@ def test_run_daily_history_routes_hot_cold_is_idempotent_and_byte_stable(tmp_pat
 def test_run_daily_history_rejects_a_start_after_the_last_complete_day(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="after the last complete day"):
         cli.run_daily_history(ctx_for(make_engine(), tmp_path), 1, date(2025, 12, 31))
+
+
+def test_synth_group_options_with_a_subcommand_are_rejected() -> None:
+    result = CliRunner().invoke(cli.synth_app, ["--seed", "3", "daily-history"])
+    assert result.exit_code == 2
+    assert "do not apply" in result.output

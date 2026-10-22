@@ -27,7 +27,7 @@ Rules: every module has `variables.tf` with descriptions + validation, `outputs.
 | Azure SQL | **General Purpose Serverless** Gen5, min 0.5 / max 2 vCore, **auto-pause 60 min**, 32 GB | auto-pause |
 | Service Bus | **Basic** namespace (Standard only if topic flag on) | SKU |
 | AKS | **Free tier** control plane; system pool 1× `Standard_B2s`; user pool `spot` `Standard_D4as_v5`, min 0 / max 10, `spot_max_price = -1`, eviction `Delete`; KEDA add-on; workload identity + OIDC issuer on; Azure CNI Overlay | spot + scale-to-zero + `az aks stop` |
-| Container Apps | Consumption environment; `tidal-query` app min 0 / max 5, HTTP scale rule 20 concurrent; Jobs: `ingest-daily` (cron), `tiering` (event: SB queue via KEDA scaler) | scale to zero |
+| Container Apps | Consumption environment; `tidal-query` app min 0 / max 5, HTTP scale rule 20 concurrent; Jobs: optional `synth-daily-history` (manual/cron, `tidal synth daily-history`), `tiering` (event: SB queue via KEDA scaler) | scale to zero |
 | App Service | Linux **B1**, container from ACR, VNet integration (flag) | smallest always-on |
 | VM (legacy) | `Standard_B1s` Ubuntu LTS, **auto-shutdown 20:00 CET**, started 21:55 by a Logic App (Consumption) schedule using its MI; the exporter deallocates the VM itself afterwards (custom role, SPEC-06 §2) | schedule; Logic App ≈ €0 (≈ 2 actions/day) |
 | Budget | €60/month, alerts 50/80/100 %, action group email | guardrail |
@@ -42,7 +42,7 @@ Rules: every module has `variables.tf` with descriptions + validation, `outputs.
 ## 4. Containers
 - `deploy/docker/Dockerfile` multi-stage: `uv` builder → `python:3.12-slim` (or distroless) runtime,
   non-root UID 10001, `PYTHONDONTWRITEBYTECODE`, healthcheck. One image, entrypoints:
-  `tidal-api`, `tidal-query`, `tidal-worker`, `tidal-ingest`, `tidal-tiering`.
+  `tidal-api`, `tidal-query`, `tidal-worker`, `tidal-tiering` (plus the `tidal` CLI for `synth`).
 - Image size: measure first (python-slim + pyarrow + polars + duckdb + msodbcsql18 is ~450 MB);
   target ≤ 500 MB, record the number and the top-5 layers in the PR. Build cache via GitHub Actions cache; tags: `sha-<short>`, `vX.Y.Z`;
   `latest` never used in deployments.

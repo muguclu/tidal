@@ -13,7 +13,7 @@ The "model running over 20+ years of data" requirement in a form that is easy to
   - `ma_crossover(fast, slow)` · `mean_reversion(lookback, z_entry, z_exit)` ·
     `calendar_spread(lookback, z_entry, z_exit)` on the spread `instrument_ids[0] − instrument_ids[1]`
     (e.g. `EIA.WTI.FUT1 − EIA.WTI.FUT2`, data-contracts §1.1).
-- Execution: position decided at close `t`, filled at open `t+1` (daily EIA bars: next close, documented).
+- Execution: position decided at close `t`, filled at open `t+1` (daily bars (synthetic, ADR-0013): next close, documented).
 - Costs: `fee_bps` and `slippage_bps` applied to traded notional.
 
 ## 3. Metric formulas (normative)

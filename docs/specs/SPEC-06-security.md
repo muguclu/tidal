@@ -19,7 +19,7 @@ Owner agents: `infra-engineer`, `api-engineer`; reviewer: `security-reviewer` ·
 | id-api | Blob Data Reader | Blob Data Reader | db_datareader + exec on `ops` procs | Data Sender (`backtest-jobs`, `tiering-jobs`), Data Receiver (`backtest-results`) | Secrets User | — |
 | id-query | Blob Data Reader | — | db_datareader | — | Secrets User | — |
 | id-worker | Blob Data Reader | Blob Data Contributor | db_datareader on `md`, `ref` (unified reader reads the hot window) | Data Receiver (`backtest-jobs`), Data Sender (`backtest-results`) | — | — |
-| id-ingest | Blob Data Contributor (`raw`,`marketdata`,`reference`) | — | db_datareader + db_datawriter on `md`, `ref`, `ops` (checkpoints, instrument first/last ts) | — | Secrets User | — |
+| id-ingest | Blob Data Contributor (`raw`,`marketdata`,`reference`) | — | db_datareader + db_datawriter on `md`, `ref`, `ops` (checkpoints, instrument first/last ts) | — | — | — |
 | id-tiering | Blob Data Owner on container `marketdata` (blob index tags need `tags/write`; the ARM "Tag Contributor" role does **not** cover blob tags; T-403 checks whether Blob Data Contributor + a custom `tags/write` role is tighter) | — | db_datareader/writer + delete on `md`, `ops` | Data Receiver (`tiering-jobs`) | — | — |
 | id-legacy-vm | Blob Data Contributor (`exports`) | — | db_datareader | — | — | — (plus custom role `vm-self-deallocate`: `deallocate/action` on its own VM only) |
 | AKS kubelet | — | — | — | — | — | AcrPull |
@@ -30,8 +30,8 @@ SQL: Entra-only authentication (`azuread_authentication_only = true`), identitie
 `CREATE USER [id-api] FROM EXTERNAL PROVIDER`. No SQL logins.
 
 ## 3. Secrets
-- Key Vault (RBAC mode, purge protection on, soft delete 7 d) holds only third-party secrets: EIA key,
-  FRED key, App Insights connection string.
+- Key Vault (RBAC mode, purge protection on, soft delete 7 d) holds only the App Insights connection
+  string (no vendor keys since ADR-0013).
 - App Service / Container Apps read via Key Vault references; AKS via Secrets Store CSI driver.
 - `gitleaks` in pre-commit and CI; `TIDAL_SQL__PASSWORD` only exists in `.env.local`.
 

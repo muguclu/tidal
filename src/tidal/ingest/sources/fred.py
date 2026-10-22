@@ -8,7 +8,7 @@ retried with exponential backoff, seeded jitter and ``Retry-After``; each respon
 redacted from every log line, raw path and error message.
 
 Endpoint, params and response shape are from documentation knowledge and UNVERIFIED against the
-live API (no key in T-103; run ``scripts/verify_fred.py``)::
+live API (no key in T-103; never verified, ADR-0013)::
 
     GET https://api.stlouisfed.org/fred/series/observations
         ?series_id=DEXUSEU&api_key=..&file_type=json&observation_start=..&observation_end=..
