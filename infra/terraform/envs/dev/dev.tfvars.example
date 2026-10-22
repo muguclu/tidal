@@ -1,0 +1,22 @@
+# Copy to dev.tfvars (git-ignored) and replace every placeholder. No secrets belong in this file.
+subscription_id = "00000000-0000-0000-0000-000000000000"
+owner           = "your-name"
+
+# 3 to 8 lowercase letters/digits; makes storage, Key Vault, ACR, SQL and Service Bus names globally unique.
+name_suffix = "ab12cd"
+
+# Object ID and display name of the Entra GROUP that administers the SQL server (see README, step 0).
+sql_entra_admin_login     = "sg-tidal-sql-admins"
+sql_entra_admin_object_id = "11111111-1111-1111-1111-111111111111"
+
+# Budget alert recipients and the first day of the current month (UTC).
+alert_emails      = ["you@example.invalid"]
+budget_start_date = "2026-11-01T00:00:00Z"
+
+# Defaults, shown for clarity.
+# location                  = "westeurope"
+# park                      = false
+# enable_private_networking = false
+# enable_ingest_topic       = false
+# use_free_offer            = true
+# budget_scope              = "subscription"

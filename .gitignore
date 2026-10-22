@@ -36,6 +36,7 @@ override.tf.json
 *.tfvars
 *.auto.tfvars
 !*.tfvars.example
+backend.hcl
 
 # Keys / certificates
 *.pem
