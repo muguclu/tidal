@@ -65,15 +65,27 @@ partition without touching it. Runs yearly after retag under the table lock and 
 same way as migration: nothing is deleted before the merged parts are verified, a re-run recognises
 the complete set of output parts and resumes at tag + delete.
 
+Compaction runs **yearly for every dataset** (`ticks`, `bars_1s`, `bars_1m`, `bars_1h`, `bars_1d`)
+immediately after retag, in the same scheduled job (T-309). Every kept part, including a partition that
+already had a single part, ends with `compacted=true`; that tag is what makes it eligible for the
+lifecycle tiering of §4.
+
 ## 4. Lifecycle policy (Terraform `modules/storage`)
 
 | Rule | Filter | Action |
 |---|---|---|
-| md-cool | container `marketdata`, tag `age_band = cool` | tierToCool after 0 days since modification |
-| md-cold | tag `age_band = cold` | tierToCold after 0 days |
+| md-cool | container `marketdata`, prefix `v1/`, blockBlob, tags `age_band = cool` AND `compacted = true` | tierToCool after 0 days since modification |
+| md-cold | container `marketdata`, prefix `v1/`, blockBlob, tags `age_band = cold` AND `compacted = true` | tierToCold after 0 days |
 | raw | prefix `raw/` | Cool @ 30 d, Archive @ 180 d |
 | backtests | prefix `backtests/` | Cool @ 30 d, delete @ 365 d |
 | exports / bench | prefix | delete @ 14 / 30 d |
+
+**Compaction guard.** md-cool and md-cold also require `compacted = true`. Compaction deletes the old
+parts of a partition after writing the merged one; a part moved to Cool/Cold before that would be billed
+the early-deletion fee (Cool 30 d, Cold 90 d) and a tier-change write for bytes about to be deleted. The
+cost is that a partition leaves Hot only after its first compaction, and a restated (new, uncompacted)
+part stays Hot until the next yearly run. `_manifest.json` is never tagged, so no rule can match it and it
+stays Hot. Cost numbers, including the per-tag storage charge, are in `docs/finops/deltas/T-207.md`.
 
 **Archive is never used for `marketdata/`** — rehydration takes hours and breaks backtests; documented as
 a deliberate trade-off (ADR-0004). Early-deletion penalties (Cool 30 d, Cold 90 d, Archive 180 d) are

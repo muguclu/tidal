@@ -142,6 +142,15 @@ METERS: tuple[MeterSpec, ...] = (
     _blob("blob_cold_retrieval_gb", "Cold LRS", "Cold LRS Data Retrieval"),
     _blob("blob_archive_retrieval_gb", "Archive LRS", "Archive Data Retrieval"),
     _blob("blob_cool_write_gb", "Cool LRS", "Cool LRS Data Write", note="per GB written into Cool"),
+    # Blob index tags are billed per tag stored, per month (T-207): one meter for every tier/SKU
+    # (same meterId); 5 tags per market-data part. Pinned by meter_id: the API repeats the row.
+    _blob(
+        "blob_index_tags_10k_month",
+        "Hot LRS",
+        "Index Tags",
+        meter_id="2fb5f78a-0428-4e17-8fee-5b176a3ef34c",
+        note="per 10K index tags per month (not per blob); a blob with 5 tags counts as 5",
+    ),
     # Early-delete meters exist for Cold and Archive only (see module docstring).
     _blob("blob_cold_early_delete_gb", "Cold LRS", "Cold LRS Early Delete", note="90-day minimum"),
     _blob(
