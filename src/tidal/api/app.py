@@ -99,8 +99,13 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         logger.info("api_started", env=settings.env, auth_disabled=settings.auth.disabled)
-        yield
-        logger.info("api_stopped")
+        try:
+            yield
+        finally:
+            aclose = getattr(reader, "aclose", None)
+            if aclose is not None:  # RemoteReader owns an HTTP client; fakes have none
+                await aclose()
+            logger.info("api_stopped")
 
     app = FastAPI(
         title="Tidal API",
@@ -131,9 +136,12 @@ def create_app(
 
 
 def run() -> None:
-    """``tidal-api`` entrypoint: serve the app with uvicorn on ``0.0.0.0:8000``."""
+    """``tidal-api`` entrypoint: reads go through ``tidal-query`` (0.0.0.0:8000)."""
+    from tidal.query.service import remote_reader_from_settings  # noqa: PLC0415 - avoids a cycle
+
+    settings = get_settings()
     uvicorn.run(
-        create_app(),
+        create_app(settings, reader=remote_reader_from_settings(settings)),
         host="0.0.0.0",  # noqa: S104 - container bind
         port=8000,
         log_config=None,
