@@ -60,6 +60,8 @@ def strip_api_key(body: object, *, only: str | None = None, keep: str | None = N
     a body without it is returned unchanged. ``keep="observations"``: clean everything else,
     top level included, but leave that subtree's data alone (FRED). Neither: clean everything.
     """
+    if only is not None and keep is not None:
+        raise ValueError("only and keep are mutually exclusive")
     if not isinstance(body, dict):
         return body
     if only is not None:
