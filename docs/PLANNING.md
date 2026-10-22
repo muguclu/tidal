@@ -83,10 +83,10 @@ Lane A data: synthetic generator, daily-history generator, normaliser, epoch Par
 Lane B infra: Terraform modules (rg, storage, kv, acr, sql, servicebus, log analytics, budgets).
 Lane C api: FastAPI skeleton against contract with in-memory fake repository.
 **Gate G1**
-- [ ] 20+ years of synthetic daily history (2005→, 12 series, `tidal synth daily-history`; ADR-0013) ingested locally into Parquet + SQL Server container
-- [ ] Synthetic S-scale (≈ 50M rows) generated reproducibly from a seed
+- [x] 20+ years of synthetic daily history (2005→, 12 series, `tidal synth daily-history`; ADR-0013) ingested locally into Parquet + SQL Server container
+- [x] Synthetic S-scale (≈ 50M rows) generated reproducibly from a seed
 - [ ] `terraform validate` + tflint + checkov clean for `envs/dev` (`NEEDS-CLOUD`: plan clean, applied once by a human, outputs recorded)
-- [ ] API returns contract-valid responses from fakes; `oasdiff breaking` reports nothing in either direction
+- [x] API returns contract-valid responses from fakes; `oasdiff breaking` reports nothing in either direction
 
 ### Phase 2 — Storage strategy & query (Wave 2, 3 lanes)
 Lane A: storage benchmark (4 formats) + results. Lane B: tiering/migration job + lifecycle
