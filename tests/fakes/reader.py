@@ -122,10 +122,14 @@ class FakeReader:
 
         return RowStream(got.tier, batches())
 
-    async def latest(self, instrument_ids: Sequence[str]) -> list[LatestBar]:
-        """Last seeded bar of each known instrument."""
+    async def latest(
+        self, instrument_ids: Sequence[str], interval: Interval = Interval.D1
+    ) -> list[LatestBar]:
+        """Last seeded (daily) bar of each known instrument; other intervals have none."""
+        if interval is not Interval.D1:
+            return []
         return [
-            LatestBar(instrument_id=i, interval=Interval.D1, bar=self.bars[i][-1])
+            LatestBar(instrument_id=i, interval=interval, bar=self.bars[i][-1])
             for i in instrument_ids
             if self.bars.get(i)
         ]

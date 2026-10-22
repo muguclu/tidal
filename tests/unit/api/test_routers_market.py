@@ -1,26 +1,31 @@
 """Read routers (T-111) on fakes: instruments, bars, ticks, latest, spreads, limits, paging."""
 
+import asyncio
 import io
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fastapi import FastAPI
 from pyarrow import ipc
 
+import tidal.api.routers.spreads as spreads_module
 from fakes.reader import SEEDED_IDS, FakeReader, make_bar
 from tidal.api.app import create_app
 from tidal.api.auth_roles import has_role
 from tidal.api.deps import ALL_ROLES, Principal, get_principal
 from tidal.api.ratelimit import TokenBucketLimiter
+from tidal.api.streaming import _encode
 from tidal.common.config import Settings
+from tidal.common.errors import RateLimited
 from tidal.common.timeutil import FixedClock
 from tidal.contracts.models import Bar, Tick, Tier
-from tidal.contracts.schemas import Interval, TickSide
-from tidal.query.protocols import Rows
+from tidal.contracts.schemas import BAR_V1, Interval, TickSide
+from tidal.query.protocols import Rows, RowStream
 
 pytestmark = pytest.mark.anyio
 PROBLEM = "application/problem+json"
@@ -448,21 +453,101 @@ async def test_rate_limit_per_principal_with_injected_clock(
     assert (await client.get("/v1/instruments")).status_code == 429
 
 
-def test_limiter_refill_is_capped_and_prunes(clock: FixedClock) -> None:
-    limiter = TokenBucketLimiter(clock, capacity=2)
+def test_limiter_refill_is_capped_and_lru_evicts(clock: FixedClock) -> None:
+    limiter = TokenBucketLimiter(clock, capacity=2, max_keys=2)
     limiter.check("k")
     clock.advance(3600 * 10**9)
     limiter.check("k")
     limiter.check("k")
-    with pytest.raises(Exception, match="Rate limit"):
+    with pytest.raises(RateLimited, match="Rate limit"):
         limiter.check("k")
-    import tidal.api.ratelimit as rl  # noqa: PLC0415
+    clock.advance(2 * 10**9)
+    limiter.check("a")
+    limiter.check("k")  # touch k: a becomes least recently used
+    limiter.check("b")  # evicts a, not k
+    assert list(limiter._buckets) == ["k", "b"]
 
-    rl_prune = rl._PRUNE_ABOVE
-    rl._PRUNE_ABOVE = 1
-    try:
-        clock.advance(3600 * 10**9)
-        limiter.check("other")
-        assert list(limiter._buckets) == ["other"]
-    finally:
-        rl._PRUNE_ABOVE = rl_prune
+
+# --- review round: caps, pinned as_of, cursor charset, streaming ---------------------------------
+
+
+async def test_bars_1m_cap_is_366_days(client: httpx.AsyncClient) -> None:
+    ok = bars_params(interval="1m", start="2020-01-01T00:00:00Z", end="2021-01-01T00:00:00Z")
+    assert (await client.get("/v1/bars", params=ok)).status_code == 200  # 366 d (leap year)
+    long = bars_params(interval="1m", start="2020-01-01T00:00:00Z", end="2021-01-02T00:00:00Z")
+    assert (await client.get("/v1/bars", params=long)).status_code == 413
+    spread = spread_params(interval="1m", start="2020-01-01T00:00:00Z", end="2021-01-02T00:00:00Z")
+    assert (await client.get("/v1/spreads", params=spread)).status_code == 413
+
+
+async def test_spreads_413_when_joined_result_exceeds_cap(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(spreads_module, "SPREAD_MAX_ROWS", 2)
+    r = await client.get("/v1/spreads", params=spread_params())  # 3 joined rows
+    assert r.status_code == 413
+    assert r.headers["content-type"].startswith(PROBLEM)
+
+
+async def test_spreads_reads_legs_concurrently(client: httpx.AsyncClient, reader: Reader) -> None:
+    inflight = 0
+    peak = 0
+    original = reader.read_bars
+
+    async def slow(*args: Any, **kwargs: Any) -> Rows[Bar]:
+        nonlocal inflight, peak
+        inflight += 1
+        peak = max(peak, inflight)
+        await asyncio.sleep(0)
+        inflight -= 1
+        return await original(*args, **kwargs)
+
+    reader.read_bars = slow  # type: ignore[method-assign]
+    assert (await client.get("/v1/spreads", params=spread_params())).status_code == 200
+    assert peak == 2
+
+
+async def test_implicit_as_of_is_pinned_across_pages(
+    client: httpx.AsyncClient, reader: Reader, clock: FixedClock
+) -> None:
+    first = (await client.get("/v1/bars", params=bars_params(limit="1"))).json()
+    pinned = clock.now_ns()
+    clock.advance(DAY)
+    await client.get("/v1/bars", params=bars_params(limit="1", cursor=first["next_cursor"]))
+    assert reader.as_of == [pinned, pinned]  # the second page ignores the later clock
+
+
+async def test_cursor_charset_is_checked_before_signature(client: httpx.AsyncClient) -> None:
+    for bad in ("a b.c", "é.x", "a/b.c", "a=.b"):
+        r = await client.get("/v1/bars", params=bars_params(cursor=bad))
+        assert r.status_code == 400, bad
+
+
+async def test_ffill_copies_restated_bit(client: httpx.AsyncClient, reader: Reader) -> None:
+    reader.bars[WTI][0] = reader.bars[WTI][0].model_copy(update={"version": 2, "quality": 8})
+    rows = (await client.get("/v1/bars", params=bars_params(fill="ffill"))).json()["rows"]
+    assert rows[1]["quality"] & 8
+    assert rows[1]["version"] == 2
+
+
+async def test_latest_passes_interval_to_reader(client: httpx.AsyncClient) -> None:
+    r = await client.get("/v1/latest", params={"instrument_id": WTI, "interval": "1d"})
+    assert r.json()["rows"][0]["interval"] == "1d"
+
+
+async def test_stream_failure_is_logged_and_source_closed() -> None:
+    closed = False
+
+    async def batches() -> AsyncIterator[pa.RecordBatch]:
+        nonlocal closed
+        try:
+            yield pa.RecordBatch.from_pylist([], schema=BAR_V1)
+            raise ConnectionError("store died")
+        finally:
+            closed = True
+
+    stream = RowStream(Tier.COLD, batches())
+    with pytest.raises(ConnectionError):
+        async for _ in _encode(stream, BAR_V1, arrow=True):
+            pass
+    assert closed

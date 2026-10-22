@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends, Query, Response
 from tidal.api.auth_roles import READER, ReaderPrincipal
 from tidal.api.deps import get_reader
 from tidal.api.errors import problem_docs
-from tidal.api.routers.bars import TIER_HEADER, market_data_ok
+from tidal.api.routers.bars import market_data_ok
+from tidal.api.streaming import TIER_HEADER
 from tidal.contracts.instruments import InstrumentId
 from tidal.contracts.models import LatestResponse, Tier
 from tidal.contracts.schemas import Interval
@@ -43,6 +44,6 @@ async def get_latest(
     interval: Annotated[Interval, Query(json_schema_extra=_all_of_default)] = Interval.D1,
 ) -> LatestResponse:
     """Latest bar of each requested instrument; instruments without data are omitted."""
-    rows = [r for r in await reader.latest(instrument_id) if r.interval is interval]
+    rows = await reader.latest(instrument_id, interval)
     response.headers[TIER_HEADER] = Tier.HOT.value
     return LatestResponse(tier=Tier.HOT, rows=rows)

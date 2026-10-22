@@ -7,10 +7,9 @@ from typing import Annotated, Any
 
 from fastapi import Depends, Request
 
-from tidal.api.deps import Principal, get_clock, get_principal
+from tidal.api.deps import Principal, get_principal
 from tidal.api.ratelimit import TokenBucketLimiter
 from tidal.common.errors import Forbidden
-from tidal.query.protocols import Clock
 
 READER, TRADER, QUANT, ADMIN = "Tidal.Reader", "Tidal.Trader", "Tidal.Quant", "Tidal.Admin"
 _CHAIN = (READER, TRADER, QUANT)
@@ -29,12 +28,9 @@ def require_role(minimum: str) -> Any:  # Any: FastAPI's Depends() is itself typ
     def dependency(
         request: Request,
         principal: Annotated[Principal, Depends(get_principal)],
-        clock: Annotated[Clock, Depends(get_clock)],
     ) -> Principal:
-        state = request.app.state
-        if getattr(state, "rate_limiter", None) is None:
-            state.rate_limiter = TokenBucketLimiter(clock)
-        state.rate_limiter.check(principal.oid)
+        limiter: TokenBucketLimiter = request.app.state.rate_limiter  # created in create_app
+        limiter.check(principal.oid)
         if not has_role(principal, minimum):
             raise Forbidden("A higher role is required for this resource.")
         return principal

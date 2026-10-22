@@ -52,9 +52,6 @@ def _fix(doc: dict[str, Any], node: dict[str, Any], name: str, *, param: bool) -
         node.update(other if param else _nullable(doc, other))
     if "const" in node:
         node["enum"] = [node.pop("const")]
-    if name == "volume":
-        # Contract declares no lower bound for Bar.volume; the pydantic model has ge=0 (stricter).
-        node.pop("minimum", None)
     if name.endswith("ts_ns") and node.get("type") in ("integer", ["integer", "null"]):
         node["format"] = "int64"
 

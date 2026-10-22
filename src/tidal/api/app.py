@@ -17,6 +17,7 @@ from tidal.api.errors import (
     rename_problem_media_types,
 )
 from tidal.api.openapi_contract import normalize
+from tidal.api.ratelimit import TokenBucketLimiter
 from tidal.api.routers import bars, health, instruments, latest, spreads, ticks
 from tidal.common.config import Settings, get_settings
 from tidal.common.logging import (
@@ -113,6 +114,7 @@ def create_app(
     app.state.reader = reader
     app.state.bus = bus
     app.state.clock = clock or SystemClock()
+    app.state.rate_limiter = TokenBucketLimiter(app.state.clock)
     app.add_middleware(CorrelationMiddleware)
     register_exception_handlers(app)
     for module in (health, instruments, bars, ticks, latest, spreads):

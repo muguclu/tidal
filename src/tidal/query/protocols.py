@@ -54,6 +54,9 @@ class Reader(Protocol):
 
     ``read_*`` and ``stream_*`` raise ``NotFound`` for an unknown ``instrument_id``; they never
     return empty rows for it (a known instrument with no data in range yields no rows).
+
+    Rows with equal ``ts_ns`` must come back in a stable order (key order: instrument, ts_ns,
+    side, version), because the API's keyset pagination resumes by position within a timestamp.
     """
 
     async def read_bars(
@@ -88,8 +91,10 @@ class Reader(Protocol):
         """Like ``read_ticks`` for arrow/parquet output, as ``TICK_V1`` batches."""
         ...
 
-    async def latest(self, instrument_ids: Sequence[str]) -> list[LatestBar]:
-        """Last bar of each instrument (hot store only); unknown ids are skipped."""
+    async def latest(
+        self, instrument_ids: Sequence[str], interval: Interval = Interval.D1
+    ) -> list[LatestBar]:
+        """Last ``interval`` bar of each instrument (hot store only); unknown ids are skipped."""
         ...
 
     async def instruments(

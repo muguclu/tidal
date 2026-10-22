@@ -98,9 +98,7 @@ P = Side(PYD_DEFS, "#/$defs/")
 
 #: (path, keyword) where code is deliberately stricter than openapi.yaml, with the contract reason.
 #: Each entry must still be a real difference (``test_known_differences_are_real``).
-KNOWN_DIFFERENCES: dict[tuple[str, str], str] = {
-    ("Bar.volume", "minimum"): "data-contracts §3: volume >= 0; openapi.yaml Bar.volume lacks it",
-}
+KNOWN_DIFFERENCES: dict[tuple[str, str], str] = {}
 CONSTRAINTS = (
     "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "pattern", "minLength",
     "maxLength", "minItems", "maxItems", "minProperties", "maxProperties",

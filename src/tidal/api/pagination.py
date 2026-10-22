@@ -14,6 +14,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import re
 import secrets
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ from tidal.common.errors import ValidationFailed
 DEFAULT_LIMIT = 10_000
 MAX_LIMIT = 100_000
 _BAD = "Invalid cursor."
+_TOKEN = re.compile(r"[A-Za-z0-9_.-]{1,512}")  # base64url + the dot separator
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +35,7 @@ class Position:
 
     ts_ns: int
     idx: int
+    as_of_ns: int | None = None  # pinned knowledge time (bars only), see the bars router
 
 
 def cursor_key(request: Request) -> bytes:
@@ -59,24 +62,31 @@ def _sign(key: bytes, payload: str) -> str:
 
 def encode_cursor(key: bytes, bound: str, pos: Position) -> str:
     """Serialise and sign ``pos`` for the query identified by ``bound``."""
-    payload = _b64(json.dumps([pos.ts_ns, pos.idx, bound], separators=(",", ":")).encode())
+    payload = _b64(
+        json.dumps([pos.ts_ns, pos.idx, bound, pos.as_of_ns], separators=(",", ":")).encode()
+    )
     return f"{payload}.{_sign(key, payload)}"
 
 
 def decode_cursor(key: bytes, bound: str, token: str) -> Position:
     """Verify signature and binding; any problem is a 400 (never echoing the token)."""
+    if not _TOKEN.fullmatch(token):  # before any crypto; also guarantees ASCII for the compare
+        raise ValidationFailed(_BAD)
     payload, _, sig = token.partition(".")
-    if not hmac.compare_digest(sig, _sign(key, payload)):
+    if not hmac.compare_digest(sig.encode(), _sign(key, payload).encode()):
         raise ValidationFailed(_BAD)
     try:
-        ts_ns, idx, got = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        ts_ns, idx, got, as_of = json.loads(
+            base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+        )
     except (ValueError, binascii.Error):
         raise ValidationFailed(_BAD) from None
-    if not (isinstance(ts_ns, int) and isinstance(idx, int)) or not hmac.compare_digest(
-        str(got), bound
-    ):
+    ints = isinstance(ts_ns, int) and isinstance(idx, int)
+    if not ints or not (as_of is None or isinstance(as_of, int)):
         raise ValidationFailed(_BAD)
-    return Position(ts_ns, idx)
+    if not hmac.compare_digest(str(got).encode(), bound.encode()):
+        raise ValidationFailed(_BAD)
+    return Position(ts_ns, idx, as_of)
 
 
 def page_of[T](

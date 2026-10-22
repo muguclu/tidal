@@ -1,17 +1,15 @@
 """``GET /v1/bars`` plus helpers shared by ticks/spreads (time parsing, limits, streaming)."""
 
-import io
-from collections.abc import AsyncIterator, Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
+from dataclasses import replace
 from enum import StrEnum
-from typing import Annotated, Any, cast
+from typing import Annotated, Any
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from tidal.api.auth_roles import READER, ReaderPrincipal
-from tidal.api.deps import get_reader
+from tidal.api.deps import get_clock, get_reader
 from tidal.api.errors import CORRELATION_HEADER, correlation_header_doc, problem_docs
 from tidal.api.pagination import (
     DEFAULT_LIMIT,
@@ -22,19 +20,17 @@ from tidal.api.pagination import (
     encode_cursor,
     page_of,
 )
+from tidal.api.streaming import ARROW, PARQUET, TIER_HEADER, ffill_bars, stream_response
 from tidal.common.errors import RangeTooLarge, ValidationFailed
-from tidal.common.timeutil import INTERVAL_NS, from_ts_ns, to_ts_ns
+from tidal.common.timeutil import to_ts_ns
 from tidal.contracts.instruments import InstrumentId
-from tidal.contracts.models import Bar, BarsResponse, Tier
+from tidal.contracts.models import Bar, BarsResponse, Tier, datetime_to_ns
 from tidal.contracts.schemas import BAR_V1, Interval
-from tidal.query.protocols import Reader, RowStream
+from tidal.query.protocols import Clock, Reader
 
-TIER_HEADER = "X-Tidal-Tier"
-ARROW = "application/vnd.apache.arrow.stream"
-PARQUET = "application/vnd.apache.parquet"
 DAY_NS = 86_400 * 1_000_000_000
 BARS_1S_MAX_NS = 7 * DAY_NS  # SPEC-04 §3
-_NEGATIVE = 1  # quality bit 0
+BARS_1M_MAX_NS = 366 * DAY_NS  # SPEC-04 section 3
 
 router = APIRouter(prefix="/v1", tags=["market-data"])
 
@@ -75,77 +71,12 @@ def parse_range(start: str, end: str) -> tuple[int, int]:
 
 
 def check_bars_range(interval: Interval, start_ns: int, end_ns: int) -> None:
-    """413 when 1s bars span more than 7 days (1m/1h/1d are unlimited)."""
-    if interval is Interval.S1 and end_ns - start_ns > BARS_1S_MAX_NS:
+    """413 when 1s bars span more than 7 days or 1m bars more than 366 days."""
+    span = end_ns - start_ns
+    if interval is Interval.S1 and span > BARS_1S_MAX_NS:
         raise RangeTooLarge("Bars with interval 1s are limited to 7 days per call.")
-
-
-def ffill_bars(bars: Sequence[Bar], interval: Interval) -> Iterator[Bar]:
-    """Lazily forward-fill gaps between consecutive bars with flat bars at the previous close."""
-    step = INTERVAL_NS[interval]
-    prev: Bar | None = None
-    for bar in bars:
-        if prev is not None:
-            for ts_ns in range(prev.ts_ns + step, bar.ts_ns, step):
-                c = prev.close
-                yield Bar(
-                    ts=from_ts_ns(ts_ns), ts_ns=ts_ns, open=c, high=c, low=c, close=c,
-                    volume=None, quality=_NEGATIVE if c < 0 else 0, version=prev.version,
-                )  # fmt: skip
-        yield bar
-        prev = bar
-
-
-class _Sink(io.RawIOBase):
-    """Write-only file that tracks its position and hands out what was written so far."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._buf = bytearray()
-        self._pos = 0
-
-    def writable(self) -> bool:
-        return True
-
-    def write(self, data: Any) -> int:  # Any: RawIOBase.write takes any bytes-like buffer
-        raw = bytes(data)
-        self._buf += raw
-        self._pos += len(raw)
-        return len(raw)
-
-    def tell(self) -> int:
-        return self._pos
-
-    def drain(self) -> bytes:
-        out, self._buf = bytes(self._buf), bytearray()
-        return out
-
-
-async def _encode(stream: RowStream, schema: pa.Schema, fmt: Format) -> AsyncIterator[bytes]:
-    """Encode batches one at a time; memory stays at about one batch."""
-    sink = _Sink()
-    writer: Any  # Any: the two writers share only write_batch/close
-    if fmt is Format.ARROW:
-        writer = pa.ipc.new_stream(sink, schema)
-    else:
-        writer = pq.ParquetWriter(cast("Any", sink), schema)
-    try:
-        async for batch in stream.batches:
-            writer.write_batch(batch)
-            if data := sink.drain():
-                yield data
-    finally:
-        writer.close()
-    yield sink.drain()
-
-
-def stream_response(stream: RowStream, schema: pa.Schema, fmt: Format) -> StreamingResponse:
-    """Arrow IPC stream or Parquet body without materialising the result."""
-    return StreamingResponse(
-        _encode(stream, schema, fmt),
-        media_type=ARROW if fmt is Format.ARROW else PARQUET,
-        headers={TIER_HEADER: stream.tier.value},
-    )
+    if interval is Interval.M1 and span > BARS_1M_MAX_NS:
+        raise RangeTooLarge("Bars with interval 1m are limited to 366 days per call.")
 
 
 def market_data_ok(*, binary: bool = True, tier: bool = True) -> dict[str, Any]:
@@ -182,6 +113,7 @@ async def get_bars(  # noqa: PLR0917 - contract query parameters
     response: Response,
     principal: ReaderPrincipal,
     reader: Annotated[Reader, Depends(get_reader)],
+    clock: Annotated[Clock, Depends(get_clock)],
     instrument_id: Annotated[InstrumentId, Query()],
     interval: Annotated[Interval, Query()],
     start: TimeParam,
@@ -195,19 +127,22 @@ async def get_bars(  # noqa: PLR0917 - contract query parameters
     """Bars in ``[start, end)``; ``fill=ffill`` and cursor paging are JSON-only API-layer logic."""
     start_ns, end_ns = parse_range(start, end)
     check_bars_range(interval, start_ns, end_ns)
-    as_of_ns = parse_time(as_of) if as_of is not None else None
+    given_as_of = parse_time(as_of) if as_of is not None else None
     if format is not Format.JSON:
         if fill is Fill.FFILL:
             raise ValidationFailed("fill=ffill is supported for format=json only.")
         stream = await reader.stream_bars(
-            instrument_id, interval, start_ns, end_ns, as_of_ns=as_of_ns
+            instrument_id, interval, start_ns, end_ns, as_of_ns=given_as_of
         )
-        return stream_response(stream, BAR_V1, format)
+        return stream_response(stream, BAR_V1, arrow=format is Format.ARROW)
     bound = binding(
-        "bars", principal.oid, instrument_id, interval, start_ns, end_ns, fill, as_of_ns
+        "bars", principal.oid, instrument_id, interval, start_ns, end_ns, fill, given_as_of
     )
     key = cursor_key(request)
     pos = decode_cursor(key, bound, cursor) if cursor else None
+    # Without an explicit as_of, pin the first page's request time into the cursor so row
+    # versions do not change between pages.
+    as_of_ns = given_as_of or (pos.as_of_ns if pos else None) or datetime_to_ns(clock.now())
     # ffill needs the bar before the page start, so it always reads from the original start.
     read_from = pos.ts_ns if pos and fill is Fill.NONE else start_ns
     got = await reader.read_bars(instrument_id, interval, read_from, end_ns, as_of_ns=as_of_ns)
@@ -221,5 +156,5 @@ async def get_bars(  # noqa: PLR0917 - contract query parameters
         interval=interval,
         tier=got.tier,
         rows=page,
-        next_cursor=encode_cursor(key, bound, nxt) if nxt else None,
+        next_cursor=encode_cursor(key, bound, replace(nxt, as_of_ns=as_of_ns)) if nxt else None,
     )

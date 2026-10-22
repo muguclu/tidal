@@ -1,5 +1,6 @@
 """``GET /v1/spreads``: leg_a close minus leg_b close, inner-joined on ``ts_ns`` (Trader+)."""
 
+import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Response
@@ -7,19 +8,24 @@ from fastapi import APIRouter, Depends, Query, Response
 from tidal.api.auth_roles import TRADER, TraderPrincipal
 from tidal.api.deps import get_reader
 from tidal.api.errors import problem_docs
+from tidal.api.pagination import MAX_LIMIT
 from tidal.api.routers.bars import (
-    TIER_HEADER,
     TimeParam,
     check_bars_range,
     market_data_ok,
     parse_range,
     tier_of,
 )
-from tidal.common.errors import ValidationFailed
+from tidal.api.streaming import TIER_HEADER
+from tidal.common.errors import RangeTooLarge, ValidationFailed
 from tidal.contracts.instruments import InstrumentId
 from tidal.contracts.models import SpreadPoint, SpreadResponse
 from tidal.contracts.schemas import Interval
 from tidal.query.protocols import Reader
+
+# The contract has no `limit` parameter on /spreads (adding one is a contract change), so the
+# joined result is capped at the maximum page size of the paginated endpoints.
+SPREAD_MAX_ROWS = MAX_LIMIT
 
 router = APIRouter(prefix="/v1", tags=["market-data"])
 
@@ -51,8 +57,10 @@ async def get_spreads(  # noqa: PLR0917 - contract query parameters
         raise ValidationFailed("A spread needs two different instruments.")
     start_ns, end_ns = parse_range(start, end)
     check_bars_range(interval, start_ns, end_ns)
-    a = await reader.read_bars(leg_a, interval, start_ns, end_ns)
-    b = await reader.read_bars(leg_b, interval, start_ns, end_ns)
+    a, b = await asyncio.gather(
+        reader.read_bars(leg_a, interval, start_ns, end_ns),
+        reader.read_bars(leg_b, interval, start_ns, end_ns),
+    )
     by_ts = {bar.ts_ns: bar for bar in b.rows}
     rows = [
         SpreadPoint(
@@ -65,6 +73,8 @@ async def get_spreads(  # noqa: PLR0917 - contract query parameters
         for bar in a.rows
         if (other := by_ts.get(bar.ts_ns)) is not None
     ]
+    if len(rows) > SPREAD_MAX_ROWS:
+        raise RangeTooLarge("The joined spread exceeds 100000 rows; narrow the range.")
     tier = tier_of([a.tier, b.tier])
     response.headers[TIER_HEADER] = tier.value
     return SpreadResponse(leg_a=leg_a, leg_b=leg_b, interval=interval, tier=tier, rows=rows)
