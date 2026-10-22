@@ -1,0 +1,99 @@
+name: bench
+
+# T-204: file-format storage benchmark (F3-F6, workloads W1-W6) on Azurite. Manual only.
+# No Azure login and no secrets: the only credential below is Microsoft's public, documented
+# Azurite dev-account key. This workflow is NOT a required check and never runs on PR/push.
+# SQL formats F0-F2 are not run here (no SQL Server service); see docs/finops/results/.
+
+on:
+  workflow_dispatch:
+    inputs:
+      scale:
+        description: "Dataset scale (S = 50M ticks, about 4 min to generate; M = 300M, about 25 min)"
+        type: choice
+        options: ["S", "M"]
+        default: "S"
+      runs:
+        description: "Timed runs per cell"
+        type: string
+        default: "3"
+
+permissions:
+  contents: read
+
+env:
+  UV_LOCKED: "1"
+
+jobs:
+  storage-benchmark:
+    name: storage-benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      TIDAL_ENV: local
+      TIDAL_SYNTH__END: "2025-12-31"
+      SCALE: ${{ inputs.scale }}
+      RUNS: ${{ inputs.runs }}
+      # Public Azurite dev key (not a secret).
+      TIDAL_STORAGE__CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;" # gitleaks:allow
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+        with:
+          python-version-file: .python-version
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --locked
+      - name: Validate inputs
+        run: |
+          [[ "$RUNS" =~ ^[1-9][0-9]?$ ]] || { echo "runs must be 1-99" >&2; exit 1; }
+
+      # Azurite runs as a container started here rather than a `services:` entry: GitHub service
+      # containers cannot pass command-line arguments, and the SDK/DuckDB use a newer storage API
+      # version than Azurite 3.37 knows, which needs `--skipApiVersionCheck` (same as compose).
+      - name: Start Azurite
+        run: |
+          docker run -d --name azurite -p 127.0.0.1:10000:10000 \
+            mcr.microsoft.com/azure-storage/azurite:3.37.0 \
+            azurite -l /data --blobHost 0.0.0.0 --skipApiVersionCheck
+          for i in $(seq 1 30); do
+            if (echo > /dev/tcp/127.0.0.1/10000) 2>/dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "Azurite did not start" >&2
+          docker logs azurite
+          exit 1
+
+      - name: Run F3-F6 on the local file system
+        run: >-
+          uv run python -m benchmarks.storage.run
+          --scale "$SCALE" --formats F3,F4,F5,F6-sweep --workloads W1..W6
+          --runs "$RUNS" --target local --out bench-out/local
+
+      - name: Run F3-F6 on Azurite (real request counts)
+        run: >-
+          uv run python -m benchmarks.storage.run
+          --scale "$SCALE" --formats F3,F4,F5,F6 --workloads W2..W6
+          --runs "$RUNS" --target azurite --out bench-out/azurite
+
+      - name: Render the report
+        run: >-
+          uv run python -m benchmarks.storage.report
+          --results bench-out/local bench-out/azurite
+          --out bench-out/report.md --img bench-out/img
+          --not-run "F0-F2 (SQL Server): not run in CI, no SQL service container"
+          --not-run "Azure Blob / Container Apps: NEEDS-CLOUD"
+
+      - name: Stop Azurite
+        if: always()
+        run: docker rm -f azurite
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: storage-benchmark-${{ inputs.scale }}
+          path: bench-out/
+          retention-days: 30
+          if-no-files-found: warn
