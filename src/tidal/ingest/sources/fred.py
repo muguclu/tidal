@@ -153,8 +153,10 @@ class FredSource:
                 status = type(exc).__name__
             else:
                 code = resp.status_code
-                if code < _HTTP_BAD_REQUEST:
+                if code == httpx.codes.OK:
                     return resp.content
+                if code < _HTTP_BAD_REQUEST:
+                    raise FredUnavailable(f"FRED returned unexpected HTTP {code}")
                 if code != _HTTP_TOO_MANY and code < _HTTP_SERVER_ERROR:
                     _log.warning(
                         "fred_request_rejected", url=redact_url(str(resp.request.url)), status=code
@@ -238,13 +240,16 @@ def parse_fred_page(payload: bytes, series: str) -> pa.Table:
         raise FredUnavailable("FRED response is not a valid observations page") from None
     if not obs:
         return PAGE_SCHEMA.empty_table()
-    df = pl.from_dicts(obs, infer_schema_length=None).select(
-        pl.col("date")
-        .str.to_date("%Y-%m-%d")
-        .cast(pl.Datetime("ns"))
-        .cast(pl.Int64)
-        .alias("ts_ns"),
-        pl.col("value").cast(pl.String).cast(pl.Float64, strict=False).fill_null(float("nan")),
-        pl.lit(series).alias("series"),
-    )
+    try:
+        df = pl.from_dicts(obs, infer_schema_length=None).select(
+            pl.col("date")
+            .str.to_date("%Y-%m-%d")
+            .cast(pl.Datetime("ns"))
+            .cast(pl.Int64)
+            .alias("ts_ns"),
+            pl.col("value").cast(pl.String).cast(pl.Float64, strict=False).fill_null(float("nan")),
+            pl.lit(series).alias("series"),
+        )
+    except pl.exceptions.PolarsError:
+        raise FredUnavailable("FRED response is not a valid observations page") from None
     return df.to_arrow().cast(PAGE_SCHEMA)

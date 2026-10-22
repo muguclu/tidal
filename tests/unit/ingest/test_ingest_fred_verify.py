@@ -90,3 +90,14 @@ def test_main_exit_codes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     assert m.main([]) == 0
     monkeypatch.setattr(m.httpx, "Client", bad)
     assert m.main(["--record"]) == 1
+
+
+def test_transport_error_is_a_mismatch_not_a_crash() -> None:
+    m = load()
+
+    def boom(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down", request=request)
+
+    problems = m.verify(httpx.Client(transport=httpx.MockTransport(boom)), KEY)
+    assert problems
+    assert all(KEY not in p for p in problems)

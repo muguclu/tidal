@@ -7,7 +7,8 @@ observation), then compares with the catalogue (first observation 1999-01-04, da
 It also reports whether the observation rows use a ``date`` field and ``"."`` for missing values.
 
 ``--record`` stores the real responses under ``tests/fixtures/fred/live/`` with ``api_key``
-stripped from every stored URL and body.
+stripped from every stored URL and body. For the metadata call only ``seriess[0]`` (the series
+object) is stored, not the whole response.
 
 Exit codes: 0 verified, 1 mismatch with expectations, 2 no API key.
 
@@ -88,6 +89,8 @@ def verify(client: httpx.Client, key: str, record_dir: Path | None = None) -> li
                 _record(record_dir, f"{series.lower()}_last", "series/observations", last)
         except (RuntimeError, KeyError, IndexError, ValueError) as exc:
             problems.append(f"{series}: {exc}")
+        except httpx.HTTPError as exc:  # transport errors, timeouts; message carries no URL
+            problems.append(f"{series}: {type(exc).__name__} talking to FRED")
     return problems
 
 

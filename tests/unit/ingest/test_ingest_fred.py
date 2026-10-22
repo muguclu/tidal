@@ -309,3 +309,17 @@ def test_key_elsewhere_refused(tmp_path: Path) -> None:
     with pytest.raises(FredUnavailable):
         run(src)
     assert store.list_paths("raw/") == []
+
+
+def test_3xx_is_not_success(tmp_path: Path) -> None:
+    server = Server([httpx.Response(302, headers={"Location": "http://x"})])
+    src, sleeps, _ = make(tmp_path, server)
+    with pytest.raises(FredUnavailable, match="302"):
+        run(src)
+    assert sleeps == []
+
+
+def test_bad_date_is_unavailable() -> None:
+    body = b'{"count":1,"observations":[{"date":"not-a-date","value":"1"}]}'
+    with pytest.raises(FredUnavailable):
+        parse_fred_page(body, "DEXUSEU")
