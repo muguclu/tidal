@@ -62,7 +62,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | T-112 | docker-compose local stack | platform-engineer | T-001 | `docker-compose.yml`, `deploy/docker/Dockerfile` (dev stage), `deploy/local/**` (incl. `sb-config.json`), `.env.example` | `docker compose up` gives Azurite, one SQL Server container shared by Tidal and the SB emulator, SB emulator, api | done |
 | T-114 | `TIDAL_ENV` fails closed | architect | T-005 | `docs/contracts/config-contract.md`, `src/tidal/common/config.py` +tests, `.env.example` | `TIDAL_ENV` has no default (unset → startup error); compose/.env set `local` | done |
 | T-115 | Shared source helpers; layout-built backtest prefixes | data-engineer | T-103 | `src/tidal/ingest/sources/{base,eia,fred}.py`, `scripts/verify_{eia,fred}.py`, `src/tidal/contracts/messages.py`, `src/tidal/storage/layout.py` +tests | eia.py uses base retry/redact helpers; `BacktestJob` prefix check uses `layout.backtest_prefix` | done |
-| T-116 | `ObjectStore.read()` | data-engineer | T-105 | `src/tidal/storage/parquet_writer.py`, `src/tidal/ingest/router.py` +tests | stores expose `read(path) -> bytes`; router drops store-type special-casing | todo |
+| T-116 | `ObjectStore.read()` | data-engineer | T-105 | `src/tidal/storage/parquet_writer.py`, `src/tidal/ingest/router.py` +tests | stores expose `read(path) -> bytes`; router drops store-type special-casing | done |
 | T-113 | Local JWKS + dev token script | api-engineer | T-005 | `scripts/dev-token.py`, `tests/fakes/jwks/**` | mints RS256 tokens per role for local/tests; keys generated at runtime, never committed | done |
 
 **Gate G1** → PLANNING.md §4. **Partially passed 2026-10-22** — real-data backfill waits for EIA/FRED keys (NEEDS-KEY); see `docs/status/2026-W43-G1.md`.
@@ -74,7 +74,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 ### Lane A — benchmark (data-engineer, finops-analyst)
 | ID | Title | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|
-| T-201 | Benchmark harness | T-105 | `benchmarks/storage/{run,workloads,report}.py`, `benchmarks/conftest.py` | workloads W1–W6 pluggable; results schema | todo |
+| T-201 | Benchmark harness | T-105 | `benchmarks/storage/{run,workloads,report}.py`, `benchmarks/conftest.py` | workloads W1–W6 pluggable; results schema | done |
 | T-202 | SQL formats F0–F2 | T-201 | `benchmarks/storage/formats/sql_*.py` | loaders + workloads; identical W2 aggregates | todo |
 | T-203 | File formats F3–F6 | T-201 | `benchmarks/storage/formats/file_*.py` | incl. zstd & row-group sweep | todo |
 | T-204 | Run S/M + report | T-202, T-203, T-501 | `docs/finops/results/storage-benchmark-*.md`, `img/`, `.github/workflows/bench.yml` | SPEC-02 §6 criteria | todo |
@@ -85,7 +85,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | T-205 | Migration job, retag, compaction | data-engineer | T-106 | `src/tidal/storage/{tiering,retag,compact,tiering_cli}.py` +tests | SPEC-03 §2–3.1; applock; manifest; `age_band` tags; all versions migrated and kept; sweeps late restatements written to SQL below the watermark into a new `part-` (reader already merges them, T-208) | todo |
 | T-206 | Crash-injection property tests | test-engineer | T-205 | `tests/integration/test_tiering_crash.py` | kill at each step ⇒ same final state | todo |
 | T-207 | Lifecycle policy + retag | infra-engineer | T-121, T-205 | `modules/storage/lifecycle.tf` | rules = SPEC-03 §4 (tag filters match T-205 tag names) | todo |
-| T-208 | Unified reader | data-engineer | T-106 | `src/tidal/query/{reader,duck}.py` +tests | hypothesis equality vs SQL baseline (200 ranges) | todo |
+| T-208 | Unified reader | data-engineer | T-106 | `src/tidal/query/{reader,duck}.py` +tests | hypothesis equality vs SQL baseline (200 ranges) | done |
 
 ### Lane C — API on real data (api-engineer)
 | ID | Title | Deps | Owns | Done when | Status |
