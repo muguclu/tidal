@@ -134,6 +134,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | T-403 | RBAC assignments + drift check | infra-engineer | W4/L1 | T-401 | `modules/identity/rbac.tf`, `scripts/rbac-export.sh` | matrix = SPEC-06 §2; CI diff | todo |
 | T-404 | Private networking flag | infra-engineer | W4/L1 | T-403 | `modules/network/**` | PEs for Blob/SQL/KV; flag off = no cost | todo |
 | T-405 | Supply-chain hardening | platform-engineer | W4/L3 | T-307 | Dockerfile, Helm values, CI scans | SPEC-06 §5 | todo |
+| T-407 | SQL auditing + Defender/VA decision | infra-engineer | W4/L1 | T-123, T-120 | `modules/sql/auditing.tf`, `docs/finops/deltas/T-407.md` | server auditing to Log Analytics; VA/Defender for SQL decided with cost (ADR); checkov CKV_AZURE_23/24, CKV2_AZURE_2 resolved | todo |
 | T-406 | Threat model & sign-off | security-reviewer | W4/review | T-402…T-405 | `docs/adr/0008-threat-model.md` | SPEC-06 §7 checklist signed | todo |
 
 **Gate G4**
