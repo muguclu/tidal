@@ -71,4 +71,5 @@ class F4Format(FileFormat):
             pq.write_table(table, tmp, compression="snappy")
 
         put_file(self.store, path, write)
+        self._record_row_groups([path])
         return table.num_rows

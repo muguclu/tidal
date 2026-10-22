@@ -47,7 +47,8 @@ class F3Format(FileFormat):
 
     id = "F3"
     reader: ClassVar[str] = (
-        f"read_csv(?, header = true, columns = {_COLUMNS}, compression = 'gzip')"
+        "read_csv(?, header = true, auto_detect = false, delim = ',',"
+        f" columns = {_COLUMNS}, compression = 'gzip')"
     )
     ts_col: ClassVar[str] = "ts"
     ns_expr: ClassVar[str] = "epoch_ns(ts)"

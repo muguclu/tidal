@@ -286,3 +286,51 @@ def test_counting_proxy_counts_kinds_and_bytes_and_forwards_faithfully(upstream:
         proxy.stop()
     assert (s.requests, s.get, s.list, s.head, s.other) == (4, 1, 1, 1, 1)
     assert s.egress_bytes == 507  # HEAD has no body; PUT response is empty
+
+
+def test_proxy_refuses_non_loopback_or_tls_upstreams() -> None:
+    for url in (
+        "https://127.0.0.1:10000/acc",
+        "http://myaccount.blob.core.windows.net/acc",
+        "http://10.0.0.5:10000/acc",
+    ):
+        with pytest.raises(ConfigError):
+            CountingProxy(url)
+
+
+def test_proxy_rejects_chunked_request_bodies(upstream: str) -> None:
+    proxy = CountingProxy(upstream)
+    try:
+        c = http.client.HTTPConnection("127.0.0.1", proxy.port)
+        c.putrequest("PUT", "/acct/c/blob")
+        c.putheader("Transfer-Encoding", "chunked")
+        c.endheaders()
+        c.send(b"3\r\nabc\r\n0\r\n\r\n")
+        assert c.getresponse().status == 501
+        c.close()
+        assert proxy.snapshot().requests == 0  # refused, not forwarded, not counted
+    finally:
+        proxy.stop()
+
+
+def test_row_groups_per_file_are_recorded(tiny_dataset: Dataset, tmp_path: Path) -> None:
+    summary = {}
+    for fid in ("F3", "F4", "F5", "F6-z3-rg128k"):
+        fmt = FORMATS[fid](tmp_path / fid)
+        assert isinstance(fmt, FileFormat)
+        fmt.load(tiny_dataset)
+        summary[fid] = fmt.row_group_summary()
+        fmt.teardown()
+    assert summary["F3"]["files"] == 0  # CSV has no row groups
+    assert summary["F5"]["files"] == summary["F4"]["files"] > 0
+    assert summary["F5"]["max"] == 1  # months are smaller than 1M rows at this scale
+    assert summary["F6-z3-rg128k"]["max"] > summary["F5"]["max"]
+    assert summary["F6-z3-rg128k"]["total"] > summary["F6-z3-rg128k"]["files"]
+
+
+def test_profile_path_with_a_quote_is_escaped(tiny_dataset: Dataset, tmp_path: Path) -> None:
+    fmt = FORMATS["F5"](tmp_path / "it's here")
+    fmt.load(tiny_dataset)
+    p = WORKLOADS["W3"].params(tiny_dataset)
+    assert values_match(fmt.io_profile("W3", p).value, WORKLOADS["W3"].oracle(tiny_dataset, p))
+    fmt.teardown()

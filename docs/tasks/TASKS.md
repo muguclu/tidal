@@ -77,7 +77,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 |---|---|---|---|---|---|
 | T-201 | Benchmark harness | T-105 | `benchmarks/storage/{run,workloads,report}.py`, `benchmarks/conftest.py` | workloads W1–W6 pluggable; results schema | done |
 | T-202 | SQL formats F0–F2 | T-201 | `benchmarks/storage/formats/sql_*.py`, `benchmarks/storage/formats/__init__.py`, `FORMATS` registry and run/W1 teardown (`try/finally`) in `benchmarks/storage/run.py` | loaders + workloads; identical W2 aggregates | todo |
-| T-203 | File formats F3–F6 | T-201 | `benchmarks/storage/formats/file_*.py` | incl. zstd & row-group sweep | todo |
+| T-203 | File formats F3–F6 | T-201 | `benchmarks/storage/formats/file_*.py`, F5 move out of `benchmarks/storage/run.py`, F3–F6 registration in `benchmarks/storage/formats/__init__.py` | incl. zstd & row-group sweep | todo |
 | T-204 | Run S/M + report | T-202, T-203, T-501 | `docs/finops/results/storage-benchmark-*.md`, `img/`, `.github/workflows/bench.yml` | SPEC-02 §6 criteria | todo |
 
 ### Lane B — tiering (data-engineer, infra-engineer)

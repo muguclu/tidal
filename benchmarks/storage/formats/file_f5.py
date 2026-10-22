@@ -52,12 +52,13 @@ class F5Format(FileFormat):
         old = pw.COMPRESSION_LEVEL
         pw.COMPRESSION_LEVEL = self.level  # type: ignore[misc]  # Final in the writer; see module doc
         try:
-            pw.write_partition(
+            paths = pw.write_partition(
                 self.store, dataset="ticks", instrument_id=inst, year=y, month=m,
                 batches=tables, source_hash=source_hash, row_group_size=self.row_group,
             )  # fmt: skip
         finally:
             pw.COMPRESSION_LEVEL = old  # type: ignore[misc]
+        self._record_row_groups(paths)
         return sum(t.num_rows for t in tables)
 
 

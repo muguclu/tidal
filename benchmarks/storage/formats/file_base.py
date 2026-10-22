@@ -21,6 +21,7 @@ Two backends, same code:
 
 import contextlib
 import http.client
+import io
 import json
 import re
 import shutil
@@ -36,6 +37,7 @@ from urllib.parse import urlsplit
 
 import duckdb
 import pyarrow as pa
+import pyarrow.parquet as pq
 
 from benchmarks.storage.workloads import Dataset, LoadStats, Value, WorkloadResult
 from tidal.common.errors import ConfigError
@@ -48,6 +50,7 @@ if TYPE_CHECKING:
 NS_DAY: Final = 86_400 * 10**9
 _W2_KEYS: Final = ("n_days", "n_trades", "sum_open", "sum_high", "sum_low", "sum_close")
 _HOP_BY_HOP: Final = frozenset({"connection", "keep-alive", "transfer-encoding", "te", "upgrade"})
+_LOOPBACK_HOSTS: Final = frozenset({"127.0.0.1", "localhost", "::1"})
 _BLOB_ENDPOINT = re.compile(r"BlobEndpoint=[^;]*;?")
 
 
@@ -81,6 +84,15 @@ class _Handler(BaseHTTPRequestHandler):
         """Silence the default stderr access log."""
 
     def _forward(self) -> None:
+        if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
+            # Reads (the only traffic we count) never send chunked bodies; refuse instead of
+            # silently forwarding a body we did not frame.
+            self.send_response(501)
+            self.send_header("Content-Length", "0")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            return
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else None
         headers = {k: v for k, v in self.headers.items() if k.lower() not in _HOP_BY_HOP}
@@ -119,6 +131,8 @@ class CountingProxy:
     def __init__(self, upstream_url: str) -> None:
         """Listen on an ephemeral localhost port, forwarding to ``upstream_url``."""
         u = urlsplit(upstream_url)
+        if u.scheme != "http" or (u.hostname or "") not in _LOOPBACK_HOSTS:
+            raise ConfigError("CountingProxy forwards plain http to a loopback emulator only")
         self.upstream_host = u.hostname or "127.0.0.1"
         self.upstream_port = u.port or 80
         self._lock = threading.Lock()
@@ -276,6 +290,8 @@ class FileFormat:
         self._profiling = False
         self._created = False
         self.last_requests: RequestStats | None = None
+        #: Parquet row groups per written object (path -> count); empty for CSV
+        self.row_groups: dict[str, int] = {}
 
     # --- writing ----------------------------------------------------------------------------
     def _write_partition(
@@ -283,6 +299,22 @@ class FileFormat:
     ) -> int:
         """Write one instrument-month (or its restatement) as a new part; return the rows."""
         raise NotImplementedError
+
+    def _record_row_groups(self, paths: Sequence[str]) -> None:
+        """Remember the row-group count of freshly written Parquet objects."""
+        for path in paths:
+            if isinstance(self.store, LocalStore):
+                meta = pq.ParquetFile(self.store.root / path).metadata
+            else:
+                meta = pq.ParquetFile(io.BytesIO(self.store.read(path))).metadata
+            self.row_groups[path] = meta.num_row_groups
+
+    def row_group_summary(self) -> dict[str, float]:
+        """``files``, ``total``, ``mean`` and ``max`` row groups per Parquet file."""
+        n = list(self.row_groups.values())
+        if not n:
+            return {"files": 0, "total": 0, "mean": 0.0, "max": 0}
+        return {"files": len(n), "total": sum(n), "mean": sum(n) / len(n), "max": max(n)}
 
     def load(self, dataset: Dataset) -> LoadStats:
         """Write the base partitions, then the restatement rows as an extra immutable part."""
@@ -309,32 +341,42 @@ class FileFormat:
         return sum(int(b.size or 0) for b in client.list_blobs())
 
     # --- connection -------------------------------------------------------------------------
+    def _blob_session(
+        self, connection_string: str
+    ) -> tuple[duckdb.DuckDBPyConnection, ObjectStore]:
+        """DuckDB connection and listing store bound to ``connection_string`` (Azurite/Blob)."""
+        from azure.storage.blob import BlobServiceClient  # noqa: PLC0415 - Azure-only path
+
+        con = duckdb.connect()
+        try:
+            con.execute("LOAD azure")
+        except duckdb.Error:
+            con.execute("INSTALL azure")  # first use on this host only (needs network)
+            con.execute("LOAD azure")
+        con.execute("SET azure_storage_connection_string = ?", [connection_string])
+        # DuckDB would otherwise serve repeat reads from its in-memory remote-file cache and
+        # the request/byte counts of warm runs would be near zero; a stateless API pays them.
+        con.execute("SET enable_external_file_cache = false")
+        store = RebasedStore(
+            AzureBlobStore(BlobServiceClient.from_connection_string(connection_string)),
+            self.container,
+        )
+        return con, store
+
     def reopen(self) -> None:
-        """New DuckDB connection (new HTTP connections for Blob); the proxy keeps counting."""
+        """New DuckDB connection (new HTTP connections for Blob).
+
+        Timed runs always use the direct connection; only :meth:`io_profile` goes through the
+        counting proxy, so the proxy hop never inflates wall time.
+        """
         if self._con is not None:
             self._con.close()
-        self._con = duckdb.connect()
         self._prof = str(self.workdir / "profile.json")
         self._profiling = False
         if self.target is None:
-            return
-        from azure.storage.blob import BlobServiceClient  # noqa: PLC0415 - Azure-only path
-
-        if self._proxy is None:
-            self._proxy = CountingProxy(upstream_of(self.target.connection_string))
-        cs = via_proxy(self.target.connection_string, self._proxy.port)
-        try:
-            self._con.execute("LOAD azure")
-        except duckdb.Error:
-            self._con.execute("INSTALL azure")  # first use on this host only (needs network)
-            self._con.execute("LOAD azure")
-        self._con.execute("SET azure_storage_connection_string = ?", [cs])
-        # DuckDB would otherwise serve repeat reads from its in-memory remote-file cache and
-        # the request/byte counts of warm runs would be near zero; a stateless API pays them.
-        self._con.execute("SET enable_external_file_cache = false")
-        self._read_store = RebasedStore(
-            AzureBlobStore(BlobServiceClient.from_connection_string(cs)), self.container
-        )
+            self._con = duckdb.connect()
+        else:
+            self._con, self._read_store = self._blob_session(self.target.connection_string)
 
     def _uri(self, path: str) -> str:
         if isinstance(self.store, LocalStore):
@@ -377,21 +419,24 @@ class FileFormat:
         return out
 
     def io_profile(self, workload: str, params: Mapping[str, Any]) -> WorkloadResult:  # Any: JSON
-        """Untimed re-run with profiling: rows scanned, bytes read, (Blob) real request counts."""
-        if self._con is None:
-            self.reopen()
-        assert self._con is not None
-        self._con.execute("PRAGMA enable_profiling='json'")
-        self._con.execute(f"PRAGMA profiling_output='{self._prof}'")
-        self._profiling = True
-        before = self._proxy.snapshot() if self._proxy else None
+        """Untimed re-run with profiling: rows scanned, bytes read, (Blob) real request counts.
+
+        On Blob the re-run uses its own connection through the :class:`CountingProxy`.
+        """
+        if self.target is None:
+            return self._profiled(workload, params)
+        if self._proxy is None:
+            self._proxy = CountingProxy(upstream_of(self.target.connection_string))
+        cs = via_proxy(self.target.connection_string, self._proxy.port)
+        saved = (self._con, self._read_store)
+        con, store = self._blob_session(cs)
+        self._con, self._read_store = con, store
+        before = self._proxy.snapshot()
         try:
-            res = self.run(workload, params)
+            res = self._profiled(workload, params)
         finally:
-            self._profiling = False
-            self._con.execute("PRAGMA disable_profiling")
-        if self._proxy is None or before is None:
-            return WorkloadResult(res.value, res.rows_scanned, res.bytes_read, self._bytes_source())
+            self._con, self._read_store = saved
+            con.close()
         self.last_requests = diff_stats(self._proxy.snapshot(), before)
         return WorkloadResult(
             res.value,
@@ -399,6 +444,21 @@ class FileFormat:
             self.last_requests.egress_bytes,
             "azurite_http_response_bytes",
         )
+
+    def _profiled(self, workload: str, params: Mapping[str, Any]) -> WorkloadResult:  # Any: JSON
+        if self._con is None:
+            self.reopen()
+        assert self._con is not None
+        quoted = self._prof.replace("'", "''")  # the path is interpolated into a PRAGMA
+        self._con.execute("PRAGMA enable_profiling='json'")
+        self._con.execute(f"PRAGMA profiling_output='{quoted}'")
+        self._profiling = True
+        try:
+            res = self.run(workload, params)
+        finally:
+            self._profiling = False
+            self._con.execute("PRAGMA disable_profiling")
+        return WorkloadResult(res.value, res.rows_scanned, res.bytes_read, self._bytes_source())
 
     def _bytes_source(self) -> str:
         return "file_size" if self.compressed_input else "duckdb_profile"
