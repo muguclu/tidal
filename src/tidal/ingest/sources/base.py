@@ -7,6 +7,7 @@ replayed without hitting the upstream API again.
 
 import gzip
 import hashlib
+import re
 import tempfile
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -15,12 +16,32 @@ from functools import cache
 from pathlib import Path
 from typing import Final, Protocol
 
+import numpy as np
+
 from tidal.common.errors import NotFound
 from tidal.contracts.instruments import CATALOGUE_V1
 from tidal.storage import layout
 from tidal.storage.parquet_writer import ImmutableFileExists, ObjectStore
 
 CONTENT_TYPE_JSON: Final = "application/json"
+MAX_ATTEMPTS: Final = 5
+BACKOFF_BASE_S: Final = 1.0
+MAX_BACKOFF_S: Final = 60.0
+MAX_RETRY_AFTER_S: Final = 300.0
+_KEY_RE: Final = re.compile(r"(api_key=)[^&\s'\"]+", re.IGNORECASE)
+
+
+def redact_url(text: str) -> str:
+    """Mask the ``api_key`` query parameter in ``text`` (URLs, messages)."""
+    return _KEY_RE.sub(r"\g<1>**********", text)
+
+
+def retry_delay(attempt: int, retry_after: str | None, rng: np.random.Generator) -> float:
+    """Backoff capped at 60 s with seeded jitter; numeric ``Retry-After`` raises it (cap 300 s)."""
+    delay = min(MAX_BACKOFF_S, BACKOFF_BASE_S * 2**attempt) * (0.5 + 0.5 * float(rng.random()))
+    if retry_after is not None and retry_after.strip().isdigit():
+        delay = min(max(delay, float(retry_after)), MAX_RETRY_AFTER_S)
+    return float(delay)
 
 
 @dataclass(frozen=True, slots=True)
