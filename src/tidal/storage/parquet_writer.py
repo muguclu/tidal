@@ -7,10 +7,11 @@ is about one row group regardless of the partition size.
 
 # ruff: noqa: N818
 
+import contextlib
 import os
 import shutil
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Protocol
@@ -20,7 +21,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from tidal import __version__
-from tidal.common.errors import TidalError
+from tidal.common.errors import NotFound, TidalError
 from tidal.contracts.schemas import SCHEMAS, pyarrow_write_kwargs
 from tidal.storage import layout
 
@@ -78,6 +79,22 @@ class ObjectStore(Protocol):
         """Upload ``local_file``; raise :class:`ImmutableFileExists` if ``path`` exists."""
         ...
 
+    def read(self, path: str) -> bytes:
+        """Return the object's bytes; raise :class:`~tidal.common.errors.NotFound` if absent."""
+        ...
+
+    def exists(self, path: str) -> bool:
+        """Whether the object at ``path`` exists."""
+        ...
+
+    def list(self, prefix: str) -> Iterator[str]:
+        """Yield existing container-qualified paths starting with ``prefix``, sorted."""
+        ...
+
+    def delete(self, path: str) -> None:
+        """Delete exactly the object at ``path``; idempotent (absent is fine)."""
+        ...
+
 
 class LocalStore:
     """Local filesystem store rooted at e.g. ``./.data``, mirroring the blob layout."""
@@ -106,6 +123,38 @@ class LocalStore:
         finally:
             tmp.unlink(missing_ok=True)
 
+    def _file(self, path: str) -> Path:
+        """Resolve ``path`` under the root; reject anything escaping it."""
+        full = (self.root / path).resolve()
+        if not full.is_relative_to(self.root.resolve()) or full == self.root.resolve():
+            raise layout.InvalidPath(f"path escapes the store root: {path!r}")
+        return full
+
+    def read(self, path: str) -> bytes:
+        """Read the file's bytes."""
+        try:
+            return self._file(path).read_bytes()
+        except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
+            raise NotFound(f"{path} not found") from None
+
+    def exists(self, path: str) -> bool:
+        """Whether a file exists at ``path``."""
+        return self._file(path).is_file()
+
+    def list(self, prefix: str) -> Iterator[str]:
+        """Yield files whose path starts with ``prefix`` (string prefix, like blob listing)."""
+        base = self._file(prefix.rpartition("/")[0] or ".") if "/" in prefix else self.root
+        if not base.is_dir():
+            return iter(())
+        found = (
+            p.relative_to(self.root.resolve()).as_posix() for p in base.rglob("*") if p.is_file()
+        )
+        return iter(sorted(p for p in found if p.startswith(prefix)))
+
+    def delete(self, path: str) -> None:
+        """Remove the single file at ``path`` if present."""
+        self._file(path).unlink(missing_ok=True)
+
 
 class AzureBlobStore:
     """Azure Blob store over an injected ``BlobServiceClient`` (Azurite or a real account)."""
@@ -131,6 +180,33 @@ class AzureBlobStore:
                 blob.upload_blob(fh, overwrite=False)
         except ResourceExistsError:
             raise ImmutableFileExists(f"{path} already exists") from None
+
+    def read(self, path: str) -> bytes:
+        """Download the blob."""
+        from azure.core.exceptions import ResourceNotFoundError  # noqa: PLC0415
+
+        container, name = layout.split_container(path)
+        try:
+            return bytes(self.service.get_blob_client(container, name).download_blob().readall())
+        except ResourceNotFoundError:
+            raise NotFound(f"{path} not found") from None
+
+    def exists(self, path: str) -> bool:
+        """Whether the blob exists."""
+        container, name = layout.split_container(path)
+        return bool(self.service.get_blob_client(container, name).exists())
+
+    def list(self, prefix: str) -> Iterator[str]:
+        """Yield blob paths starting with ``prefix``, sorted."""
+        return iter(sorted(self.list_paths(prefix)))
+
+    def delete(self, path: str) -> None:
+        """Delete the one blob (no snapshots option, so nothing else is touched); idempotent."""
+        from azure.core.exceptions import ResourceNotFoundError  # noqa: PLC0415
+
+        container, name = layout.split_container(path)
+        with contextlib.suppress(ResourceNotFoundError):
+            self.service.get_blob_client(container, name).delete_blob()
 
 
 def schema_name_for(dataset: str) -> str:

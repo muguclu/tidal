@@ -3,7 +3,7 @@
 NOT executed on the box that authored them (no docker). Run with ``uv run pytest -m integration``.
 """
 
-# ruff: noqa: PLC0415
+# ruff: noqa: PLC0415, PT018
 
 import math
 import re
@@ -238,3 +238,28 @@ def test_azure_store_is_create_only_and_lists(azurite_url: str, tmp_path: Path) 
         store.put_new("tidalstoretest/v1/a/part-00000.parquet", f)
     assert store.list_paths("tidalstoretest/v1/a/") == ["tidalstoretest/v1/a/part-00000.parquet"]
     assert store.list_paths("tidalstoretest/v1/b/") == []
+
+
+def test_azure_store_read_list_delete(azurite_url: str, tmp_path: Path) -> None:
+    from azure.storage.blob import BlobServiceClient
+
+    from tidal.common.errors import NotFound
+
+    service = BlobServiceClient.from_connection_string(azurite_url)
+    service.create_container("tidalrwtest")
+    store = pw.AzureBlobStore(service)
+    f = tmp_path / "f.bin"
+    f.write_bytes(b"PAR1xyz")
+    paths = ["tidalrwtest/v1/b/part-00001.parquet", "tidalrwtest/v1/a/part-00000.parquet"]
+    other = "tidalrwtest/v1x/part-00000.parquet"
+    for p in [*paths, other]:
+        store.put_new(p, f)
+    assert store.read(paths[0]) == b"PAR1xyz"
+    assert store.exists(paths[0]) and not store.exists("tidalrwtest/v1/nope")
+    with pytest.raises(NotFound):
+        store.read("tidalrwtest/v1/nope")
+    assert list(store.list("tidalrwtest/v1/")) == sorted(paths)
+    assert list(store.list("tidalrwtest/v1")) == sorted([*paths, other])
+    store.delete(paths[0])
+    store.delete(paths[0])  # idempotent
+    assert not store.exists(paths[0]) and store.exists(paths[1]) and store.exists(other)

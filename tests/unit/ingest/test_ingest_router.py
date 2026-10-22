@@ -1,3 +1,4 @@
+import io
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +9,6 @@ import pytest
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.pool import StaticPool
 
-from tidal.common.errors import ConfigError
 from tidal.common.timeutil import FixedClock
 from tidal.contracts.schemas import BAR_V1, TICK_V1, Interval, QualityFlag
 from tidal.ingest.router import DAY_NS, Routed, Router, read_part
@@ -149,12 +149,12 @@ def test_write_stream_splits_ticks_between_tiers(router: Router) -> None:
     assert router.repo.read_ticks(WTI, 0, NOW + 1).num_rows == 2
 
 
-def test_read_part_rejects_unknown_store() -> None:
-    class Other:
-        def list_paths(self, prefix: str) -> list[str]:
-            return []
+def test_read_part_uses_store_read_only() -> None:
+    buf = io.BytesIO()
+    pq.write_table(pa.table({"a": [1, 2], "b": [3, 4]}), buf)
 
-        def put_new(self, path: str, local_file: Path) -> None: ...
+    class Mem:  # any ObjectStore works: read_part must not special-case the type
+        def read(self, path: str) -> bytes:
+            return buf.getvalue()
 
-    with pytest.raises(ConfigError):
-        read_part(Other(), "x")
+    assert read_part(Mem(), "x", ["b"]).to_pydict() == {"b": [3, 4]}  # type: ignore[arg-type]
