@@ -19,7 +19,6 @@ import hmac
 import json
 import re
 import secrets
-from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from fastapi import Request
@@ -94,22 +93,3 @@ def decode_cursor(key: bytes, bound: str, token: str) -> Position:
     if not hmac.compare_digest(str(got).encode(), bound.encode()):
         raise ValidationFailed(_BAD)
     return Position(ts_ns, idx, as_of, anchor)
-
-
-def page_of[T](
-    rows: Iterable[T], ts_of: Callable[[T], int], start: Position | None, limit: int
-) -> tuple[list[T], Position | None]:
-    """Take up to ``limit`` rows at or after ``start``; also return the next position."""
-    out: list[T] = []
-    prev_ts: int | None = None
-    idx = 0
-    for row in rows:
-        ts = ts_of(row)
-        idx = idx + 1 if ts == prev_ts else 0
-        prev_ts = ts
-        if start is not None and (ts, idx) < (start.ts_ns, start.idx):
-            continue
-        if len(out) == limit:
-            return out, Position(ts, idx)
-        out.append(row)
-    return out, None

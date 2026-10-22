@@ -33,7 +33,7 @@ from tidal.contracts.instruments import InstrumentId
 from tidal.contracts.models import BarsResponse, Tier, datetime_to_ns
 from tidal.contracts.schemas import BAR_V1, Interval
 from tidal.query.limits import check_bars_range
-from tidal.query.protocols import Clock, Reader
+from tidal.query.protocols import Clock, Reader, observed_tier
 
 router = APIRouter(prefix="/v1", tags=["market-data"])
 
@@ -136,7 +136,14 @@ async def get_bars(  # noqa: PLR0917 - contract query parameters
     pos = decode_cursor(key, bound, cursor) if cursor else None
     # Without an explicit as_of, pin the first page's request time into the cursor so row
     # versions do not change between pages.
-    as_of_ns = given_as_of or (pos.as_of_ns if pos else None) or datetime_to_ns(clock.now())
+    pinned = pos.as_of_ns if pos else None
+    as_of_ns = (
+        given_as_of
+        if given_as_of is not None
+        else pinned
+        if pinned is not None
+        else datetime_to_ns(clock.now())
+    )
     # ffill needs the real bar before the page start (the cursor's anchor); a plain page starts at
     # the cursor. The reader is streamed and closed after limit + 1 rows, so paging is bounded.
     if pos is None:
@@ -150,11 +157,12 @@ async def get_bars(  # noqa: PLR0917 - contract query parameters
         stream, bar_from_row, lambda b: b.ts_ns, pos, limit,
         ffill=interval if fill is Fill.FFILL else None,
     )  # fmt: skip
-    response.headers[TIER_HEADER] = stream.tier.value
+    tier = observed_tier(stream)  # final once the page is read
+    response.headers[TIER_HEADER] = tier.value
     return BarsResponse(
         instrument_id=instrument_id,
         interval=interval,
-        tier=stream.tier,
+        tier=tier,
         rows=page,
         next_cursor=encode_cursor(key, bound, replace(nxt, as_of_ns=as_of_ns)) if nxt else None,
     )

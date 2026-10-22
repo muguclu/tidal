@@ -69,11 +69,16 @@ def tick_from_row(r: dict[str, Any]) -> Tick:  # Any: pyarrow row values of mixe
 
 
 async def _rows[T](
-    batches: AsyncIterator[pa.RecordBatch], make: Callable[[dict[str, Any]], T]
+    batches: AsyncIterator[pa.RecordBatch], make: Callable[[dict[str, Any]], T], budget: int
 ) -> AsyncIterator[tuple[T, bool]]:
+    """Real rows, at most ``budget`` of them; batches are cut before the Python conversion."""
     async for batch in batches:
-        for row in batch.to_pylist():
+        take = batch.slice(0, budget)
+        budget -= take.num_rows
+        for row in take.to_pylist():
             yield make(row), True
+        if budget <= 0:
+            return
 
 
 async def _ffill(
@@ -102,15 +107,20 @@ async def page_from_stream[T](
     """Up to ``limit`` rows at/after ``start`` plus the next position; closes the stream early.
 
     The stream must begin at ``start.ts_ns`` (or, with ``ffill``, at ``start.anchor_ns``: the last
-    real bar before the position, which the fill needs). Only ``limit + 1`` rows are consumed
-    (plus whatever the reader already sliced), however long the range is.
+    real bar before the position, which the fill needs). At most ``limit + 1`` real rows plus the
+    rows to skip (ties before ``start.idx``, the anchor bar) are converted to Python objects, and
+    batches are cut to that budget before conversion. The reader itself still produces whole
+    batches of its slice (one reader slice at most), so cost is O(page + one slice), not O(range).
     """
+    budget = limit + 1 + (start.idx if start else 0) + (1 if ffill is not None else 0)
     out: list[T] = []
     prev_ts: int | None = None
     idx = 0
     last_real: int | None = None
     async with aclosing(cast("Any", stream.batches)) as batches:
-        rows: AsyncIterator[tuple[Any, bool]] = _rows(batches, make)  # Any: T or Bar when filled
+        rows: AsyncIterator[tuple[Any, bool]] = _rows(
+            batches, make, budget
+        )  # Any: T or Bar when filled
         if ffill is not None:
             rows = _ffill(rows, ffill)
         async with aclosing(cast("Any", rows)):
@@ -120,7 +130,9 @@ async def page_from_stream[T](
                 prev_ts = ts
                 if start is None or (ts, idx) >= (start.ts_ns, start.idx):
                     if len(out) == limit:
-                        return out, Position(ts, idx, anchor_ns=last_real)
+                        return out, Position(
+                            ts, idx, anchor_ns=last_real if ffill is not None else None
+                        )
                     out.append(row)
                 if real:
                     last_real = ts
@@ -172,7 +184,9 @@ async def _encode(stream: RowStream, schema: pa.Schema, *, arrow: bool) -> Async
                 if data := sink.drain():
                     yield data
     except Exception:
-        logger.exception("stream_failed", correlation_id=get_correlation_id())
+        # One structured event here; the traceback is logged once by the app's unhandled_error
+        # handler (the server logs the abort too, outside this module).
+        logger.error("stream_failed", correlation_id=get_correlation_id())
         raise
     writer.close()
     yield sink.drain()

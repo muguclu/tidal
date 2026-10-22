@@ -27,7 +27,7 @@ from tidal.contracts.instruments import InstrumentId
 from tidal.contracts.models import TicksResponse
 from tidal.contracts.schemas import TICK_V1
 from tidal.query.limits import check_ticks_range
-from tidal.query.protocols import Reader
+from tidal.query.protocols import Reader, observed_tier
 
 router = APIRouter(prefix="/v1", tags=["market-data"])
 
@@ -63,10 +63,11 @@ async def get_ticks(  # noqa: PLR0917 - contract query parameters
     pos = decode_cursor(key, bound, cursor) if cursor else None
     stream = await reader.stream_ticks(instrument_id, pos.ts_ns if pos else start_ns, end_ns)
     page, nxt = await page_from_stream(stream, tick_from_row, lambda t: t.ts_ns, pos, limit)
-    response.headers[TIER_HEADER] = stream.tier.value
+    tier = observed_tier(stream)  # final once the page is read
+    response.headers[TIER_HEADER] = tier.value
     return TicksResponse(
         instrument_id=instrument_id,
-        tier=stream.tier,
+        tier=tier,
         rows=page,
         next_cursor=encode_cursor(key, bound, nxt) if nxt else None,
     )

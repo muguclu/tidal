@@ -4,7 +4,7 @@ Tests and Phase-1 routers use the in-memory fakes in ``tests/fakes`` (SPEC-04 §
 int64 epoch nanoseconds (``ts_ns``); ``start`` is inclusive and ``end`` exclusive.
 """
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol, runtime_checkable
@@ -37,6 +37,24 @@ class RowStream:
 
     tier: Tier
     batches: AsyncIterator[pa.RecordBatch]
+
+
+@dataclass(frozen=True, slots=True)
+class ObservedRowStream(RowStream):
+    """A ``RowStream`` whose tier is refined while it is consumed.
+
+    ``tier`` stays the up-front label of the requested range (arrow/parquet headers are sent
+    before any data). ``observed()`` is the tier of what has actually been read so far: ``mixed``
+    as soon as a slice held rows on both sides of the watermark (late restatement in SQL, rows
+    not yet deleted after migration). JSON paging reads it after the page, when it is final.
+    """
+
+    observed: Callable[[], Tier]
+
+
+def observed_tier(stream: RowStream) -> Tier:
+    """Tier of the rows read from ``stream`` so far (its up-front label if it cannot refine)."""
+    return stream.observed() if isinstance(stream, ObservedRowStream) else stream.tier
 
 
 @runtime_checkable

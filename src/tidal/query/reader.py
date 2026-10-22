@@ -5,7 +5,11 @@ concatenated with polars and versions are resolved per data-contracts §7 (lates
 version with ``ingested_at_ns <= as_of``). The ``migration_watermark`` decides the reported tier;
 the tier becomes ``mixed`` when SQL still held rows below the watermark. Streaming reads walk the
 range in fixed time slices so memory is bounded by one slice, never by the range, and report the
-tier derived from the range and the watermark alone.
+tier derived from the range and the watermark alone (``RowStream.tier``, sent before any
+data). The stream also reports the tier it actually observed (``ObservedRowStream.observed``):
+``mixed`` when any slice held SQL rows below the watermark or Parquet rows above it, else the
+range label of what was read so far. JSON paging uses the observed tier after its page;
+arrow/parquet keep the up-front label.
 """
 
 import asyncio
@@ -25,7 +29,7 @@ from tidal.contracts.instruments import AssetClass, Instrument, Source
 from tidal.contracts.models import Bar, LatestBar, Tick, Tier
 from tidal.contracts.schemas import BAR_V1, INTERVAL_CODES, TICK_V1, Interval, TickSide
 from tidal.query.duck import DuckSession, glob_for
-from tidal.query.protocols import Rows, RowStream
+from tidal.query.protocols import ObservedRowStream, Rows, RowStream
 from tidal.storage import sql_repo as sr
 from tidal.storage.layout import DAILY_DATASET
 
@@ -286,17 +290,26 @@ class UnifiedReader:
         p = await asyncio.to_thread(self._plan, kind, instrument_id, interval, as_of)
         step = _SLICE_NS[p.dataset]
 
+        mixed_seen = False
+        read_to = start  # end of the last slice read
+
+        def observed() -> Tier:
+            return Tier.MIXED if mixed_seen else tier_for(start, read_to, p.wm)
+
         async def batches() -> AsyncIterator[pa.RecordBatch]:
+            nonlocal mixed_seen, read_to
             lo = start
             while lo < end:
                 hi = min(end, lo + step)
-                df, _ = await asyncio.to_thread(self._slice, p, lo, hi)
+                df, mixed = await asyncio.to_thread(self._slice, p, lo, hi)
+                mixed_seen = mixed_seen or mixed
+                read_to = hi
                 if df.height:
                     for batch in self._arrow(df, p).to_batches(max_chunksize=_BATCH_ROWS):
                         yield batch
                 lo = hi
 
-        return RowStream(tier_for(start, end, p.wm), batches())
+        return ObservedRowStream(tier_for(start, end, p.wm), batches(), observed)
 
     async def stream_bars(
         self,

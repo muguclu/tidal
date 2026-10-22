@@ -92,7 +92,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | ID | Title | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|
 | T-209 | Wire reader; split `tidal-query` service | T-111, T-208 | `src/tidal/api/routers/*` (read), `src/tidal/query/service.py`, `src/tidal/api/app.py` (run/lifespan), `docker-compose.yml` (query service) | `X-Tidal-Tier` correct; internal call via MI | done |
-| T-210 | Arrow/Parquet streaming, as_of, fill | T-209 | `src/tidal/api/streaming.py` +tests | 10M rows RSS < 500 MB | todo |
+| T-210 | Arrow/Parquet streaming, as_of, fill | T-209 | `src/tidal/api/streaming.py` +tests; also `api/routers/{bars,ticks}.py`, `api/pagination.py`, `query/service.py`, `query/protocols.py` (additive `ObservedRowStream`), `query/reader.py` (`RowStream` tier reporting only), `docs/contracts/api-contract.md` §1 (docs note) | 10M rows RSS < 500 MB | todo |
 
 **Gate G2**
 

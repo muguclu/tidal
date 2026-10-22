@@ -19,6 +19,7 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, cast
@@ -113,16 +114,24 @@ class SyntheticReader:
         return None
 
 
-def serve(app: Any, port_box: list[int]) -> tuple[uvicorn.Server, threading.Thread]:
-    """Run ``app`` in a uvicorn thread on a free loopback port."""
+def serve(
+    app: Any, port_box: list[int], *, timeout: float = 30.0
+) -> tuple[uvicorn.Server, threading.Thread]:
+    """Run ``app`` in a uvicorn thread on a free loopback port; fails fast if it cannot start."""
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     port_box.append(sock.getsockname()[1])
     server = uvicorn.Server(uvicorn.Config(app, log_config=None, access_log=False))
     thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
     thread.start()
+    deadline = time.monotonic() + timeout
     while not server.started:
-        threading.Event().wait(0.05)
+        if not thread.is_alive():
+            raise RuntimeError("server thread exited before it started")
+        if time.monotonic() > deadline:
+            server.should_exit = True
+            raise TimeoutError(f"server did not start within {timeout} s")
+        time.sleep(0.05)
     return server, thread
 
 
