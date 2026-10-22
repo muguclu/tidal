@@ -86,6 +86,7 @@ def service() -> Iterator[BlobServiceClient]:
         yield svc
 
 
+@pytest.mark.usefixtures("hidden_test_env")
 def test_synth_s_one_instrument_month_hot_and_cold(
     engine: Engine, service: BlobServiceClient
 ) -> None:

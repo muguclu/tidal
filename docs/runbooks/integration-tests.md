@@ -1,6 +1,6 @@
 # Runbook: integration tests (T-128)
 
-CI runs `uv run pytest -m integration` in `.github/workflows/integration.yml` on PRs that touch
+CI runs `uv run pytest tests/integration -m integration` in `.github/workflows/integration.yml` on PRs that touch
 `src/`, `tests/integration/`, `benchmarks/`, `sql/`, `pyproject.toml`, `uv.lock` or the workflow, on
 manual dispatch, and nightly (`TIDAL_TEST_CRASH_EXAMPLES=40`, `TIDAL_TEST_CRASH_FULL=1`). It is advisory,
 not a required check. The suite needs Docker and ODBC Driver 18 for SQL Server (`unixodbc` +
@@ -12,18 +12,19 @@ Use a throwaway SQL Server with a generated password (never reuse your compose p
 ```bash
 export TIDAL_SQL__PASSWORD="Aa1-$(openssl rand -hex 16)"
 export TIDAL_TEST_SQL_PASSWORD="$TIDAL_SQL__PASSWORD" TIDAL_TEST_SQL_URL="127.0.0.1,1433"
-docker run -d --name sql-it -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD="$TIDAL_SQL__PASSWORD" \
+export MSSQL_SA_PASSWORD="$TIDAL_SQL__PASSWORD"   # -e NAME without a value keeps it out of `ps`
+docker run -d --name sql-it -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD \
   -p 127.0.0.1:1433:1433 mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04
 docker run -d --name azurite-it -p 127.0.0.1:10000:10000 mcr.microsoft.com/azure-storage/azurite:3.37.0 \
   azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
 # Azurite dev account string from .env.example (public key) for the file-format benchmark suite:
 export TIDAL_STORAGE__CONNECTION_STRING="$(grep '^TIDAL_STORAGE__CONNECTION_STRING=' .env.example | cut -d= -f2- | tr -d '"')"
-uv run pytest -m integration --no-cov
+uv run pytest tests/integration -m integration --no-cov
 docker rm -f sql-it azurite-it
 ```
 
 If `docker compose up` is already running, skip the two `docker run` lines and use its `TIDAL_SQL__PASSWORD`
-from `.env`. Suites that start their own containers (testcontainers) work either way.
+from your git-ignored `.env` (SPEC-06 section 3 calls it `.env.local`; the compose file reads `.env`; neither is ever committed). Suites that start their own containers (testcontainers) work either way.
 
 ## Knobs
 | Variable | Used by | Effect |

@@ -63,14 +63,25 @@ jobs:
           set -euo pipefail
           . /etc/os-release
           curl -fsSL https://packages.microsoft.com/keys/microsoft.asc -o "$RUNNER_TEMP/microsoft.asc"
-          fpr="$(gpg --show-keys --with-colons "$RUNNER_TEMP/microsoft.asc" | awk -F: '$1=="fpr"{print $10}')"
-          if ! grep -qx "$MS_KEY_FPR" <<<"$fpr"; then
+          # Exactly one primary key, and its fingerprint (the fpr line right after `pub`) must match.
+          colons="$(gpg --show-keys --with-colons "$RUNNER_TEMP/microsoft.asc")"
+          if [ "$(grep -c '^pub:' <<<"$colons")" -ne 1 ]; then
+            echo "expected exactly one primary key in the Microsoft key file" >&2
+            exit 1
+          fi
+          fpr="$(awk -F: '$1=="pub"{p=1;next} p&&$1=="fpr"{print $10;exit}' <<<"$colons")"
+          if [ "$fpr" != "$MS_KEY_FPR" ]; then
             echo "Microsoft signing key fingerprint mismatch: $fpr" >&2
             exit 1
           fi
           sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/microsoft-prod.gpg "$RUNNER_TEMP/microsoft.asc"
           echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/${VERSION_ID}/prod ${VERSION_CODENAME} main" \
             | sudo tee /etc/apt/sources.list.d/mssql-release.list >/dev/null
+          # Only msodbcsql18 may come from the Microsoft repo; every other package (unixodbc, ...) resolves
+          # from Ubuntu, so the Microsoft repo cannot supply an unpinned unixodbc.
+          printf '%s\n' 'Package: *' 'Pin: origin packages.microsoft.com' 'Pin-Priority: -1' '' \
+            'Package: msodbcsql18' 'Pin: origin packages.microsoft.com' 'Pin-Priority: 500' \
+            | sudo tee /etc/apt/preferences.d/mssql-release >/dev/null
           sudo apt-get update
           sudo ACCEPT_EULA=Y apt-get install -y --no-install-recommends unixodbc "msodbcsql18=${MSODBCSQL_VERSION}"
           odbcinst -q -d | grep -F "ODBC Driver 18 for SQL Server"
@@ -118,9 +129,15 @@ jobs:
           TIDAL_STORAGE__CONNECTION_STRING: ${{ env.TIDAL_TEST_AZURITE_CS }}
         # pytest-timeout is not a dependency (ADR-0007); the job timeout-minutes is the backstop.
         run: >-
-          uv run pytest -m integration --no-cov
+          uv run pytest tests/integration -m integration --no-cov
           --junitxml="$RUNNER_TEMP/junit-integration.xml"
           -p no:cacheprovider
+
+      - name: Scrub the SA password from the JUnit XML
+        if: failure()
+        run: |
+          f="$RUNNER_TEMP/junit-integration.xml"
+          if [ -f "$f" ]; then sed -i "s|${TIDAL_SQL__PASSWORD}|***|g" "$f"; fi
 
       - name: Upload JUnit XML
         if: failure()

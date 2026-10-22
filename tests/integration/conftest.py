@@ -12,6 +12,23 @@ from collections.abc import Generator
 import pytest
 
 
+def _marker_skip(item: pytest.Item) -> bool:
+    """True when the item carries a skip marker, or a skipif whose condition is not plain False."""
+    if any(True for _ in item.iter_markers("skip")):
+        return True
+    return any(m.args[:1] != (False,) for m in item.iter_markers("skipif"))
+
+
+@pytest.fixture
+def hidden_test_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hide ``TIDAL_TEST_*`` from the process env: ``Settings`` rejects unknown ``TIDAL_*`` keys.
+
+    Request it in any test that calls ``Settings.from_env`` directly.
+    """
+    for key in [k for k in os.environ if k.startswith("TIDAL_TEST_")]:
+        monkeypatch.delenv(key)
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(
     item: pytest.Item, call: pytest.CallInfo[None]
@@ -22,6 +39,8 @@ def pytest_runtest_makereport(
         return
     if call.excinfo is None or not call.excinfo.errisinstance(pytest.skip.Exception):
         return
+    if _marker_skip(item):
+        return  # declared with @pytest.mark.skip / skipif: not a missing prerequisite
     report = outcome.get_result()  # type: ignore[attr-defined]  # pluggy Result is untyped here
     report.outcome = "failed"
     report.longrepr = f"TIDAL_TEST_REQUIRE_SQL=1: skip not allowed in CI: {call.excinfo.value}"

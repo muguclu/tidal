@@ -33,7 +33,7 @@ SQL: Entra-only authentication (`azuread_authentication_only = true`), identitie
 - Key Vault (RBAC mode, purge protection on, soft delete 7 d) holds only the App Insights connection
   string (no vendor keys since ADR-0013).
 - App Service / Container Apps read via Key Vault references; AKS via Secrets Store CSI driver.
-- `gitleaks` in pre-commit and CI; `TIDAL_SQL__PASSWORD` only exists in `.env.local`.
+- `gitleaks` in pre-commit and CI; `TIDAL_SQL__PASSWORD` only exists in git-ignored `.env`/`.env.local`; the sole exception is an ephemeral, per-run, masked SA password generated inside the CI integration job (T-128).
 
 ## 4. Network (Phase 4, toggled by `enable_private_networking`)
 - VNet with subnets: `snet-aks`, `snet-aca` (Container Apps env, workload profiles), `snet-app`
