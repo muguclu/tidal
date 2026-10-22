@@ -58,6 +58,10 @@ PAGE_SCHEMA: Final = pa.schema(
     [pa.field(n, t) for n, t in (("ts_ns", pa.int64()), ("value", pa.float64()))]
     + [pa.field("series", pa.string())]
 )
+#: EIA stopped publishing NYMEX futures (RCLC1-4, RNGC1-4) after this date (EIA API dashboard,
+#: ``petroleum/pri/fut``); FUT1-4 instruments are backfill-only and requests are clipped here.
+EIA_FUTURES_LAST_DATE: Final = date(2024, 4, 5)
+_FUTURES_SERIES = re.compile(r"R(CL|NG)C\d")
 _KEY_RE = re.compile(r"(api_key=)[^&\s'\"]+", re.IGNORECASE)
 _log = get_logger(__name__)
 
@@ -148,6 +152,10 @@ class EiaSource:
         route = ROUTES.get(series)
         if route is None:
             raise EiaRequestRejected(f"no EIA route for series {series}")
+        if _FUTURES_SERIES.fullmatch(series):
+            end = min(end, EIA_FUTURES_LAST_DATE)
+            if start > end:
+                return
         url = f"{self._base}/{route}/data/"
         seen: set[str] = set()
         offset = 0

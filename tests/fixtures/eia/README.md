@@ -4,6 +4,6 @@ Hand-written, "recorded-style" responses following the EIA Open Data API v2 `dat
 shape (`response.total` / `response.data[]` with string `value`s). No real recordings exist
 because no API key was available (T-102); replace with vcrpy cassettes once a key is.
 
-`rwtc_page1.json` / `rwtc_page2.json`: two pages (total 6, three rows each) including the
-2020-04-20 negative WTI row. The value -37.63 follows the task brief (the NYMEX settle); the EIA
-RWTC spot print for that day is believed to be -36.98 (unverified).
+`rwtc_page1.json` / `rwtc_page2.json`: two RWTC pages (total 6) incl. 2020-04-20 = -36.98 (EIA spot).
+`rclc1_page1.json`: RCLC1 (NYMEX contract 1) 2020-04-20 = -37.63. Live recordings (via
+`scripts/verify_eia.py --record`) go in `live/`.

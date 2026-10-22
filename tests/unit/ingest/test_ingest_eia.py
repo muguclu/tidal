@@ -13,8 +13,9 @@ from tidal.common.errors import ConfigError
 from tidal.common.timeutil import FixedClock
 from tidal.contracts.instruments import CATALOGUE_V1
 from tidal.ingest.sources import eia
-from tidal.ingest.sources.base import RawChunk
+from tidal.ingest.sources.base import RawChunk, raw_blob_path
 from tidal.ingest.sources.eia import (
+    EIA_FUTURES_LAST_DATE,
     EiaRequestRejected,
     EiaSource,
     EiaUnavailable,
@@ -82,11 +83,11 @@ def test_pagination_two_pages_saved(tmp_path: Path) -> None:
     assert q.params["facets[series][]"] == "RWTC"
     assert q.params["sort[0][direction]"] == "asc"
     assert (q.params["start"], q.params["end"]) == ("2020-04-16", "2020-04-23")
-    assert store.list_paths("raw/eia/") == [
-        "raw/eia/rwtc/20200416.json.gz",
-        "raw/eia/rwtc/20200421.json.gz",
-    ]
-    assert gzip.decompress((tmp_path / "raw/eia/rwtc/20200416.json.gz").read_bytes()) == PAGE1
+    paths = [raw_blob_path(c) for c in chunks]
+    assert paths[0].startswith("raw/eia/rwtc/20200416-")
+    assert paths[1].startswith("raw/eia/rwtc/20200421-")
+    assert store.list_paths("raw/eia/") == sorted(paths)
+    assert gzip.decompress((tmp_path / paths[0]).read_bytes()) == PAGE1
 
 
 @pytest.mark.parametrize(
@@ -113,7 +114,7 @@ def test_routes_cover_every_eia_series() -> None:
 def test_saved_before_first_chunk_is_yielded(tmp_path: Path) -> None:
     src, _, _ = make(tmp_path, Server())
     first = next(src.fetch("EIA.WTI.SPOT", START, END))
-    assert (tmp_path / "raw/eia/rwtc/20200416.json.gz").exists()
+    assert (tmp_path / raw_blob_path(first)).exists()
     assert first.payload == PAGE1
 
 
@@ -121,7 +122,7 @@ def test_raw_saved_even_if_parse_fails(tmp_path: Path) -> None:
     bad = b'{"response":{"total":"1","data":[{"period":"2020-04-16","series":"RWTC","value":"x"}]}}'
     src, _, store = make(tmp_path, lambda _: httpx.Response(200, content=bad))
     (chunk,) = run(src)
-    assert store.list_paths("raw/eia/") == ["raw/eia/rwtc/20200416.json.gz"]
+    assert store.list_paths("raw/eia/") == [raw_blob_path(chunk)]
     assert parse_eia_page(chunk.payload).column("value").to_pylist()[0] != 0.0  # NaN, no crash
 
 
@@ -249,7 +250,7 @@ def test_golden_wti_negative_and_adr0009_timestamps() -> None:
     assert str(t.schema.field("value").type) == "double"
     ts = t.column("ts_ns").to_numpy()
     rows = dict(zip(ts.tolist(), t.column("value").to_numpy().tolist(), strict=True))
-    assert rows[1_587_340_800 * 10**9] == -37.63  # 2020-04-20T00:00:00Z
+    assert rows[1_587_340_800 * 10**9] == -36.98  # 2020-04-20T00:00:00Z, RWTC spot
     assert (ts % NS_PER_DAY == 0).all()
     assert list(rows) == sorted(rows)
     assert set(t.column("series").to_pylist()) == {"RWTC"}
@@ -263,3 +264,36 @@ def test_null_value_becomes_nan() -> None:
     v = parse_eia_page(body).column("value").to_pylist()
     assert v[0] != v[0]
     assert v[1] == 1.5
+
+
+def test_golden_wti_fut1_negative() -> None:
+    t = parse_eia_page((FIX / "rclc1_page1.json").read_bytes())
+    rows = dict(zip(t.column("ts_ns").to_pylist(), t.column("value").to_pylist(), strict=True))
+    assert rows[1_587_340_800 * 10**9] == -37.63  # NYMEX settle, RCLC1
+    assert set(t.column("series").to_pylist()) == {"RCLC1"}
+
+
+def test_futures_end_clipped_to_discontinuation(tmp_path: Path) -> None:
+    server = Server()
+    src, _, _ = make(tmp_path, server)
+    list(src.fetch("EIA.WTI.FUT1", date(2024, 1, 1), date(2025, 1, 1)))
+    assert server.requests[0].url.params["end"] == EIA_FUTURES_LAST_DATE.isoformat() == "2024-04-05"
+    assert server.requests[0].url.path == "/v2/petroleum/pri/fut/data/"
+    assert list(src.fetch("EIA.HH.FUT2", date(2024, 5, 1), date(2025, 1, 1))) == []
+    assert len(server.requests) == 2  # the second range made no request at all
+    list(src.fetch("EIA.WTI.SPOT", date(2024, 1, 1), date(2025, 1, 1)))
+    assert server.requests[-1].url.params["end"] == "2025-01-01"  # spot is not clipped
+
+
+def test_different_payloads_same_day_distinct_blobs_same_payload_idempotent(tmp_path: Path) -> None:
+    first = run(make(tmp_path, Server())[0])[0]
+    restated = PAGE1.replace(b"28.34", b"28.35").replace(b'"total": "6"', b'"total": "3"')
+    src, _, store = make(tmp_path, lambda _: httpx.Response(200, content=restated))
+    (second,) = run(src)
+    assert first.day == second.day
+    assert raw_blob_path(first) != raw_blob_path(second)
+    paths = store.list_paths("raw/")
+    assert raw_blob_path(first) in paths
+    assert raw_blob_path(second) in paths
+    run(src)  # same payload again: no new blob
+    assert store.list_paths("raw/") == paths

@@ -1,0 +1,39 @@
+{
+  "response": {
+    "total": "1",
+    "dateFormat": "YYYY-MM-DD",
+    "frequency": "daily",
+    "data": [
+      {
+        "period": "2020-04-20",
+        "duration": null,
+        "area-name": "NA",
+        "area": "NA",
+        "product": "EPCWTI",
+        "product-name": "WTI Crude Oil",
+        "process": "FWB",
+        "process-name": "Futures Contract 1",
+        "series": "RCLC1",
+        "series-description": "Cushing, OK Crude Oil Future Contract 1 (Dollars per Barrel)",
+        "value": "-37.63",
+        "units": "$/BBL"
+      }
+    ],
+    "description": "Petroleum futures prices."
+  },
+  "request": {
+    "command": "/v2/petroleum/pri/fut/data/",
+    "params": {
+      "frequency": "daily",
+      "data": [
+        "value"
+      ],
+      "facets": {
+        "series": [
+          "RCLC1"
+        ]
+      }
+    }
+  },
+  "apiVersion": "2.1.8"
+}

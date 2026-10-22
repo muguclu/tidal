@@ -16,8 +16,6 @@ from tidal.ingest.sources.base import (
 )
 from tidal.storage.parquet_writer import LocalStore
 
-RAW = "raw/eia/rwtc/20200420.json.gz"
-
 
 def chunk(payload: bytes = b'{"a":1}') -> RawChunk:
     return RawChunk(
@@ -51,11 +49,12 @@ def test_unknown_mapping_raises() -> None:
 def test_persist_raw_gzip_idempotent(tmp_path: Path) -> None:
     store = LocalStore(tmp_path)
     c = chunk()
-    assert raw_blob_path(c) == RAW
+    raw = raw_blob_path(c)
+    assert raw == f"raw/eia/rwtc/20200420-{c.sha256[:8]}.json.gz"
     assert persist_raw(c, store) is True
     assert persist_raw(c, store) is False  # path exists -> no new write
-    assert gzip.decompress((tmp_path / RAW).read_bytes()) == c.payload
-    assert store.list_paths("raw/eia/") == [RAW]
+    assert gzip.decompress((tmp_path / raw).read_bytes()) == c.payload
+    assert store.list_paths("raw/eia/") == [raw]
 
 
 def test_persist_raw_same_sha_seen_skips_write(tmp_path: Path) -> None:
@@ -69,4 +68,13 @@ def test_persist_raw_same_sha_seen_skips_write(tmp_path: Path) -> None:
 def test_gzip_is_deterministic(tmp_path: Path) -> None:
     persist_raw(chunk(), LocalStore(tmp_path / "a"))
     persist_raw(chunk(), LocalStore(tmp_path / "b"))
-    assert (tmp_path / "a" / RAW).read_bytes() == (tmp_path / "b" / RAW).read_bytes()
+    raw = raw_blob_path(chunk())
+    assert (tmp_path / "a" / raw).read_bytes() == (tmp_path / "b" / raw).read_bytes()
+
+
+def test_different_payload_same_day_is_new_blob(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path)
+    assert persist_raw(chunk(b'{"v":1}'), store) is True
+    assert persist_raw(chunk(b'{"v":2}'), store) is True
+    assert persist_raw(chunk(b'{"v":2}'), store) is False
+    assert len(store.list_paths("raw/eia/")) == 2

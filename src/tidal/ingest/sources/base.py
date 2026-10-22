@@ -82,7 +82,7 @@ def instrument_for(source: str, series: str) -> str:
 
 def raw_blob_path(chunk: RawChunk) -> str:
     """Container-qualified raw path of ``chunk`` (via the layout module only)."""
-    return layout.raw_path(chunk.source.lower(), chunk.series, chunk.day)
+    return layout.raw_path(chunk.source.lower(), chunk.series, chunk.day, chunk.sha256[:8])
 
 
 def persist_raw(chunk: RawChunk, store: ObjectStore, seen: set[str] | None = None) -> bool:
