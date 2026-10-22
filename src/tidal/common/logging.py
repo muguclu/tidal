@@ -134,6 +134,15 @@ class _TidalHandler(logging.StreamHandler):  # type: ignore[type-arg]
     """Marker type so ``configure_logging`` can replace its own handler (idempotence)."""
 
 
+#: Loggers that would print full request URLs (with query-string secrets) at INFO.
+_URL_LOGGERS: tuple[str, ...] = (
+    "httpx",
+    "httpcore",
+    "urllib3",
+    "azure.core.pipeline.policies.http_logging_policy",
+)
+
+
 def configure_logging(settings: Settings) -> None:
     """Configure structlog and the root logger for JSON lines on stdout; safe to call repeatedly."""
     shared: list[Processor] = [
@@ -172,6 +181,10 @@ def configure_logging(settings: Settings) -> None:
         root.removeHandler(old)
     root.addHandler(handler)
     root.setLevel(settings.log_level)
+    # HTTP clients log full request URLs at INFO; EIA v2 carries its API key in the query string,
+    # so these loggers stay at WARNING regardless of TIDAL_LOG_LEVEL.
+    for noisy in _URL_LOGGERS:
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
