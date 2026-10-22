@@ -85,7 +85,12 @@ from tidal.contracts.messages import TieringJob
 from tidal.contracts.schemas import BAR_V1, INTERVAL_CODES, TICK_V1, Interval, QualityFlag
 from tidal.storage import layout
 from tidal.storage import sql_repo as sr
-from tidal.storage.parquet_writer import ObjectStore, write_partition
+from tidal.storage.parquet_writer import (
+    AzureBlobStore,
+    LocalStore,
+    ObjectStore,
+    write_partition,
+)
 from tidal.storage.retag import BlobTagger, ensure_tags
 
 log = get_logger(__name__)
@@ -416,30 +421,93 @@ def read_cold(
 def plan_write(rows: pl.DataFrame, cold: pl.DataFrame, spec: TableSpec) -> pl.DataFrame:
     """Rows of ``rows`` (a hot page, SQL order) that must be written; see the module docstring.
 
-    ``cold`` needs the key, ``version``, the value columns and ``ingested_at_ns``. Returned rows
-    may carry a re-versioned ``version`` / ``RESTATED`` quality (ADR-0014). Raises
-    :class:`TieringConflict` for a same key + version mismatch that is not a newer restatement.
+    ``cold`` needs the key, ``version``, the value columns and ``ingested_at_ns``. Per key:
+
+    * hot rows **newer than the whole cold history** of the key (``ingested_at_ns`` above every
+      cold one) form a sequence that is compared, row by row, with the cold row of the max version
+      (as ``ingest.router`` does): an equal value adds nothing, a different one is written with a
+      version above everything before it (``RESTATED`` if it had to move). A revert to an earlier
+      value is therefore a new version, not a duplicate;
+    * all other hot rows keep their version: already cold (same key, version, values,
+      ``cold.ingested_at_ns <= hot``) or a re-versioned twin (same key, values and
+      ``ingested_at_ns`` at a version ``>=``) are dropped, same key + version with other values
+      raises :class:`TieringConflict` (ADR-0014).
     """
     if cold.height == 0:
         return rows
     key, vals = list(spec.key), list(spec.values)
-    on = [*key, "version"]
     idx = rows.with_row_index("__i")
+    latest = (
+        cold.sort([*key, "version", "ingested_at_ns"])
+        .group_by(key, maintain_order=True)
+        .agg(
+            pl.col("version").max().cast(pl.Int64).alias("__cmaxv"),
+            pl.col("ingested_at_ns").max().alias("__cmaxi"),
+            *[pl.col(v).last().alias(f"{v}__m") for v in vals],
+        )
+    )
+    j = idx.join(latest, on=key, how="left", maintain_order="left")
+    is_newer = (pl.col("ingested_at_ns") > pl.col("__cmaxi")).fill_null(False)
+    kept = _newer_rows(j.filter(is_newer), key, vals).select(idx.columns)
+    return (
+        pl.concat([_older_rows(j.filter(~is_newer), cold, spec, idx.columns), kept])
+        .sort([*key, "version", "ingested_at_ns"])
+        .drop("__i")
+    )
+
+
+def _newer_rows(nw: pl.DataFrame, key: list[str], vals: list[str]) -> pl.DataFrame:
+    """The sequence rule of :func:`plan_write` for rows newer than their key's cold history."""
+    nw = nw.sort([*key, "version", "ingested_at_ns"]).with_columns(
+        pl.int_range(pl.len()).over(key).alias("__rn")
+    )
+    first = pl.col("__rn") == 0
+    same_as_prev = pl.all_horizontal(
+        [
+            pl.col(v).eq_missing(
+                pl.when(first).then(pl.col(f"{v}__m")).otherwise(pl.col(v).shift(1).over(key))
+            )
+            for v in vals
+        ]
+    )
+    nw = nw.filter(~same_as_prev).with_columns(pl.int_range(pl.len()).over(key).alias("__k"))
+    new_version = pl.col("__k") + pl.max_horizontal(
+        pl.col("__cmaxv") + 1,
+        (pl.col("version").cast(pl.Int64) - pl.col("__k")).cum_max().over(key),
+    )
+    nw = nw.with_columns(new_version.alias("__nv"))
+    moved = pl.col("__nv") != pl.col("version")
+    return nw.with_columns(
+        pl.col("__nv").cast(pl.Int16).alias("version"),
+        pl.when(moved)
+        .then(pl.col("quality") | int(QualityFlag.RESTATED))
+        .otherwise(pl.col("quality"))
+        .cast(pl.Int8)
+        .alias("quality"),
+    )
+
+
+def _older_rows(
+    old: pl.DataFrame, cold: pl.DataFrame, spec: TableSpec, columns: list[str]
+) -> pl.DataFrame:
+    """Rows not newer than their cold history: dedupe by version, twins, or conflict."""
+    key, vals = list(spec.key), list(spec.values)
+    on = [*key, "version"]
+    old = old.select(columns)
     have = (
         cold.group_by(on)
         .agg([pl.col(v).last().alias(f"{v}__c") for v in vals])
         .join(cold.group_by(on).agg(pl.col("ingested_at_ns").min().alias("__cing")), on=on)
     )
-    j = idx.join(have, on=on, how="left", maintain_order="left")
+    j = old.join(have, on=on, how="left", maintain_order="left")
     present = pl.col("__cing").is_not_null()
     same = pl.all_horizontal([pl.col(v).eq_missing(pl.col(f"{v}__c")) for v in vals])
     already = present & same & (pl.col("__cing") <= pl.col("ingested_at_ns"))
     pending = j.filter(~already.fill_null(False))
     # a re-versioned copy of the row may already be cold: same key, values and ingested_at_ns
-    twin = (
-        cold.select([*key, "version", "ingested_at_ns", *vals])
-        .rename({"version": "__vc", **{v: f"{v}__t" for v in vals}})
-    )  # fmt: skip
+    twin = cold.select([*key, "version", "ingested_at_ns", *vals]).rename(
+        {"version": "__vc", **{v: f"{v}__t" for v in vals}}
+    )
     twin_hit = (
         pending.select(["__i", *key, "version", "ingested_at_ns", *vals])
         .join(twin, on=[*key, "ingested_at_ns"], how="inner")
@@ -449,35 +517,9 @@ def plan_write(rows: pl.DataFrame, cold: pl.DataFrame, spec: TableSpec) -> pl.Da
         )["__i"]
     )
     pending = pending.filter(~pl.col("__i").is_in(twin_hit.implode()))
-    conflict = pending.filter(present & ~same)
-    out = pending.select(idx.columns).drop("__i")
-    if conflict.height == 0:
-        return out
-    stats = cold.group_by(key).agg(
-        pl.col("version").max().alias("__cmaxv"), pl.col("ingested_at_ns").max().alias("__cmaxi")
-    )
-    bad = pending.join(conflict.select(key).unique(), on=key, how="semi").join(
-        stats, on=key, how="left"
-    )
-    if (bad["ingested_at_ns"] <= bad["__cmaxi"]).any():
+    if pending.filter(present & ~same).height:
         raise TieringConflict("same key and version as a cold row with other values, not newer")
-    rest = pending.join(conflict.select(key).unique(), on=key, how="anti").select(idx.columns)
-    rebased = (
-        bad.sort([*key, "version", "ingested_at_ns"])
-        .with_columns(
-            (
-                pl.max_horizontal(pl.col("__cmaxv"), pl.col("version").max().over(key))
-                + pl.int_range(pl.len()).over(key)
-                + 1
-            ).alias("__nv")
-        )
-        .with_columns(
-            pl.col("__nv").cast(pl.Int16).alias("version"),
-            (pl.col("quality") | int(QualityFlag.RESTATED)).cast(pl.Int8).alias("quality"),
-        )
-        .select(idx.columns)
-    )
-    return pl.concat([rest, rebased]).sort([*key, "version"]).drop("__i")
+    return pending.select(columns)
 
 
 def _load_manifest(
@@ -513,17 +555,41 @@ def _entry(path: str, data: bytes) -> dict[str, Any]:  # JSON-shaped
     }
 
 
+def listed_sizes(store: ObjectStore, prefix: str) -> dict[str, int] | None:
+    """Byte size of every blob under ``prefix`` as the store lists it (``None``: store unknown)."""
+    if isinstance(store, LocalStore):
+        return {p: store.root.joinpath(p).stat().st_size for p in store.list(prefix)}
+    if isinstance(store, AzureBlobStore):
+        container, name = layout.split_container(prefix)
+        client = store.service.get_container_client(container)
+        return {f"{container}/{b.name}": int(b.size) for b in client.list_blobs(name)}
+    return None
+
+
+def _fresh(entry: dict[str, Any] | None, path: str, sizes: dict[str, int] | None) -> bool:
+    """A manifest entry is only trusted if its recorded size is the listed size of the part."""
+    return entry is not None and (sizes is None or sizes.get(path) == entry.get("bytes"))
+
+
 def overlapping_parts(  # noqa: PLR0917
     store: ObjectStore, dataset: str, iid: str, year: int, month: int, window: tuple[int, int]
 ) -> list[str]:
-    """Parts whose manifest min/max overlaps ``[lo, hi)``; unlisted parts are inspected once."""
+    """Parts whose manifest min/max overlaps ``[lo, hi)``.
+
+    A manifest entry whose ``bytes`` differ from the listed size (stale after a replaced part) is
+    ignored and the footer is read instead, as for parts the manifest does not list.
+    """
     paths = part_paths(store, dataset, iid, year, month)
     if not paths:
         return []
     _, known = _load_manifest(store, layout.md_manifest_path(dataset, iid, year, month))
+    sizes = listed_sizes(store, layout.md_partition_prefix(dataset, iid, year, month))
     out = []
     for path in paths:
-        e = known.get(path.rsplit("/", 1)[1]) or _entry(path, store.read(path))
+        e = known.get(path.rsplit("/", 1)[1])
+        if not _fresh(e, path, sizes):
+            e = _entry(path, store.read(path))
+        assert e is not None  # noqa: S101 - narrowing for mypy
         lo, hi = e["min_ts_ns"], e["max_ts_ns"]
         if lo is None or (lo < window[1] and hi >= window[0]):
             out.append(path)
@@ -548,10 +614,11 @@ def update_manifest(  # noqa: PLR0917
     mpath = layout.md_manifest_path(dataset, iid, year, month)
     old_bytes, old = _load_manifest(store, mpath)
     known = known or {}
+    sizes = listed_sizes(store, layout.md_partition_prefix(dataset, iid, year, month))
     entries: list[dict[str, Any]] = []  # parsed JSON
     for path in paths if paths is not None else part_paths(store, dataset, iid, year, month):
         name = path.rsplit("/", 1)[1]
-        if name in old and path not in known:
+        if path not in known and _fresh(old.get(name), path, sizes):
             entries.append(old[name])
         else:
             entries.append(_entry(path, known[path] if path in known else store.read(path)))

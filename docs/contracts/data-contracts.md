@@ -189,10 +189,13 @@ instead of `ts_ns` (`md.bar_baseline`), to show the epoch + compression gain hon
 - **Tiering and compaction (ADR-0014).** Moving rows to Parquet never drops a version or an
   `ingested_at_ns`. Equal rows (same key, version, values) may exist more than once, with different
   `ingested_at_ns`; readers treat them as one, and compaction keeps the earliest. A restatement
-  that reaches SQL after its key was migrated is filed there as `version = 1`; tiering re-versions it
-  to `max(cold, hot) + 1` with `RESTATED` (same rule as the cold write path of ingest), so versions
-  stay monotone across the tiers. The same key and version with different values and no newer
-  `ingested_at_ns` is an error, never a silent overwrite.
+  that reaches SQL after its key was migrated is filed there as `version = 1`; if it is newer than
+  the key's whole cold history, tiering compares it with the cold row of the max version (same rule
+  as the cold write path of ingest): an equal value adds nothing, any other value (including a
+  revert to an earlier one) becomes `max + 1` with `RESTATED`, so versions stay monotone across the
+  tiers. Until that run the reader sees the tie of SQL `v1` and cold `v1`; equal-version duplicates
+  resolve to the copy with the minimum `ingested_at_ns`. The same key and version with different
+  values and no newer `ingested_at_ns` is an error, never a silent overwrite.
 
 ## 8. Versioning rules
 

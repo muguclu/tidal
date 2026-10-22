@@ -378,6 +378,113 @@ def test_plan_write_reversions_newer_rows_that_clash_with_cold() -> None:
     ).to_series().to_list() == [9]
 
 
+def test_plan_write_compares_a_newer_row_with_the_latest_cold_value() -> None:
+    cold = _frame([(1, 1, 1.0, 1), (1, 2, 2.0, 2)])  # A=1.0 then B=2.0
+    assert plan_write(_frame([(1, 1, 2.0, 10)]), cold, BARS).height == 0  # equals the latest
+    revert = plan_write(_frame([(1, 1, 1.0, 10)]), cold, BARS)  # reverts to A: a new version
+    assert revert.select("version", "close", "quality").rows() == [(3, 1.0, 8)]
+    seq = plan_write(_frame([(1, 1, 1.0, 10), (1, 2, 1.0, 11), (1, 3, 5.0, 12)]), cold, BARS)
+    assert seq.select("version", "close").rows() == [(3, 1.0), (4, 5.0)]  # the repeat adds nothing
+    # a newer row that already follows the cold history keeps its version
+    assert plan_write(_frame([(1, 3, 9.0, 10)]), cold, BARS)["version"].to_list() == [3]
+
+
+def test_plan_write_converges_after_a_part_of_a_reversioned_family_was_written() -> None:
+    cold = _frame([(1, 1, 1.0, 1), (1, 2, 2.0, 2), (1, 3, 7.0, 10)])  # hot v1 (7.0) is cold as v3
+    out = plan_write(_frame([(1, 1, 7.0, 10), (1, 2, 8.0, 11)]), cold, BARS)
+    assert out.select("version", "close").rows() == [(4, 8.0)]
+
+
+def test_a_restatement_that_reverts_to_an_earlier_cold_value_is_a_new_version(
+    migrated: Env, tmp_path: Path
+) -> None:
+    raw = qs.raw_rows(migrated.baseline, sr.bar_hot).filter(
+        (pl.col("interval_code") == 4) & (pl.col("ts_ns") < TARGET)
+    )
+    two = raw.filter(pl.col("version") == 2).filter(pl.col("ts_ns").is_in(raw["ts_ns"].unique()))
+    ts = int(two["ts_ns"][0])
+    a = raw.filter((pl.col("ts_ns") == ts) & (pl.col("version") == 1))
+    first, second = float(a["close"][0]), float(two["close"][0])
+    assert first != second
+    when = qs.LATE_INGEST + 10**15
+    vol = np.array([np.nan if a["volume"][0] is None else a["volume"][0]])
+    assert (
+        migrated.repo.upsert_bars(qs.bars_table(np.array([ts]), np.array([first]), vol, when)) == 1
+    )
+    res = bars_result(migrate(migrated))
+    assert not res.errors and (res.rows_moved, res.rows_deduped) == (1, 0)
+    reader = UnifiedReader(
+        migrated.repo, duck.local_session(migrated.root), FixedClock(NOW), SETTINGS
+    )
+    latest = run(reader.read_bars(qs.WTI, Interval.D1, ts, ts + 1))
+    assert [b.close for b in latest.rows] == [first] and latest.rows[0].version == 3
+    before = run(reader.read_bars(qs.WTI, Interval.D1, ts, ts + 1, as_of_ns=when - 1))
+    after = run(reader.read_bars(qs.WTI, Interval.D1, ts, ts + 1, as_of_ns=when))
+    assert [b.close for b in before.rows] == [second] and [b.close for b in after.rows] == [first]
+    settled = state(migrated)
+    migrate(migrated)
+    assert state(migrated) == settled
+
+
+def test_a_key_split_over_rolled_parts_survives_a_crash_between_the_parts(
+    env: Env, baseline: sr.SqlRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = write_partition
+
+    def small_parts(*a: Any, **k: Any) -> list[str]:
+        return real(*a, **{**k, "max_part_rows": 150})
+
+    monkeypatch.setattr(tiering, "write_partition", small_parts)
+    twin = Env(tmp_path / "twin", baseline)
+    migrate(twin, tables=("tick_hot",))
+    assert len(tiering.part_paths(twin.store, "ticks", qs.WTI, 2020, 1)) >= 4
+    puts = {"n": 0}
+    real_put = env.store.put_new
+
+    def put_new(path: str, local: Path) -> None:
+        if path.endswith(".parquet"):
+            puts["n"] += 1
+            if puts["n"] == 3:  # the third rolled part never arrives
+                raise Boom
+        real_put(path, local)
+
+    monkeypatch.setattr(env.store, "put_new", put_new)
+    with pytest.raises(Boom):
+        migrate(env, tables=("tick_hot",))
+    monkeypatch.setattr(env.store, "put_new", real_put)
+    migrate(env, tables=("tick_hot",))
+    assert state(env, "ticks") == state(twin, "ticks")  # every key and version exactly once
+
+
+def test_overlapping_parts_distrusts_manifest_entries_with_a_stale_size(migrated: Env) -> None:
+    mpath = layout.md_manifest_path("bars_1d", qs.WTI, 2019, 0)
+    man = json.loads(migrated.store.read(mpath))
+    window = (T0 + 40 * DAY, T0 + 50 * DAY)
+    real = tiering.overlapping_parts(migrated.store, "bars_1d", qs.WTI, 2019, 0, window)
+    assert real
+
+    def rewrite(bytes_ok: bool) -> list[str]:
+        lying = json.loads(json.dumps(man))
+        for e in lying["parts"]:
+            e["min_ts_ns"] = e["max_ts_ns"] = T0 + 10_000 * DAY  # lies about the bounds
+            e["bytes"] = e["bytes"] if bytes_ok else e["bytes"] + 1
+        (migrated.root / mpath).write_text(json.dumps(lying))
+        return tiering.overlapping_parts(migrated.store, "bars_1d", qs.WTI, 2019, 0, window)
+
+    assert rewrite(bytes_ok=True) == []  # size matches: the manifest is trusted
+    assert rewrite(bytes_ok=False) == real  # stale size: ignored, the footers are read
+
+
+def test_resolve_versions_picks_the_earliest_ingested_copy_in_any_order() -> None:
+    from tidal.query.reader import resolve_versions
+
+    rows = pl.DataFrame({"ts_ns": [1, 1, 1], "version": [2, 2, 1], "close": [5.0, 5.0, 3.0],
+                         "ingested_at_ns": [9, 4, 1]})  # fmt: skip
+    for frame in (rows, rows.reverse()):
+        out = resolve_versions(frame, ["ts_ns"])
+        assert out.select("version", "ingested_at_ns").rows() == [(2, 4)]
+
+
 def test_plan_write_raises_when_the_clashing_hot_row_is_not_newer() -> None:
     cold = _frame([(1, 1, 1.0, 20)])
     with pytest.raises(TieringConflict):

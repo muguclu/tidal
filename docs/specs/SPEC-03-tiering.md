@@ -20,10 +20,12 @@ Per table (`md.bar_hot`, `md.tick_hot`):
    would hide late restatements): rows that reach SQL below the watermark are swept the same way
    into a new `part-`. Daily bars append one part per month to their yearly partition (storage-layout §2).
 4. Plan against cold: read the existing cold rows of the month once (parts whose manifest min/max
-   overlaps) and drop what is already there. Idempotency is by **content**, not by a marker; rules
-   (ADR-0014): a hot row is already cold iff cold has the same key, version and values with
-   `cold.ingested_at_ns ≤ hot.ingested_at_ns`; same key + version with other values and a newer hot
-   row is **re-versioned** to `max(cold, hot) + 1` with `RESTATED`; any other mismatch is a
+   overlaps; a manifest entry whose recorded size differs from the listed size is ignored) and drop
+   what is already there. Idempotency is by **content**, not by a marker; rules (ADR-0014): hot
+   rows newer than the key's whole cold history are compared with the cold row of the max version
+   (equal: only deleted; different, also a revert to an earlier value: new version `max + 1`,
+   `RESTATED`); other hot rows are already cold iff cold has the same key, version and values with
+   `cold.ingested_at_ns ≤ hot.ingested_at_ns`; any other same key + version mismatch is a
    `TieringConflict` (nothing deleted, watermark unchanged).
 5. Write the planned rows of the month in **one** `parquet_writer` call (rolls at `MAX_PART_ROWS`).
 6. **Verify**: re-read the written parts, compare row count + checksum of (`ts_ns`, `close|price`)
@@ -36,6 +38,10 @@ Per table (`md.bar_hot`, `md.tick_hot`):
    rolled back). Then advance the watermark to `max(old, target)` in its own transaction.
 9. Emit metrics: rows moved / deduped / swept, bytes written, SQL space (`sp_spaceused` without
    `@updateusage`; `None` with a warning when the login may not run it).
+
+**Frozen clock.** With a frozen `TIDAL_CLOCK__NOW` a restatement of a migrated key is stamped with the
+same `ingested_at_ns` as the cold history, is not "newer", and therefore ends as a `TieringConflict`.
+Demos on a frozen clock must not restate migrated keys.
 
 `--dry-run` (`tiering.job/v1.dry_run`) runs 1–4 and reports; it changes nothing.
 

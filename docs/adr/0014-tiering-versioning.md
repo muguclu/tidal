@@ -33,24 +33,34 @@ value => `latest + 1`, `RESTATED`). Tiering must not behave differently from the
    (case 2). Rejected.
 
 ## Decision
-Option 2, with `ingested_at_ns` as the tie-breaker. For a hot row `h` and the cold rows of the same
-key (`ts_ns` [+ `side`]):
+Option 2, with `ingested_at_ns` as the tie-breaker. For the hot rows of one key (`ts_ns` [+ `side`])
+and the cold rows of the same key:
 
-* **Already cold** (the hot row is only deleted) iff cold holds the same key, version and values and
-  `cold.ingested_at_ns <= h.ingested_at_ns` (the earliest ingestion of equal rows counts). A cold
-  copy ingested later does not count: the hot row is written too, as a second row with the same key
-  and version. Readers resolve them to the same values; `as_of` keeps seeing the earlier one.
-* **Re-versioned copy already cold**: same key, values and `ingested_at_ns` at a version `>=` the hot
-  version. This is how a resumed run recognises rows it re-versioned before the crash.
-* **Same key and version, other values, and `h.ingested_at_ns` greater than every cold
-  `ingested_at_ns` of the key**: the hot rows of the key (ordered by version, `ingested_at_ns`) are
-  written as `max(cold max version, hot max version) + 1, +2, ...` with the `RESTATED` flag set.
-  `ingested_at_ns` and values are untouched.
-* **Any other same key + version mismatch** raises `TieringConflict`; nothing is written or deleted
-  for that series and the watermark stays.
+* **Hot rows newer than the key's whole cold history** (`h.ingested_at_ns` greater than every cold
+  `ingested_at_ns` of the key) are taken in order (`version`, `ingested_at_ns`) and each is compared
+  with the cold row of the **maximum version**, then with the previous hot row, exactly like the
+  cold write path of ingest (`_plan_cold`). An equal value adds nothing (the row is only deleted
+  from SQL). A different value, including a **revert to an earlier value** (A, B, then A again), is
+  written with a version above everything before it: its own version if that is already higher,
+  else `max + 1`, `max + 2`, ..., with `RESTATED` set when the version moved. `ingested_at_ns`
+  and values are untouched. This rule takes precedence over the same-version rule below.
+* **All other hot rows** (not newer than the cold history) keep their version:
+  * *already cold*, so only deleted, iff cold has the same key, version and values with
+    `cold.ingested_at_ns <= h.ingested_at_ns`. A cold copy ingested **later** does not count: the
+    hot row is written too, as a second row with the same key and version;
+  * *re-versioned twin already cold* (same key, values and `ingested_at_ns` at a version `>=`):
+    dropped; this is how a resumed run recognises its own earlier work;
+  * same key and version with other values: `TieringConflict`; nothing is written or deleted for
+    that series and the watermark stays.
 * **Compaction** collapses rows with equal key, version and values to the one with the **minimum**
   `ingested_at_ns`, and raises `TieringConflict` for the same key and version with different values
   (no silent loss).
+* **Readers** resolve equal-version duplicates to the copy with the minimum `ingested_at_ns`
+  (`resolve_versions`), independent of the order of the tiers.
+* **Rolled parts**: a month larger than `MAX_PART_ROWS` rolls into several parts and the rolling may
+  fall inside one key's versions. This is safe because planning is sequence based: after a crash
+  that left a prefix of the key in cold, the remaining hot rows are compared with that prefix and
+  the re-run converges (tested).
 
 `as_of = T` (data-contracts §7) is unchanged: per key, the max version among rows with
 `ingested_at_ns <= T`. Duplicated equal rows with different `ingested_at_ns` are therefore harmless
@@ -58,6 +68,10 @@ and are exactly what keeps early `as_of` reads correct until compaction merges t
 earliest).
 
 ## Consequences
+* **Transient before tiering runs**: a restatement of a migrated key sits in SQL as `version = 1`
+  and ties with cold `version = 1`; until the next tiering run the reader serves the cold value (the
+  tie resolves to the earlier ingestion). Once migrated it becomes the newest version. Do not rely
+  on a restatement being visible before the next run.
 * Restatements of migrated history flow into cold without manual work; versions stay monotone.
 * A re-versioned row's version differs from the version SQL gave it. Nothing else references the SQL
   version (it is deleted), but the number is not stable between SQL and cold: document in
