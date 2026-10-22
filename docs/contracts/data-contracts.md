@@ -45,7 +45,10 @@ Stored in Azure SQL `ref.instrument` (with a surrogate `instrument_key SMALLINT`
 | `SYN.EURUSD.TICK` | generator | fx | fx | USD/EUR | USD | America/New_York | tick |
 
 `FUTn` = EIA "contract n" series (n-th nearby, no roll adjustment → `kind=future`, `roll_method=null`).
-They make M1–M2 calendar spreads possible from free data. S scale uses the first three `SYN.*` rows.
+They make M1–M2 calendar spreads possible from free data.
+**EIA stopped publishing NYMEX futures after 2024-04-05** (EIA API dashboard, `petroleum/pri/fut`, checked 2026-10-22):
+`FUT1…FUT4` history ends on that date. They are backfilled once, never enter the hot window, and the daily ingest
+skips them (`last_ts_ns` frozen). Calendar-spread backtests therefore run on 1983/1994 → 2024-04-05. S scale uses the first three `SYN.*` rows.
 `description` (not in this table) is generated as `<source> <series or name>, <kind>, <unit>`.
 EIA series IDs are verified by T-102 against the live API; a mismatch is a CHANGE-REQUESTS entry.
 
