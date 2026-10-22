@@ -99,7 +99,10 @@ modelled in the cost model.
   and both tiers in full is what keeps reads correct mid-migration (Parquet is written before the SQL delete,
   the watermark advances last) and picks up late restatements written to SQL below the watermark (T-208).
   The watermark only decides the tier label.
-- Returns tier used (`hot|cold|mixed`) for the `X-Tidal-Tier` header.
+- Returns tier used (`hot|cold|mixed`) for the `X-Tidal-Tier` header. Streaming reads (`stream_*`) carry two tiers:
+  `RowStream.tier` is the up-front label of the requested range (arrow/parquet headers are sent before any data), and
+  the stream's `observed` tier is `mixed` as soon as a slice held SQL rows below the watermark or Parquet rows at or
+  above it. JSON paging reads the observed tier after its page is read; arrow/parquet keep the up-front label.
 
 ## 6. Acceptance criteria
 - [ ] After migration, SQL contains only rows inside the hot window rounded down to month start; Parquet + SQL union = original (row-for-row, hash).

@@ -15,7 +15,14 @@ CI fails if FastAPI's generated OpenAPI differs from it (`oasdiff breaking`).
   `correlation_id`.
 - Every response carries `X-Correlation-Id`. Every successful (2xx) market-data response (`/bars`,
   `/ticks`, `/latest`, `/spreads`) also carries `X-Tidal-Tier` (`hot`, `cold`, `mixed`) — used in FinOps to attribute
-  query cost to tiers.
+  query cost to tiers. For `format=json` the tier is the one actually observed while reading the page (a late
+  restatement in SQL below the migration watermark yields `mixed`); for `format=arrow|parquet` the header is sent
+  before any data and is the label of the requested range.
+- **Streaming failures.** `format=arrow|parquet` responses are chunked and the status line is sent with the first
+  batch, so a failure mid-stream cannot change the status. The server then aborts the connection without the Arrow
+  end-of-stream marker / Parquet footer. Clients **must treat a transport error (e.g. an incomplete chunked read)
+  as a failed request**: Arrow IPC readers accept a stream that simply ends, so a truncated body can otherwise
+  look complete.
 
 ### 1.1 Roles (Entra app roles, cumulative)
 `Tidal.Reader` ⊂ `Tidal.Trader` ⊂ `Tidal.Quant`; `Tidal.Admin` is separate and grants only `/admin/*`
