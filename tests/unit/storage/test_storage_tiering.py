@@ -140,13 +140,8 @@ def test_parts_are_tagged_and_manifest_describes_them(ref: Env) -> None:
     assert parts
     for path in parts:
         part = layout.parse_md_path(path)
-        assert ref.tagger.get_tags(path) == {
-            "dataset": part.dataset,
-            "instrument": qs.WTI,
-            "data_year": f"{part.year:04d}",
-            "age_band": "hot",  # 2019/2020 relative to the 2020 clock: < 3 years
-            "compacted": "false",
-        }
+        want = {"age_band": "hot", "compacted": "false"} if part.dataset == "ticks" else {}
+        assert ref.tagger.get_tags(path) == want  # 2020 clock; only ticks are tagged (ADR-0015)
     manifests = [p for p in ref.store.list("marketdata/v1/") if p.endswith("_manifest.json")]
     assert manifests
     for path in manifests:

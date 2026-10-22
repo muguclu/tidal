@@ -1,15 +1,17 @@
 """Blob index tags of market-data parts and the yearly ``age_band`` re-tagging (SPEC-03 §3).
 
 Tag names and values are the contract of storage-layout §4 and of the Terraform lifecycle filters
-(T-207), so they are spelled once here:
+(T-207), so they are spelled once here (ADR-0015: two tags, tick parts only):
 
 ==============  ==============================================================
-``dataset``     ``ticks`` | ``bars_1s`` | ``bars_1m`` | ``bars_1h`` | ``bars_1d``
-``instrument``  ``instrument_id`` (e.g. ``EIA.WTI.SPOT``)
-``data_year``   ``YYYY`` of the partition
 ``age_band``    ``hot`` (< 3 y) | ``cool`` (3-10 y) | ``cold`` (> 10 y)
 ``compacted``   ``true`` | ``false``
 ==============  ==============================================================
+
+Dataset, instrument and year are derivable from the path (``layout.parse_md_path``) and are not
+written. Only datasets in :data:`TAGGED_DATASETS` carry tags; the others stay untagged, so no
+lifecycle rule matches them and they stay Hot. ``retag`` removes the retired tags and all tags of
+untagged datasets from blobs written by earlier versions.
 
 ``age_band`` depends on *data age* (``clock year - data_year``), not on upload time, because a
 backfill writes 20-year-old data today. Taggers are injected: :class:`AzureTagger` wraps a
@@ -37,9 +39,7 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
-TAG_DATASET: Final = "dataset"
-TAG_INSTRUMENT: Final = "instrument"
-TAG_DATA_YEAR: Final = "data_year"
+TAGGED_DATASETS: Final[tuple[str, ...]] = ("ticks",)  # ADR-0015 decision rule
 TAG_AGE_BAND: Final = "age_band"
 TAG_COMPACTED: Final = "compacted"
 HOT_YEARS: Final = 3  # age < 3 years -> hot
@@ -70,13 +70,20 @@ def age_band(data_year: int, now_year: int) -> str:
     return "cool" if age <= COOL_YEARS else "cold"
 
 
+def is_tagged(dataset: str) -> bool:
+    """Whether parts of ``dataset`` carry blob index tags (ADR-0015)."""
+    return dataset in TAGGED_DATASETS
+
+
 def desired_tags(path: str, now_year: int, *, compacted: bool = False) -> dict[str, str]:
-    """The full tag set of a part blob at ``path`` as of calendar year ``now_year``."""
+    """The full tag set of a part blob at ``path`` as of calendar year ``now_year``.
+
+    Empty for datasets outside :data:`TAGGED_DATASETS`. The year comes from the path.
+    """
     part = layout.parse_md_path(path)
+    if not is_tagged(part.dataset):
+        return {}
     return {
-        TAG_DATASET: part.dataset,
-        TAG_INSTRUMENT: part.instrument_id,
-        TAG_DATA_YEAR: f"{part.year:04d}",
         TAG_AGE_BAND: age_band(part.year, now_year),
         TAG_COMPACTED: "true" if compacted else "false",
     }
@@ -86,6 +93,8 @@ def ensure_tags(
     tagger: BlobTagger, path: str, now_year: int, *, compacted: bool | None = None
 ) -> bool:
     """Set the desired tags if they differ; returns whether a write happened.
+
+    Blobs of untagged datasets get an empty tag set (a write only if they still carry tags).
 
     ``compacted=None`` keeps the blob's current flag (default ``false``), so re-tagging by age
     never un-marks a compacted file.
@@ -188,6 +197,9 @@ def retag(
     datasets: tuple[str, ...] = layout.DATASETS,
 ) -> RetagResult:
     """Recompute ``age_band`` (and complete missing tags) of every part of ``datasets``.
+
+    Also migrates blobs tagged by earlier versions: the retired ``dataset``/``instrument``/
+    ``data_year`` tags and every tag of datasets outside ``TAGGED_DATASETS`` are removed.
 
     Idempotent: a blob whose tags already match is not written. Run once a year (Jan 2) so the
     lifecycle rules (T-207) move data that crossed a band boundary. ``compacted`` is preserved.
