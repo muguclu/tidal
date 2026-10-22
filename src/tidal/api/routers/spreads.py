@@ -11,7 +11,6 @@ from tidal.api.errors import problem_docs
 from tidal.api.pagination import MAX_LIMIT
 from tidal.api.routers.bars import (
     TimeParam,
-    check_bars_range,
     market_data_ok,
     parse_range,
     tier_of,
@@ -21,6 +20,7 @@ from tidal.common.errors import RangeTooLarge, ValidationFailed
 from tidal.contracts.instruments import InstrumentId
 from tidal.contracts.models import SpreadPoint, SpreadResponse
 from tidal.contracts.schemas import Interval
+from tidal.query.limits import check_bars_range
 from tidal.query.protocols import Reader
 
 # The contract has no `limit` parameter on /spreads (adding one is a contract change), so the
