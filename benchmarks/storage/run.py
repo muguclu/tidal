@@ -132,11 +132,13 @@ def run_benchmark(
             if not queries:
                 continue
             fmt = factory(tmp / fid)
-            fmt.load(ds)
-            at_rest = fmt.size_bytes()
-            for wid in queries:
-                rows += _run_query(spec, ds, fmt, wid, runs=runs, at_rest=at_rest)
-            fmt.teardown()
+            try:  # a failed load/query must not leak tables or containers
+                fmt.load(ds)
+                at_rest = fmt.size_bytes()
+                for wid in queries:
+                    rows += _run_query(spec, ds, fmt, wid, runs=runs, at_rest=at_rest)
+            finally:
+                fmt.teardown()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     env = env_info()
@@ -159,12 +161,14 @@ def _run_w1(
     samples: list[tuple[float, float]] = []
     for r in range(runs):
         fmt = factory(work / str(r))
-        wall, cpu, stats = _time(lambda f=fmt: f.load(sub))  # type: ignore[misc]
-        if stats.rows != want:
-            raise OracleMismatchError(f"W1 {fmt.id}: wrote {stats.rows} rows, expected {want}")
-        samples.append((wall, cpu))
-        size = fmt.size_bytes()
-        fmt.teardown()
+        try:
+            wall, cpu, stats = _time(lambda f=fmt: f.load(sub))  # type: ignore[misc]
+            if stats.rows != want:
+                raise OracleMismatchError(f"W1 {fmt.id}: wrote {stats.rows} rows, expected {want}")
+            samples.append((wall, cpu))
+            size = fmt.size_bytes()
+        finally:
+            fmt.teardown()
     return _row(
         spec, fmt, wl="W1", cache="n/a", samples=samples, rows=int(want), at_rest=size, res=None
     )
