@@ -52,6 +52,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | T-124 | Module: servicebus (queues per contract) | T-120 | `modules/servicebus/**` | queue settings = messaging-contract §1 | done |
 | T-125 | Module: budget + action group | T-120 | `modules/budget/**` | €60, 50/80/100 % | done |
 | T-127 | iac.yml workflow | T-008 | `.github/workflows/iac.yml` | fmt/validate/tflint/checkov on PRs touching `infra/**`; plan step skipped until `NEEDS-CLOUD` OIDC exists | done |
+| T-128 | Integration test CI job | platform-engineer | T-127 | `.github/workflows/integration.yml`, `docs/runbooks/integration-tests.md` | `pytest -m integration` on PR (path-filtered), dispatch and nightly against SQL Server 2022 CU27 + Azurite 3.37.0; advisory, not a required check; junit on failure | done |
 | T-126 | envs/dev composition + first plan | T-121…T-125 | `infra/terraform/envs/dev/**`, `docs/finops/cost-model.md` | `terraform validate` clean; `NEEDS-CLOUD`: plan clean, human applies, outputs → config | done |
 
 ### Lane C — api & local stack
