@@ -221,16 +221,11 @@ def test_migration_on_sql_server_and_azurite_keeps_every_row_and_tags_blobs(stac
     assert paths
     for path in paths:
         part = layout.parse_md_path(path)
-        assert stack.tagger.get_tags(path) == {
-            "dataset": part.dataset,
-            "instrument": qs.WTI,
-            "data_year": f"{part.year:04d}",
-            "age_band": "hot",
-            "compacted": "false",
-        }
+        want = {"age_band": "hot", "compacted": "false"} if part.dataset == "ticks" else {}
+        assert stack.tagger.get_tags(path) == want  # ADR-0015: ticks only, two tags
     # find-by-tag is how lifecycle rules select blobs
     hits = list(stack.service.find_blobs_by_tags("\"age_band\" = 'hot'"))
-    assert len(hits) == len(paths)
+    assert len(hits) == sum("/ticks/" in p for p in paths) > 0
 
 
 def test_reader_over_sql_server_and_azurite_equals_baseline_after_migration(stack: Stack) -> None:
@@ -307,16 +302,36 @@ def test_compaction_and_retag_on_azurite(stack: Stack) -> None:
     res = compact(stack.engine, stack.store, stack.tagger, stack.clock, "bars_1d")
     assert not res.errors and res.merged >= 1
     (only,) = tiering.part_paths(stack.store, "bars_1d", qs.WTI, 2019, 0)
-    assert stack.tagger.get_tags(only)["compacted"] == "true"
+    assert stack.tagger.get_tags(only) == {}  # bars are untagged (ADR-0015)
     assert sorted(set(cold_rows(stack.store))) == before
+    # Fixture assumption: the small baseline holds ticks only in 2020 starting 2020-01-30
+    # (qs.TICK0), so partition 2020-01 exists; every tick part is 2020 data.
+    ticks = tiering.part_paths(stack.store, "ticks", qs.WTI, 2020, 1)
+    assert ticks
+    res = compact(stack.engine, stack.store, stack.tagger, stack.clock, "ticks")
+    assert not res.errors
+    (tick,) = tiering.part_paths(stack.store, "ticks", qs.WTI, 2020, 1)
+    assert stack.tagger.get_tags(tick) == {"age_band": "hot", "compacted": "true"}
+    # blobs tagged by the earlier five-tag design are migrated by retag
+    stack.tagger.set_tags(
+        tick,
+        {"dataset": "ticks", "instrument": qs.WTI, "data_year": "2020",
+         "age_band": "hot", "compacted": "true"},
+    )  # fmt: skip
+    stack.tagger.set_tags(only, {"dataset": "bars_1d", "age_band": "hot", "compacted": "true"})
     later = FixedClock(NOW + 4 * 366 * 86_400 * 10**9)
     moved = retag(stack.store, stack.tagger, later, stack.engine)
-    assert moved.changed == moved.blobs > 0
-    assert stack.tagger.get_tags(only) == {
-        "dataset": "bars_1d", "instrument": qs.WTI, "data_year": "2019",
-        "age_band": "cool", "compacted": "true",
-    }  # fmt: skip
+    all_ticks = [p for p in stack.store.list("marketdata/v1/ticks/") if p.endswith(".parquet")]
+    assert all(layout.parse_md_path(p).year == 2020 for p in all_ticks)
+    # every tick part ages hot -> cool (2020 vs clock year 2024); the legacy 2020-01 tick part also
+    # drops its retired tags (same single write); the legacy bars part is cleared; other bars
+    # parts are untagged and unchanged.
+    assert moved.changed == len(all_ticks) + 1
+    assert stack.tagger.get_tags(only) == {}
+    assert stack.tagger.get_tags(tick) == {"age_band": "cool", "compacted": "true"}
     assert retag(stack.store, stack.tagger, later, stack.engine).changed == 0
+    again = compact(stack.engine, stack.store, stack.tagger, stack.clock, "ticks")
+    assert again.skipped == again.partitions > 0  # single compacted parts are not read
 
 
 def test_delete_chunk_mismatch_rolls_back_on_sql_server(stack: Stack) -> None:

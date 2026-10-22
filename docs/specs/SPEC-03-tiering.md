@@ -30,7 +30,7 @@ Per table (`md.bar_hot`, `md.tick_hot`):
 5. Write the planned rows of the month in **one** `parquet_writer` call (rolls at `MAX_PART_ROWS`).
 6. **Verify**: re-read the written parts, compare row count + checksum of (`ts_ns`, `close|price`)
    with the planned rows. On a mismatch delete the parts just written, then fail.
-7. Set blob index tags (`age_band` computed from `data_year`) and rebuild `_manifest.json`
+7. Set blob index tags (`age_band` from the path's year, `compacted`; `ticks` only, ADR-0015) and rebuild `_manifest.json`
    (derived, replaceable, storage-layout §2). Tags are set **before** the delete so that no state
    exists with deleted SQL rows and untagged parts.
 8. Delete the month from SQL in chunks of 50k rows, one short transaction per chunk, each bounded by
@@ -55,7 +55,10 @@ the manifest delete and put.
 ## 3. Yearly re-tagging
 `tidal tiering retag` recomputes `age_band` for all blobs once per year (Jan 2) so lifecycle rules move
 data that "aged" across a band boundary. It runs per dataset under the same table lock as the
-migration (a busy dataset is skipped and reported) and preserves `compacted`.
+migration (a busy dataset is skipped and reported) and preserves `compacted`. Only datasets in
+`retag.TAGGED_DATASETS` (default `ticks`, ADR-0015) are tagged, with `age_band` and `compacted` only; the
+year comes from the path. Retag also removes the retired `dataset`/`instrument`/`data_year` tags and all
+tags of untagged datasets (migration of blobs written by earlier versions). Idempotent.
 
 ## 3.1 Compaction
 `tidal tiering compact --dataset bars_1d` merges the parts of a partition into one file (several if
@@ -66,9 +69,11 @@ same way as migration: nothing is deleted before the merged parts are verified, 
 the complete set of output parts and resumes at tag + delete.
 
 Compaction runs **yearly for every dataset** (`ticks`, `bars_1s`, `bars_1m`, `bars_1h`, `bars_1d`)
-immediately after retag, in the same scheduled job (T-309). Every kept part, including a partition that
-already had a single part, ends with `compacted=true`; that tag is what makes it eligible for the
-lifecycle tiering of §4.
+immediately after retag, in the same scheduled job (T-309). For a tagged dataset (`ticks`) every kept
+part ends with `compacted=true`; that tag is what makes it eligible for the lifecycle tiering of §4. Untagged
+datasets are compacted (small-file control) but no tag call is made; they stay Hot. A partition that is
+already a single part is skipped without reading data: `compacted=true` (ticks), or a manifest listing
+exactly that one part (untagged datasets).
 
 ## 4. Lifecycle policy (Terraform `modules/storage`)
 
@@ -79,6 +84,9 @@ lifecycle tiering of §4.
 | raw | prefix `raw/` | Cool @ 30 d, Archive @ 180 d |
 | backtests | prefix `backtests/` | Cool @ 30 d, delete @ 365 d |
 | exports / bench | prefix | delete @ 14 / 30 d |
+
+Only `ticks` parts carry the tags (ADR-0015), so only tick data is tiered; `bars_*` stay Hot. A dataset joins
+when its measured average part size clears the 2-tag break-even (`docs/finops/deltas/T-207.md`).
 
 **Compaction guard.** md-cool and md-cold also require `compacted = true`. Compaction deletes the old
 parts of a partition after writing the merged one; a part moved to Cool/Cold before that would be billed

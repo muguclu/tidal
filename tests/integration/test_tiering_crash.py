@@ -699,6 +699,9 @@ MIGRATE_KILLS: Final = [
        ("before_delete", 1), ("before_delete", 6), ("between_delete_chunks", 1),
        ("between_delete_chunks", 6)] if FULL else []),
 ]  # fmt: skip
+# ADR-0015: ``before_tag`` is reached only by tagged datasets (ticks), i.e. after the bars have
+# been compacted; every other point fires first on bars_1d. The ``mark`` assertion in ``kill_run``
+# proves each point was reached.
 COMPACT_KILLS: Final = [
     ("before_write", 1), ("after_part_put", 2), ("after_write", 1), ("before_tag", 1),
     ("before_delete", 1), ("between_delete_chunks", 2), ("before_manifest", 1),
@@ -757,7 +760,10 @@ def test_kill_twice_in_a_row_then_rerun_equals_uninterrupted_run(
 # -- 2. a killed process's applock is released -----------------------------------------------------
 @pytest.mark.parametrize(("op", "point", "resource"), [
     ("migrate", "before_delete", "tiering:md.bar_hot"),
-    ("compact", "before_tag", "tiering:md.bar_hot"),
+    ("compact", "before_delete", "tiering:md.bar_hot"),
+    # ADR-0015: only ticks are tagged, so ``before_tag`` is reached on the tick dataset (lock
+    # md.tick_hot) after bars compaction has already released md.bar_hot
+    ("compact", "before_tag", "tiering:md.tick_hot"),
 ])  # fmt: skip
 def test_killed_session_releases_the_applock(
     world: World,

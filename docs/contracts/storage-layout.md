@@ -61,18 +61,24 @@ marketdata/v1/{dataset}/instrument={instrument_id}/year={YYYY}/month={MM}/part-{
 | sort order | `ts_ns` ascending, declared in `sorting_columns` metadata |
 | key-value metadata | `tidal.schema=TICK_V1`, `tidal.writer_version`, `tidal.source_hash` |
 
-## 4. Blob index tags (used for tiering & discovery)
+## 4. Blob index tags (used for tiering) (v1.2, ADR-0015)
+
+Minor bump (v1.2) because no deployed consumer queries the retired tags (grep of the code base; nothing is deployed yet).
+
+Two tags, written on parts of the `ticks` dataset only (ADR-0015; `retag.TAGGED_DATASETS`). Parts of
+`bars_*` and every `_manifest.json` are untagged and stay Hot.
 
 | Tag | Values |
 |---|---|
-| `dataset` | ticks, bars_1d, … |
-| `instrument` | instrument_id |
-| `data_year` | YYYY |
 | `age_band` | `hot` (< 3 y) · `cool` (3–10 y) · `cold` (> 10 y) — set by tiering job yearly |
 | `compacted` | true/false |
 
-Lifecycle rules filter on `age_band` tags (not on last-modified, because a backfill writes 20-year-old
-data "today"). This is a deliberate design point — see ADR-0004.
+`dataset`, `instrument` and `data_year` are not tags: derive them from the path
+(`layout.parse_md_path`). Blobs tagged by earlier versions are cleaned by `tidal tiering retag`.
+
+Lifecycle rules filter on `age_band` and `compacted` tags (not on last-modified, because a backfill writes
+20-year-old data "today"). This is a deliberate design point — see ADR-0004. Each tag is billed per month
+in every tier, hence the minimum set (ADR-0015, `docs/finops/deltas/T-207.md`).
 
 ## 5. Naming rules
 

@@ -15,8 +15,13 @@ lock as the migration, so no migration appends while parts are merged):
            own rows equal ``M``. If neither exists, WRITE ``M`` as ``n`` new parts and VERIFY them
            (count, ``ts_ns``/``close|price`` checksum, digest of all columns); on a failure the
            new parts are deleted before the error is raised.
-3. TAG     the target parts ``compacted=true`` (plus the standard tags).
+3. TAG     the target parts ``compacted=true`` (plus ``age_band``); ticks only (ADR-0015), the
+           other datasets are compacted but never tagged.
 4. DELETE  every other part of the snapshot (and its tag sidecar), then rebuild the manifest.
+
+A partition that is already a single part is skipped without downloading data: for a tagged
+dataset when the part carries ``compacted=true``, and in both cases only when the manifest lists
+exactly that one part (otherwise the normal path runs and rebuilds the manifest).
 
 A crash after 2 leaves duplicated rows across parts, which readers de-duplicate; the re-run
 recomputes ``M`` from all parts (the new parts add nothing), finds the complete output set and
@@ -25,6 +30,7 @@ the snapshot are never deleted. Nothing is deleted before the target is verified
 """
 
 import io
+import json
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -33,13 +39,13 @@ import polars as pl
 import pyarrow.parquet as pq
 from sqlalchemy import Engine
 
-from tidal.common.errors import TidalError
+from tidal.common.errors import NotFound, TidalError
 from tidal.common.logging import get_logger
 from tidal.common.timeutil import Clock
 from tidal.contracts.schemas import Interval
 from tidal.storage import layout
 from tidal.storage.parquet_writer import MAX_PART_ROWS, ObjectStore, write_partition
-from tidal.storage.retag import BlobTagger, ensure_tags
+from tidal.storage.retag import TAG_COMPACTED, BlobTagger, ensure_tags, is_tagged
 from tidal.storage.tiering import (
     RunningChecksum,
     TableSpec,
@@ -61,6 +67,16 @@ log = get_logger(__name__)
 _HASH_PREFIX = "compact:"
 
 
+@dataclass(frozen=True, slots=True)
+class PartitionResult:
+    """Outcome of :func:`compact_partition`."""
+
+    written: int = 0
+    removed: int = 0
+    rows: int = 0
+    skipped: bool = False  # a single already-compacted part with a matching manifest: not read
+
+
 @dataclass(slots=True)
 class CompactResult:
     """Counts of one compaction run."""
@@ -68,6 +84,7 @@ class CompactResult:
     dataset: str
     locked: bool = False
     partitions: int = 0
+    skipped: int = 0  # single already-compacted parts, not downloaded
     merged: int = 0  # partitions that had more than one part
     parts_written: int = 0
     parts_removed: int = 0
@@ -153,19 +170,51 @@ def _write_merged(  # noqa: PLR0917
     return written
 
 
+def _already_compacted(
+    store: ObjectStore, tagger: BlobTagger, part: tuple[str, str, int, int], paths: Sequence[str]
+) -> bool:
+    """A single part that needs no merge and whose manifest is current; no part data is read.
+
+    The manifest must list exactly that part (a crash after the delete step, or a lost manifest,
+    is healed by the normal path, which rebuilds it). Tagged datasets additionally need
+    ``compacted=true`` on the part.
+    """
+    if len(paths) != 1:
+        return False
+    dataset, iid, year, month = part
+    try:
+        raw = store.read(layout.md_manifest_path(dataset, iid, year, month))
+        listed = [e["name"] for e in json.loads(raw)["parts"]]
+    except (NotFound, ValueError, KeyError, TypeError):
+        return False
+    if listed != [paths[0].rsplit("/", 1)[1]]:
+        return False
+    if not is_tagged(dataset):
+        return True
+    try:
+        return tagger.get_tags(paths[0]).get(TAG_COMPACTED) == "true"
+    except NotFound:
+        return False
+
+
 def compact_partition(
     store: ObjectStore,
     tagger: BlobTagger,
     now_year: int,
     part: tuple[str, str, int, int],
     max_part_rows: int = MAX_PART_ROWS,
-) -> tuple[int, int, int]:
-    """Compact partition ``(dataset, instrument, year, month)``; returns written, removed, rows."""
+) -> PartitionResult:
+    """Compact partition ``(dataset, instrument, year, month)``.
+
+    ``skipped`` is set for a single already-compacted part with a current manifest.
+    """
     dataset, iid, year, month = part
     spec = spec_for_dataset(dataset)
     paths = part_paths(store, dataset, iid, year, month)  # 1
     if not paths:
-        return 0, 0, 0
+        return PartitionResult()
+    if _already_compacted(store, tagger, part, paths):
+        return PartitionResult(skipped=True)
     read = [_read_part(store, p) for p in paths]
     frames = [f for f, _ in read]
     merged = merge_frames(frames, spec)
@@ -182,8 +231,9 @@ def compact_partition(
     if not keep:
         written = _write_merged(store, tagger, spec, part, merged, max_part_rows)
         keep = written
-    for path in keep:  # 3
-        ensure_tags(tagger, path, now_year, compacted=True)
+    if is_tagged(dataset):
+        for path in keep:  # 3
+            ensure_tags(tagger, path, now_year, compacted=True)
     removed = 0
     for path in paths:  # 4
         if path not in keep:
@@ -191,7 +241,7 @@ def compact_partition(
             removed += 1
     tag_partition(store, tagger, now_year, dataset, iid, year, month)  # later parts keep theirs
     update_manifest(store, dataset, iid, year, month)
-    return len(written), removed, merged.height
+    return PartitionResult(len(written), removed, merged.height)
 
 
 def compact(
@@ -230,7 +280,7 @@ def compact(
         for iid, y, m in sorted(seen):
             lock.check()
             try:
-                w, r, rows = compact_partition(
+                out = compact_partition(
                     store, tagger, now_year, (dataset, iid, y, m), max_part_rows
                 )
             except TidalError as exc:
@@ -238,10 +288,13 @@ def compact(
                 log.error("compact_failed", dataset=dataset, instrument=iid, year=y, error=exc.slug)
                 continue
             res.partitions += 1
-            res.merged += int(r > 0)
-            res.parts_written += w
-            res.parts_removed += r
-            res.rows += rows
+            if out.skipped:
+                res.skipped += 1
+                continue
+            res.merged += int(out.removed > 0)
+            res.parts_written += out.written
+            res.parts_removed += out.removed
+            res.rows += out.rows
     log.info("compact_done", dataset=dataset, partitions=res.partitions, merged=res.merged,
              parts_written=res.parts_written, parts_removed=res.parts_removed,
              errors=len(res.errors))  # fmt: skip

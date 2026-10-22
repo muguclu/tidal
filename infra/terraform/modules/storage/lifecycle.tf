@@ -1,7 +1,7 @@
 # Blob lifecycle management (SPEC-03 section 4, storage-layout sections 1 and 4, ADR-0004).
 #
 # marketdata/ is tiered by DATA AGE through the blob index tags that tidal tiering retag / compact
-# write (src/tidal/storage/retag.py: dataset, instrument, data_year, age_band, compacted), not by
+# write (src/tidal/storage/retag.py: age_band and compacted only, ticks parts only; ADR-0015), not by
 # last-modified: a backfill writes 20-year-old data today. The policy runs about once a day, so a
 # freshly tagged blob moves within roughly 24-48 h.
 #
@@ -13,8 +13,9 @@
 # numbers in docs/finops/deltas/T-207.md). Compaction (yearly, after retag) writes the merged
 # part and deletes the old ones; a part tiered to Cool/Cold before that would be billed the
 # early-deletion fee (Cool 30 d, Cold 90 d) for bytes about to be deleted, plus a pointless tier-change
-# write. compact_partition tags every kept part compacted=true, including partitions that already
-# had a single part, so every old partition is eligible after one compaction run. Parts that are
+# write. compact_partition tags every kept tick part compacted=true, so every old tick partition is
+# eligible after one compaction run. Bars parts are never tagged (ADR-0015), no rule matches
+# them and they stay Hot. Parts that are
 # restated later are compacted=false and stay Hot until the next yearly compaction.
 #
 # No Archive for marketdata/: rehydration takes hours and breaks backtests (ADR-0004). Archive is only
