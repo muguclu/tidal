@@ -45,6 +45,12 @@ REQUIRED_KEYS = {
     "loganalytics_basic_ingestion_gb",
     "appservice_b2_linux_hour",
     "logicapp_consumption_builtin_action_free_tier",
+    "servicebus_standard_base_hour",
+    "servicebus_standard_base_month",
+    "servicebus_standard_ops_included_1m",
+    "servicebus_standard_ops_1m",
+    "acr_task_vcpu_free_second",
+    "acr_task_vcpu_second",
 }
 
 
@@ -313,6 +319,26 @@ def test_every_precision_limited_meter_is_guarded_in_committed_snapshot() -> Non
         with pytest.raises(fp.PrecisionLimitedPrice):
             book.get(key)
     assert book.unit_price("vm_b2s_hour") > 0
+
+
+def test_acr_task_meter_is_precision_limited_and_guarded() -> None:
+    book = fp.load_prices(COMMITTED)
+    for key in ("acr_task_vcpu_free_second", "acr_task_vcpu_second"):
+        with pytest.raises(fp.PrecisionLimitedPrice):
+            book.unit_price(key)
+    assert book.get("acr_task_vcpu_second", allow_imprecise=True).unitPrice > 0
+    assert book.get("acr_task_vcpu_free_second", allow_imprecise=True).unitPrice == 0.0
+
+
+def test_servicebus_standard_meters_are_pinned_and_tiered() -> None:
+    book = fp.load_prices(COMMITTED)
+    assert book.unit_price("servicebus_standard_base_hour") > 0
+    assert book.unit_price("servicebus_standard_base_month") > 0
+    assert book.unit_price("servicebus_standard_ops_included_1m") == 0.0
+    assert book.get("servicebus_standard_ops_1m").tierMinimumUnits == 13.0
+    assert book.unit_price("servicebus_standard_ops_1m") > 0
+    assert spec_for("servicebus_standard_base_hour").meter_id
+    assert spec_for("servicebus_standard_base_month").meter_id
 
 
 def test_free_tier_logic_app_key_is_named_and_noted() -> None:
