@@ -80,6 +80,9 @@ services:
     environment:
       # In-network endpoints override the host-side (127.0.0.1) values from .env.
       TIDAL_ENV: local
+      TIDAL_AUTH__DISABLED: "true" # local only: anonymous principal, anonymous token provider
+      TIDAL_QUERY__BASE_URL: http://query:8000
+      TIDAL_QUERY__AUDIENCE: api://tidal-query-local # placeholder; unused while auth is disabled
       TIDAL_SERVICE_NAME: api
       TIDAL_STORAGE__ACCOUNT_URL: http://azurite:10000/devstoreaccount1
       TIDAL_STORAGE__CONNECTION_STRING: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1; # gitleaks:allow
@@ -89,6 +92,8 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
+      query:
+        condition: service_healthy
       azurite:
         condition: service_healthy
       sqlserver:
@@ -110,7 +115,50 @@ services:
       - /tmp
     restart: unless-stopped
 
-# The query and worker services are added by T-209 and T-303 respectively.
+  query:
+    profiles: [app]
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile
+      target: dev
+    image: tidal-dev:local
+    command: ["tidal-query"]
+    env_file: .env
+    environment:
+      # In-network endpoints override the host-side (127.0.0.1) values from .env.
+      TIDAL_ENV: local
+      TIDAL_AUTH__DISABLED: "true" # local only: no token validation
+      TIDAL_SERVICE_NAME: query
+      TIDAL_STORAGE__ACCOUNT_URL: http://azurite:10000/devstoreaccount1
+      TIDAL_STORAGE__CONNECTION_STRING: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1; # gitleaks:allow
+      TIDAL_SQL__SERVER: sqlserver
+      TIDAL_SERVICEBUS__FQDN: servicebus
+      TIDAL_SERVICEBUS__CONNECTION_STRING: Endpoint=sb://servicebus;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;
+    expose:
+      - "8000"
+    depends_on:
+      azurite:
+        condition: service_healthy
+      sqlserver:
+        condition: service_healthy
+      servicebus:
+        condition: service_started # emulator image has no verified in-container health probe
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health/live', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+
+# The worker service is added by T-303.
 
 volumes:
   sqldata:

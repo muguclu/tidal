@@ -21,16 +21,13 @@ from tidal.api.pagination import (
     page_of,
 )
 from tidal.api.streaming import ARROW, PARQUET, TIER_HEADER, ffill_bars, stream_response
-from tidal.common.errors import RangeTooLarge, ValidationFailed
+from tidal.common.errors import ValidationFailed
 from tidal.common.timeutil import to_ts_ns
 from tidal.contracts.instruments import InstrumentId
 from tidal.contracts.models import Bar, BarsResponse, Tier, datetime_to_ns
 from tidal.contracts.schemas import BAR_V1, Interval
+from tidal.query.limits import check_bars_range
 from tidal.query.protocols import Clock, Reader
-
-DAY_NS = 86_400 * 1_000_000_000
-BARS_1S_MAX_NS = 7 * DAY_NS  # SPEC-04 §3
-BARS_1M_MAX_NS = 366 * DAY_NS  # SPEC-04 section 3
 
 router = APIRouter(prefix="/v1", tags=["market-data"])
 
@@ -68,15 +65,6 @@ def parse_range(start: str, end: str) -> tuple[int, int]:
     if end_ns <= start_ns:
         raise ValidationFailed("end must be after start.")
     return start_ns, end_ns
-
-
-def check_bars_range(interval: Interval, start_ns: int, end_ns: int) -> None:
-    """413 when 1s bars span more than 7 days or 1m bars more than 366 days."""
-    span = end_ns - start_ns
-    if interval is Interval.S1 and span > BARS_1S_MAX_NS:
-        raise RangeTooLarge("Bars with interval 1s are limited to 7 days per call.")
-    if interval is Interval.M1 and span > BARS_1M_MAX_NS:
-        raise RangeTooLarge("Bars with interval 1m are limited to 366 days per call.")
 
 
 def market_data_ok(*, binary: bool = True, tier: bool = True) -> dict[str, Any]:

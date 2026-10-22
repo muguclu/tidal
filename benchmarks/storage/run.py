@@ -1,4 +1,4 @@
-"""Benchmark runner and the reference format F5 (SPEC-02 section 5).
+"""Benchmark runner (SPEC-02 section 5); the formats live in ``benchmarks/storage/formats/``.
 
 ``uv run python -m benchmarks.storage.run --scale S --formats F5 --workloads W1..W6 --runs 5``
 (plus ``--out DIR``; needs ``TIDAL_ENV``).
@@ -6,7 +6,7 @@
 Cold = a fresh connection per run (the OS page cache is NOT dropped, so cold understates a truly
 cold read); warm = one untimed priming run, then repeats on the same connection. W1 is a fresh
 store per run. The data source (reading the cached dataset) is part of W1 wall time for every
-format alike. Formats F0-F4/F6 plug in through ``FORMATS`` (T-202/T-203).
+format alike. Formats plug in through ``FORMATS`` (F0-F2 SQL, F3-F6 files; F6 sweep ids too).
 """
 
 import argparse
@@ -27,6 +27,8 @@ import numpy as np
 import polars as pl
 import pyarrow as pa
 
+from benchmarks.storage.formats import ALL_FORMATS
+from benchmarks.storage.formats.file_f5 import F5Format
 from benchmarks.storage.results_schema import ResultRow, write_results
 from benchmarks.storage.workloads import (
     DATA_ROOT,
@@ -34,7 +36,6 @@ from benchmarks.storage.workloads import (
     Dataset,
     DatasetSpec,
     Format,
-    LoadStats,
     WorkloadResult,
     build_dataset,
     default_range,
@@ -43,162 +44,22 @@ from benchmarks.storage.workloads import (
 )
 from tidal import __version__
 from tidal.common.errors import ConfigError
-from tidal.storage import layout
-from tidal.storage.parquet_writer import LocalStore, write_partition
-
-_W2 = (
-    "SELECT count(*) AS n_days, sum(n) AS n_trades, sum(o) AS so, sum(h) AS sh, sum(l) AS sl,"
-    " sum(c) AS sc, sum(v) AS sv FROM (SELECT arg_min(price, ts_ns) o, max(price) h, min(price) l,"
-    " arg_max(price, ts_ns) c, sum(size::DOUBLE) v, count(*) n FROM read_parquet(?)"
-    " WHERE version = 1 AND side = 0 GROUP BY ts_ns // 86400000000000)"  # 1 UTC day in ns
-)
-_W2_KEYS = ("n_days", "n_trades", "sum_open", "sum_high", "sum_low", "sum_close", "sum_volume")
-_W4 = (
-    "SELECT ts_ns, price FROM read_parquet(?) WHERE version = 1 AND side = 0"
-    " ORDER BY ts_ns DESC, side DESC LIMIT 1"
-)
-_W3 = (
-    "SELECT count(*), sum(price), min(price), max(price) FROM read_parquet(?)"
-    " WHERE version = 1 AND ts_ns >= ? AND ts_ns < ?"
-)
 
 
 class OracleMismatchError(AssertionError):
     """A format returned a different aggregate than the independent polars oracle."""
 
 
-class F5Format:
-    """Reference format: epoch-optimised Parquet (storage-layout section 3) read with DuckDB."""
+__all__ = [
+    "FORMATS",
+    "F5Format",
+    "OracleMismatchError",
+    "env_info",
+    "main",
+    "run_benchmark",
+]  # F5Format: moved, kept importable
 
-    id = "F5"
-    storage_price_key = "blob_hot_stored_gb_month"
-
-    def __init__(self, workdir: Path) -> None:
-        """Create the format under ``workdir`` (deleted by :meth:`teardown`)."""
-        self.workdir = workdir
-        self.store = LocalStore(workdir / "f5")
-        self._con: duckdb.DuckDBPyConnection | None = None
-        self._bytes = 0
-        self._rows = 0
-        self._prof = str(workdir / "profile.json")
-        self._profiling = False
-
-    def load(self, dataset: Dataset) -> LoadStats:
-        """Write base partitions, then the restatement rows as an extra immutable part."""
-        key, rows = dataset.spec.key(), 0
-        for part in dataset.partitions():
-            tables = dataset.read_partition(part)
-            write_partition(self.store, dataset="ticks", instrument_id=part[0], year=part[1],
-                            month=part[2], batches=tables, source_hash=key)  # fmt: skip
-            rows += sum(t.num_rows for t in tables)
-        if dataset.restated[0] in dataset.instruments:
-            inst, y, m = dataset.restated
-            tables = dataset.read_partition(dataset.restated, restated=True)
-            write_partition(self.store, dataset="ticks", instrument_id=inst, year=y, month=m,
-                            batches=tables, source_hash=key)  # fmt: skip
-            rows += sum(t.num_rows for t in tables)
-        return LoadStats(rows, self.size_bytes())
-
-    def size_bytes(self) -> int:
-        """Sum of all Parquet file sizes."""
-        return sum(p.stat().st_size for p in (self.workdir / "f5").rglob("*") if p.is_file())
-
-    def reopen(self) -> None:
-        """New DuckDB connection with JSON profiling (source of bytes read / rows scanned)."""
-        if self._con is not None:
-            self._con.close()
-        self._con = duckdb.connect()
-        self._prof = str(self.workdir / "profile.json")
-        self._profiling = False
-
-    def _q(self, sql: str, args: list[Any]) -> list[tuple[Any, ...]]:  # Any: duckdb cell values
-        if self._con is None:
-            self.reopen()
-        assert self._con is not None
-        out = self._con.execute(sql, args).fetchall()
-        if not self._profiling:
-            return out
-        prof = json.loads(Path(self._prof).read_text(encoding="utf-8"))
-        self._bytes += int(prof["io"]["total_bytes_read"])
-        self._rows += int(prof["query"]["total_rows_scanned"])
-        return out
-
-    def _files(self, p: Mapping[str, Any]) -> list[str]:
-        out: list[str] = []
-        for inst in p["instruments"]:
-            for y, m in p["months"]:
-                out += list(self.store.list(layout.md_partition_prefix("ticks", inst, y, m)))
-        return [str(self.store.root / f) for f in sorted(out)]
-
-    def io_profile(self, workload: str, params: Mapping[str, Any]) -> WorkloadResult:  # Any: JSON
-        """Re-run with DuckDB JSON profiling on (untimed) to get bytes read / rows scanned."""
-        if self._con is None:
-            self.reopen()
-        assert self._con is not None
-        self._con.execute("PRAGMA enable_profiling='json'")
-        self._con.execute(f"PRAGMA profiling_output='{self._prof}'")
-        self._profiling = True
-        try:
-            return self.run(workload, params)
-        finally:
-            self._profiling = False
-            self._con.execute("PRAGMA disable_profiling")
-
-    def run(self, workload: str, params: Mapping[str, Any]) -> WorkloadResult:  # Any: JSON params
-        """Run W2-W6 as DuckDB SQL (no profiling) over the partition files from the layout."""
-        self._bytes = self._rows = 0
-        files, p = [self._files(params)], params
-        rng = [] if p["lo_ns"] is None else [p["lo_ns"], p["hi_ns"]]
-        if workload == "W2":
-            r = self._q(_W2, files)[0]
-            v: dict[str, int | float] = dict(
-                zip(_W2_KEYS, (int(r[0]), int(r[1]), *map(float, r[2:])), strict=True)
-            )
-        elif workload == "W3":
-            r = self._q(_W3, [*files, *rng])[0]
-            v = {
-                "n": int(r[0]),
-                "sum_price": float(r[1]),
-                "min_price": float(r[2]),
-                "max_price": float(r[3]),
-            }
-        elif workload == "W4":
-            r = self._q(_W4, files)[0]
-            v = {"ts_ns": int(r[0]), "price": float(r[1])}
-        elif workload == "W5":
-            v = {}
-            for inst in p["instruments"]:
-                one = {**p, "instruments": [inst]}
-                r = self._q("SELECT count(*), sum(price) FROM read_parquet(?) WHERE version = 1",
-                            [self._files(one)])[0]  # fmt: skip
-                v[f"n:{inst}"], v[f"sum_price:{inst}"] = int(r[0]), float(r[1])
-        elif workload == "W6":
-            v = {}
-            for k, asof in enumerate(p["asof_ns"]):
-                r = self._q(
-                    "SELECT count(*), sum(price), count_if(version = 2) FROM (SELECT ts_ns, side,"
-                    " arg_max(price, version) AS price, max(version) AS version"
-                    " FROM read_parquet(?) WHERE ingested_at_ns <= ? GROUP BY ts_ns, side)",
-                    [*files, asof],
-                )[0]
-                v[f"n_{k}"], v[f"sum_price_{k}"], v[f"n_restated_{k}"] = (
-                    int(r[0]),
-                    float(r[1]),
-                    int(r[2]),
-                )
-        else:
-            raise ConfigError(f"F5 has no workload {workload!r}")
-        return WorkloadResult(v, self._rows, self._bytes, "duckdb_profile")
-
-    def teardown(self) -> None:
-        """Close the connection and delete the store."""
-        if self._con is not None:
-            self._con.close()
-            self._con = None
-        shutil.rmtree(self.workdir, ignore_errors=True)
-
-
-FORMATS: dict[str, Callable[[Path], Format]] = {"F5": F5Format}  # T-202/T-203 register F0-F4, F6
+FORMATS: dict[str, Callable[[Path], Format]] = dict(ALL_FORMATS)
 
 
 def env_info() -> dict[str, str]:
@@ -271,11 +132,13 @@ def run_benchmark(
             if not queries:
                 continue
             fmt = factory(tmp / fid)
-            fmt.load(ds)
-            at_rest = fmt.size_bytes()
-            for wid in queries:
-                rows += _run_query(spec, ds, fmt, wid, runs=runs, at_rest=at_rest)
-            fmt.teardown()
+            try:  # a failed load/query must not leak tables or containers
+                fmt.load(ds)
+                at_rest = fmt.size_bytes()
+                for wid in queries:
+                    rows += _run_query(spec, ds, fmt, wid, runs=runs, at_rest=at_rest)
+            finally:
+                fmt.teardown()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     env = env_info()
@@ -298,12 +161,14 @@ def _run_w1(
     samples: list[tuple[float, float]] = []
     for r in range(runs):
         fmt = factory(work / str(r))
-        wall, cpu, stats = _time(lambda f=fmt: f.load(sub))  # type: ignore[misc]
-        if stats.rows != want:
-            raise OracleMismatchError(f"W1 {fmt.id}: wrote {stats.rows} rows, expected {want}")
-        samples.append((wall, cpu))
-        size = fmt.size_bytes()
-        fmt.teardown()
+        try:
+            wall, cpu, stats = _time(lambda f=fmt: f.load(sub))  # type: ignore[misc]
+            if stats.rows != want:
+                raise OracleMismatchError(f"W1 {fmt.id}: wrote {stats.rows} rows, expected {want}")
+            samples.append((wall, cpu))
+            size = fmt.size_bytes()
+        finally:
+            fmt.teardown()
     return _row(
         spec, fmt, wl="W1", cache="n/a", samples=samples, rows=int(want), at_rest=size, res=None
     )
