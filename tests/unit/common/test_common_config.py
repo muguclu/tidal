@@ -78,7 +78,7 @@ def _sample(key: str, typ: str) -> tuple[str, Any]:
 
 
 def test_contract_table_parsed() -> None:
-    assert len(ROWS) == 27
+    assert len(ROWS) == 25
 
 
 def test_code_keys_equal_contract_keys() -> None:
@@ -181,6 +181,14 @@ def test_azure_client_id_is_ignored() -> None:
     "key", ["TIDAL_SQL_PASSWORD", "TIDAL_STORAGE__ACOUNT_URL", "tidal_typo", "TIDAL_SQL"]
 )
 def test_unknown_tidal_key_fails(key: str) -> None:
+    with pytest.raises(ConfigError, match="unknown configuration keys"):
+        Settings.from_env(_local(**{key: "x"}))
+
+
+@pytest.mark.parametrize("name", ["EIA_API_KEY", "FRED_API_KEY"])
+def test_removed_vendor_key_fails_startup(name: str) -> None:
+    """ADR-0013: the vendor key group is gone, so a leftover variable stops startup."""
+    key = "TIDAL_" + "SOURCES__" + name  # assembled: the removed name is documented in the ADR only
     with pytest.raises(ConfigError, match="unknown configuration keys"):
         Settings.from_env(_local(**{key: "x"}))
 
@@ -326,7 +334,7 @@ def test_invalid_values_fail_without_echoing_input(key: str, value: str) -> None
 
 def test_secrets_never_revealed() -> None:
     secrets = [key for key, typ, *_ in ROWS if typ == "secret"]
-    assert len(secrets) == 6
+    assert len(secrets) == 4
     settings = Settings.from_env(_local(**{k: f"pw-{i}-hunter2" for i, k in enumerate(secrets)}))
     rendered = [
         repr(settings),

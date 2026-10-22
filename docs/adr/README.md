@@ -17,3 +17,4 @@ New ADRs use [0000-template.md](0000-template.md). Breaking contract changes nee
 | [0010](0010-marketdata-container-name.md) | Market-data Blob container is named `marketdata` | Accepted |
 | [0011](0011-azapi-sql-free-offer.md) | azapi provider only to enable the Azure SQL free offer | Accepted |
 | [0012](0012-tidal-env-required.md) | `TIDAL_ENV` is required (fail closed) | Accepted |
+| [0013](0013-synthetic-only-data.md) | Synthetic-only data; EIA/FRED adapters stay as unwired reference code | Accepted |

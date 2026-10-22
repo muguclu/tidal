@@ -1,6 +1,6 @@
 # TASKS — Tidal backlog
 
-Status legend: `todo` · `doing` · `review` · `done` · `blocked`
+Status legend: `todo` · `doing` · `review` · `done` · `blocked` · `superseded`
 Columns: **Wave/Lane** (see PARALLELISM.md) · **Deps** (must be `done`) · **Owns** (only files this
 task may create/modify; `+tests` = matching files under `tests/`).
 Every task's PR must reference its ID and tick its "Done when" items.
@@ -39,7 +39,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | T-104 | Synthetic generator | T-101 | `src/tidal/ingest/sources/synthetic*.py`, `synthetic_params.yaml` +tests | SPEC-01 §4 criteria; determinism hash test; L-scale perf note | done |
 | T-106 | Parquet writer, layout, SQL repo | T-003 | `src/tidal/storage/{layout,parquet_writer,sql_repo}.py`, `sql/migrations/**` +tests | writer settings = storage-layout §3 (asserted via pyarrow metadata); SQL DDL = data-contracts §6 | done |
 | T-107 | Tick → bar aggregation | T-104, T-106 | `src/tidal/storage/aggregate.py` +tests | data-contracts §3.2; property test: bars from ticks == naive groupby; streams monthly | done |
-| T-108 | Calibrate synthetic params to real data | T-105 | `src/tidal/ingest/sources/synthetic_params.yaml`, `scripts/calibrate_synthetic.py` +tests | Brent/HH daily realised vol per regime from ingested EIA history; params within ±10 %; method documented | todo |
+| T-108 | ~~Calibrate synthetic params to real data~~ SUPERSEDED by ADR-0013 (no real data; params stay stylised) | T-105 | `src/tidal/ingest/sources/synthetic_params.yaml`, `scripts/calibrate_synthetic.py` +tests | Brent/HH daily realised vol per regime from ingested EIA history; params within ±10 %; method documented | superseded |
 | T-105 | Normaliser, router, ingest CLI | T-102, T-104, T-106, T-107 | `src/tidal/ingest/{normalise,router,cli}.py` +tests | backfill 20+ yrs local (spot + FUT1–4 + FX); WTI negative golden test; idempotent daily run; injected clock | done |
 
 ### Lane B — infra (infra-engineer)
@@ -63,9 +63,10 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | T-114 | `TIDAL_ENV` fails closed | architect | T-005 | `docs/contracts/config-contract.md`, `src/tidal/common/config.py` +tests, `.env.example` | `TIDAL_ENV` has no default (unset → startup error); compose/.env set `local` | done |
 | T-115 | Shared source helpers; layout-built backtest prefixes | data-engineer | T-103 | `src/tidal/ingest/sources/{base,eia,fred}.py`, `scripts/verify_{eia,fred}.py`, `src/tidal/contracts/messages.py`, `src/tidal/storage/layout.py` +tests | eia.py uses base retry/redact helpers; `BacktestJob` prefix check uses `layout.backtest_prefix` | done |
 | T-116 | `ObjectStore.read()` | data-engineer | T-105 | `src/tidal/storage/parquet_writer.py`, `src/tidal/ingest/router.py` +tests | stores expose `read(path) -> bytes`; router drops store-type special-casing | done |
+| T-117 | Synthetic-only data sources (ADR-0013) | data-engineer | T-105 | `docs/adr/0013-*.md`, `docs/contracts/{config,data}-contracts.md`, `src/tidal/common/config.py`, `src/tidal/ingest/{cli.py,sources/{eia,fred,synthetic_daily}.py,sources/synthetic_params.yaml}`, `src/tidal/cli.py`, `pyproject.toml` (entry point), `.env.example`, `scripts/verify_{eia,fred}.py` (deleted), `tests/fixtures/{eia,fred}/README.md`, SPEC-01, business-knowledge §4, PLANNING G1 +tests | no vendor API-key settings; no `tidal ingest` commands; `tidal synth daily-history` deterministic, 12 series, WTI negative episode, term structure with both signs | done |
 | T-113 | Local JWKS + dev token script | api-engineer | T-005 | `scripts/dev-token.py`, `tests/fakes/jwks/**` | mints RS256 tokens per role for local/tests; keys generated at runtime, never committed | done |
 
-**Gate G1** → PLANNING.md §4. **Partially passed 2026-10-22** — real-data backfill waits for EIA/FRED keys (NEEDS-KEY); see `docs/status/2026-W43-G1.md`.
+**Gate G1** → PLANNING.md §4. **Partially passed 2026-10-22** — real-data backfill dropped by ADR-0013 (G1 item 1 redefined as synthetic daily history); see `docs/status/2026-W43-G1.md`.
 
 ---
 

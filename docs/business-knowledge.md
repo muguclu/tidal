@@ -44,14 +44,18 @@ scanned in bulk occasionally (model training, backtests, regulatory look-backs).
 | Unit differences | $/bbl vs $/MMBtu vs €/MWh | `unit` and `currency` are mandatory instrument metadata |
 | Outliers | Fat-finger ticks in synthetic data | Synthetic generator injects them deliberately (0.01 %) so validators are exercised |
 
-## 4. Data sources (free/public)
+## 4. Data sources (synthetic-only, ADR-0013)
+
+No vendor feed is used: the owner has no EIA/FRED keys. All data is generated, deterministically and seeded. The
+`EIA.*` / `FRED.*` instrument ids below are kept for contract stability; the "Series" column names the real series
+each one *emulates* (stylised levels, not calibrated, not market history).
 
 | Source | Series | History | Notes |
 |---|---|---|---|
-| EIA Open Data API v2 | Brent spot (RBRTE), WTI spot (RWTC), Henry Hub (RNGWHHD) | WTI 1986→, Brent 1987→, HH 1997→ | Free API key; daily |
-| EIA Open Data API v2 | WTI futures contract 1–4 (RCLC1–4), Henry Hub futures 1–4 (RNGC1–4) | WTI 1983→, HH 1994→ | Nearby series, no roll adjustment; enable M1–M2 calendar spreads. **Discontinued by EIA after 2024-04-05** |
-| FRED | EUR/USD (DEXUSEU), other macro | 1999→ | Free API key |
-| Synthetic generator | ~10 instruments, ticks/1s bars | Configurable, default 2005–2025 | GBM + jumps + regime switching, calibrated to real daily vol; seeded |
+| Synthetic daily (`tidal synth daily-history`) emulating EIA v2 | Brent spot (RBRTE), WTI spot (RWTC), Henry Hub (RNGWHHD) | 2005→clock (configurable) | Seeded; daily; includes a deterministic WTI negative-price episode on 2020-04-20 |
+| Synthetic daily emulating EIA nearby futures | WTI futures 1–4 (RCLC1–4), Henry Hub futures 1–4 (RNGC1–4) | 2005→clock (configurable) | Nearby series, no roll adjustment; contango and backwardation both occur, so M1–M2 calendar spreads are meaningful |
+| Synthetic daily emulating FRED | EUR/USD (DEXUSEU) | 2005→clock (configurable) | Positive, mean-reverting around a stylised curve |
+| Synthetic generator | ~10 instruments, ticks/1s bars | Configurable, default 2005–2025 | GBM + jumps + regime switching, judgemental vol targets (not calibrated); seeded |
 
 Licensed exchange data (ICE, CME, EEX) is out of scope; mention in README that the architecture is
 source-agnostic.

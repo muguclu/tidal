@@ -1,12 +1,14 @@
 """FRED ``series/observations`` client (SPEC-01 §2-3, T-103).
 
+REFERENCE CODE, UNWIRED since ADR-0013: no config key, CLI command or verify script uses it.
+
 Mirrors :mod:`tidal.ingest.sources.eia`: one request per page (``limit``/``offset``, 100000 max),
 retried with exponential backoff, seeded jitter and ``Retry-After``; each response is persisted raw
 (injected store) *before* it is yielded, and the API key (a ``SecretStr`` in the query string) is
 redacted from every log line, raw path and error message.
 
 Endpoint, params and response shape are from documentation knowledge and UNVERIFIED against the
-live API (no key in T-103; run ``scripts/verify_fred.py``)::
+live API (no key in T-103; never verified, ADR-0013)::
 
     GET https://api.stlouisfed.org/fred/series/observations
         ?series_id=DEXUSEU&api_key=..&file_type=json&observation_start=..&observation_end=..
@@ -93,9 +95,9 @@ class FredSource:
         base_url: str = BASE_URL,
         max_pages: int = MAX_PAGES,
     ) -> None:
-        """Wire injected collaborators; ``api_key`` comes from ``settings.sources.fred_api_key``."""
+        """Wire injected collaborators; ``api_key`` is a plain argument (ADR-0013)."""
         if api_key is None or not api_key.get_secret_value():
-            raise ConfigError("TIDAL_SOURCES__FRED_API_KEY is not set")
+            raise ConfigError("FRED api_key is empty")
         self._client = client
         self._key = api_key
         self._store = store

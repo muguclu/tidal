@@ -1,4 +1,4 @@
-# Config Contract — v1.1
+# Config Contract — v1.2
 
 Code mirror: `src/tidal/common/config.py` (pydantic-settings, prefix `TIDAL_`, nested delimiter `__`).
 Every service reads only these keys. Unknown `TIDAL_*` keys fail startup (catches typos).
@@ -23,8 +23,6 @@ Every service reads only these keys. Unknown `TIDAL_*` keys fail startup (catche
 | `TIDAL_AUTH__TENANT_ID` | uuid | — | no | required when auth is enabled and `TIDAL_ENV != local` |
 | `TIDAL_AUTH__AUDIENCE` | str | `api://tidal` | no | |
 | `TIDAL_AUTH__DISABLED` | bool | `false` | no | `true` only when `TIDAL_ENV=local` (startup asserts) |
-| `TIDAL_SOURCES__EIA_API_KEY` | secret | — | **yes** | Key Vault reference |
-| `TIDAL_SOURCES__FRED_API_KEY` | secret | — | **yes** | Key Vault reference |
 | `TIDAL_HOT_WINDOW_DAYS` | int | `90` | no | must be > 0 |
 | `TIDAL_SYNTH__SCALE` | `S\|M\|L` | `S` | no | |
 | `TIDAL_SYNTH__SEED` | int | `20261021` | no | |
@@ -58,3 +56,8 @@ Rules:
   (connection strings, SQL password and `TIDAL_CLOCK__NOW` allowed). Fail closed instead. Minor
   bump: no key, type or allowed value changes; docker compose and `.env.example` already set it,
   scripts and tests now pass it explicitly, and no Azure app settings exist yet that could omit it.
+- **v1.2 (T-117, ADR-0013)**: removed `TIDAL_SOURCES__EIA_API_KEY` and `TIDAL_SOURCES__FRED_API_KEY`
+  (the `sources` group). All data is synthetic; no upstream vendor keys exist. Because unknown
+  `TIDAL_*` keys fail startup, a deployment that still sets either variable now stops with a
+  `ConfigError` naming the key. Minor bump by the same reasoning as v1.1: no deployed consumer
+  (no Azure app settings or Key Vault secrets for these keys were ever created).

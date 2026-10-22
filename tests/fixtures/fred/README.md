@@ -5,3 +5,5 @@ with string `value`s, `"."` = missing). Dates start at 1999-01-04 (first DEXUSEU
 the values are illustrative, NOT recorded. No API key was available (T-103); live recordings via
 `scripts/verify_fred.py --record` go in `live/`. Raw payload = verbatim response minus any
 `api_key` echo.
+
+ADR-0013: `scripts/verify_fred.py` was deleted and no live recordings will be made; these fixtures only back the unwired reference client.

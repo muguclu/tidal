@@ -7,7 +7,7 @@ Build a portfolio-grade platform that proves, with code and measured numbers, th
 
 | Job requirement | Where Tidal proves it |
 |---|---|
-| Systems for large datasets, models over 20+ years of data | Ingestion of 20–40 yrs EIA/FRED history + synthetic tick generator up to ~1.5B rows; backtests over full history (SPEC-01, SPEC-05) |
+| Systems for large datasets, models over 20+ years of data | Synthetic 20+ yrs daily history (ADR-0013) + synthetic tick generator up to ~1.5B rows; backtests over full history (SPEC-01, SPEC-05) |
 | AKS orchestration, Docker containerisation | Backtest workers on AKS with KEDA, multi-stage images (SPEC-07) |
 | App Service, AKS, VMs, Container Apps for diverse workloads incl. legacy & serverless | API on App Service, query service on Container Apps (scale-to-zero), workers on AKS, "legacy" nightly exporter on a VM (SPEC-07) |
 | ACR | Images built in CI, pushed to ACR, pulled via managed identity, vulnerability scanning (SPEC-07, SPEC-08) |
@@ -24,7 +24,7 @@ Build a portfolio-grade platform that proves, with code and measured numbers, th
 - Synthetic tick/1-second data for ~10 instruments × 20 years, configurable scale (S/M/L).
 - Storage benchmark: row-store SQL vs CSV vs naive Parquet vs **epoch-optimised Parquet**.
 - Hot/cold tiering with automated migration and lifecycle management.
-- Query API (bars, ticks, spreads incl. M1–M2 from EIA futures contracts 1–4, as-of) with auth and RBAC.
+- Query API (bars, ticks, spreads incl. M1–M2 from synthetic futures contracts 1–4, as-of) with auth and RBAC.
 - Backtest jobs: deterministic strategies (moving-average crossover, mean reversion, calendar
   spread) over full history, fan-out on AKS.
 - FinOps: cost model, measured results, budget alerts, a written report.
@@ -39,7 +39,7 @@ Build a portfolio-grade platform that proves, with code and measured numbers, th
 
 ```
           ┌──────────────┐  daily job (Container Apps Job)
-EIA/FRED ─▶ ingest       │──────────────┐
+Synthetic ─▶ ingest       │──────────────┐
 synthetic ▶ (normalise,  │              ▼
             validate)    │      ┌───────────────┐   migrate > 90d   ┌─────────────────────────┐
           └──────────────┘      │ Azure SQL     │ ───────────────▶ │ Blob: epoch Parquet     │
@@ -79,11 +79,11 @@ the cloud window (`LOCAL-DEV.md` §2); `/gate` reports them as NEEDS-CLOUD, whic
 G0 passed 2026-10-22 — evidence in `docs/status/2026-W43-G0.md`; tag `contracts-v1`.
 
 ### Phase 1 — Data core & infra base (Wave 1, 3 parallel lanes)
-Lane A data: synthetic generator, EIA/FRED sources, normaliser, epoch Parquet writer, layout.
+Lane A data: synthetic generator, daily-history generator, normaliser, epoch Parquet writer, layout.
 Lane B infra: Terraform modules (rg, storage, kv, acr, sql, servicebus, log analytics, budgets).
 Lane C api: FastAPI skeleton against contract with in-memory fake repository.
 **Gate G1**
-- [ ] 20+ years of real daily data ingested locally into Parquet + SQL Server container
+- [ ] 20+ years of synthetic daily history (2005→, 12 series, `tidal synth daily-history`; ADR-0013) ingested locally into Parquet + SQL Server container
 - [ ] Synthetic S-scale (≈ 50M rows) generated reproducibly from a seed
 - [ ] `terraform validate` + tflint + checkov clean for `envs/dev` (`NEEDS-CLOUD`: plan clean, applied once by a human, outputs recorded)
 - [ ] API returns contract-valid responses from fakes; `oasdiff breaking` reports nothing in either direction
@@ -158,7 +158,7 @@ account credit) for evidence — see `docs/LOCAL-DEV.md`.
 | Free-trial vCPU quota (≈ 4 vCPU/region, no spot) blocks the 0→20-pod demo | G3 not provable | Upgrade to PAYG and request quota (DASv5 + spot ≥ 24 vCPU) **before** cloud-window day 11; budget alerts on (LOCAL-DEV §2) |
 | Azure SQL free offer (32 GB, 100k vCore-s/month) too small for M-scale SQL benchmark | Benchmark incomplete | Azure SQL formats run at S scale; M-scale SQL numbers are MODELLED from local runs (SPEC-02 §5) |
 | Spot eviction mid-backtest | Jobs fail | Jobs are idempotent & checkpointed; KEDA retries; DLQ after 3 attempts |
-| Free API rate limits (EIA/FRED) | Slow ingest | Cache raw responses in Blob `raw/`; backoff; one-time backfill |
+| ~~Free API rate limits (EIA/FRED)~~ | Closed: obsolete via ADR-0013 (no vendor feeds) | — |
 | Synthetic data looks fake | Credibility | Calibrate GBM + jumps + regime switches to real daily vol; document it |
 | Scope creep | Never ships | Gates + "minimum hireable" cut + out-of-scope list |
 | Parallel agents conflict | Rework | File ownership map, contracts frozen before waves, merge order |
