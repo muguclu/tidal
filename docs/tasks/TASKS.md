@@ -109,7 +109,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 ### Lane B — containers & AKS (platform-engineer, infra-engineer)
 | ID | Title | Agent | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|---|
-| T-305 | Production Dockerfile | platform-engineer | T-112 | `deploy/docker/**` | size measured and ≤ 500 MB, non-root, all entrypoints | todo |
+| T-305 | Production Dockerfile | platform-engineer | T-112 | `deploy/docker/**` | size measured and ≤ 500 MB, non-root, all entrypoints; sets `TIDAL_ENV` explicitly (ADR-0012) | todo |
 | T-306 | Module: aks (spot pool, KEDA, WI) | infra-engineer | T-126 | `modules/aks/**`, `envs/dev/aks.tf`, `docs/finops/deltas/T-306.md` | SPEC-07 §2 AKS row | todo |
 | T-307 | Helm chart + ScaledJob | platform-engineer | T-305, T-306 | `deploy/helm/tidal/**` | lint/kubeconform/kube-linter clean | todo |
 | T-308 | images.yml pipeline | platform-engineer | T-305, T-122 | `.github/workflows/images.yml` | trivy + sbom + push via OIDC | todo |
@@ -117,8 +117,8 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 ### Lane C — PaaS, serverless & legacy (infra-engineer, platform-engineer)
 | ID | Title | Agent | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|---|
-| T-309 | App Service + Container Apps (+Jobs) | infra-engineer | T-126 | `modules/{app_service,container_apps}/**`, `envs/dev/apps.tf`, `docs/finops/deltas/T-309.md` | scale-to-zero query; cron ingest; SB-triggered tiering job | todo |
-| T-310 | Legacy VM + exporter | infra-engineer | T-126 | `modules/vm_legacy/**`, `legacy/exporter/**`, `docs/finops/deltas/T-310.md` | Logic App start + self-deallocate; MI to Blob; CSV feed | todo |
+| T-309 | App Service + Container Apps (+Jobs) | infra-engineer | T-126 | `modules/{app_service,container_apps}/**`, `envs/dev/apps.tf`, `docs/finops/deltas/T-309.md` | scale-to-zero query; cron ingest; SB-triggered tiering job; sets `TIDAL_ENV` explicitly (ADR-0012) | todo |
+| T-310 | Legacy VM + exporter | infra-engineer | T-126 | `modules/vm_legacy/**`, `legacy/exporter/**`, `docs/finops/deltas/T-310.md` | Logic App start + self-deallocate; MI to Blob; CSV feed; sets `TIDAL_ENV` explicitly (ADR-0012) | todo |
 | T-311 | deploy.yml | platform-engineer | T-307, T-308, T-309 | `.github/workflows/deploy.yml`, `tests/smoke/**` | tag → env < 15 min | todo |
 | T-312 | integration.yml | test-engineer | T-112 | `.github/workflows/integration.yml`, `tests/integration/conftest.py` | nightly green | todo |
 | T-313 | park / unpark | platform-engineer | T-306, T-309, T-310 | `scripts/{park,unpark}.sh`, `docs/runbooks/park.md` | idempotent; SPEC-07 §6; Makefile targets wired by orchestrator | todo |
