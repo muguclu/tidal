@@ -22,14 +22,16 @@ resource "azurerm_storage_account" "this" {
   is_hns_enabled = false
 
   # Identity-based access only. The azurerm provider in the env composition MUST set
-  # storage_use_azuread = true, otherwise container management over the data plane fails.
-  shared_access_key_enabled        = false
-  default_to_oauth_authentication  = true
-  min_tls_version                  = "TLS1_2"
-  https_traffic_only_enabled       = true
-  allow_nested_items_to_be_public  = false
-  cross_tenant_replication_enabled = false
-  local_user_enabled               = false
+  # storage_use_azuread = true: containers go through ARM (storage_account_id) in azurerm 4.x, but the
+  # account resource's own data-plane reads need Entra auth once shared key is off.
+  shared_access_key_enabled         = false
+  default_to_oauth_authentication   = true
+  min_tls_version                   = "TLS1_2"
+  https_traffic_only_enabled        = true
+  allow_nested_items_to_be_public   = false
+  cross_tenant_replication_enabled  = false
+  local_user_enabled                = false
+  infrastructure_encryption_enabled = true
 
   # Default (flag off): public endpoint enabled; RBAC + Entra-only auth apply, no keys, no anonymous access.
   # Flag on: public endpoint disabled and a private endpoint is expected (Phase 4).
@@ -51,10 +53,6 @@ resource "azurerm_storage_account" "this" {
 
   tags = local.tags
 
-  # Holds ingested history; a destroy must be a deliberate edit of this block.
-  lifecycle {
-    prevent_destroy = true
-  }
 }
 
 resource "azurerm_storage_container" "this" {
@@ -65,8 +63,4 @@ resource "azurerm_storage_container" "this" {
   container_access_type = "private"
 
   #checkov:skip=CKV2_AZURE_21:Blob read logging via diagnostic settings arrives in T-506
-
-  lifecycle {
-    prevent_destroy = true
-  }
 }

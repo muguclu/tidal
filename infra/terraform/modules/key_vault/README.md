@@ -4,7 +4,7 @@ Key Vault, Standard SKU, **RBAC authorization** (no access policies), purge prot
 (SPEC-06 section 3). No secrets are created here; secrets and role assignments come from other tasks (T-403).
 
 - `enable_private_networking = false` (default): public endpoint on, Entra ID + RBAC only. `true`: public access disabled and network ACLs default `Deny` with `AzureServices` bypass; private endpoint is Phase 4.
-- `prevent_destroy` is set; purge protection means a deleted vault name stays reserved for the retention period.
+- No `prevent_destroy` (SPEC-07 section 6); purge protection plus soft delete cover accidents, and a deleted vault name stays reserved for the retention period. `network_acls` is always emitted (Allow, or Deny when the flag is on).
 - Checkov skips (inline, justified): public endpoint while flag off (CKV_AZURE_189), no private endpoint (CKV2_AZURE_32).
 
 Usage: see `examples/basic`.

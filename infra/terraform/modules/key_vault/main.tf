@@ -14,6 +14,7 @@ resource "azurerm_key_vault" "this" {
   # Checkov skips (each justified):
   #checkov:skip=CKV2_AZURE_32:No private endpoint while the private networking flag is off (Phase 4)
   #checkov:skip=CKV_AZURE_189:Public endpoint stays on while enable_private_networking is false (SPEC-06 section 4); Entra ID + RBAC only
+  #checkov:skip=CKV_AZURE_109:Default Deny applies when enable_private_networking is true; Allow in dev so the operator can reach the vault
 
   # RBAC mode: no access policies. Role assignments are made in T-403, per secret where possible.
   rbac_authorization_enabled = true
@@ -25,20 +26,11 @@ resource "azurerm_key_vault" "this" {
   # Flag on: public access disabled (private endpoint in Phase 4).
   public_network_access_enabled = !var.enable_private_networking
 
-  # Defence in depth when the flag is on: deny by default, trusted Azure services bypass.
-  dynamic "network_acls" {
-    for_each = var.enable_private_networking ? [1] : []
-
-    content {
-      default_action = "Deny"
-      bypass         = "AzureServices"
-    }
+  # Always emitted: Allow while the flag is off (public endpoint, RBAC only); Deny when on.
+  network_acls {
+    default_action = var.enable_private_networking ? "Deny" : "Allow"
+    bypass         = "AzureServices"
   }
 
   tags = local.tags
-
-  # Purge protection makes a destroyed vault linger anyway; make destroy a deliberate edit.
-  lifecycle {
-    prevent_destroy = true
-  }
 }

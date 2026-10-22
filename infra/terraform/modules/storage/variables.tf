@@ -41,7 +41,7 @@ variable "containers" {
   default     = ["raw", "marketdata", "reference", "backtests", "exports", "bench"]
 
   validation {
-    condition     = alltrue([for c in var.containers : can(regex("^[a-z0-9]([a-z0-9]|-[a-z0-9]){2,62}$", c))])
+    condition     = alltrue([for c in var.containers : length(c) <= 63 && can(regex("^[a-z0-9]([a-z0-9]|-[a-z0-9]){2,62}$", c))])
     error_message = "Container names must be 3-63 characters: lowercase letters, digits and single hyphens, starting and ending with a letter or digit."
   }
 }
