@@ -1,9 +1,10 @@
-"""Settings mirroring ``docs/contracts/config-contract.md`` v1.
+"""Settings mirroring ``docs/contracts/config-contract.md`` v1.1.
 
 Prefix ``TIDAL_``, nested delimiter ``__``. Use :func:`get_settings` in services and
 :meth:`Settings.from_env` with an explicit mapping in tests.
-Startup fails with :class:`~tidal.common.errors.ConfigError` on unknown ``TIDAL_*`` keys and on
-the contract rules (local-only keys outside ``TIDAL_ENV=local``). Error messages never echo values.
+Startup fails with :class:`~tidal.common.errors.ConfigError` when ``TIDAL_ENV`` is unset (fail
+closed: no implicit ``local``), on unknown ``TIDAL_*`` keys and on the contract rules (local-only
+keys outside ``TIDAL_ENV=local``). Error messages never echo values.
 """
 
 import logging
@@ -174,7 +175,7 @@ class Settings(BaseSettings):
         hide_input_in_errors=True,
     )
 
-    env: Literal["local", "dev", "prod"] = "local"
+    env: Literal["local", "dev", "prod"]  # required (contract v1.1): no default, fail closed
     log_level: str = "INFO"
     service_name: Literal["api", "query", "worker", "ingest", "tiering", "legacy"] = "api"
     hot_window_days: int = Field(default=90, gt=0)
@@ -212,6 +213,15 @@ class Settings(BaseSettings):
                 for err in exc.errors(include_input=False, include_url=False)
             ]
             raise ConfigError("invalid configuration: " + "; ".join(problems)) from None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _env_required(cls, data: object) -> object:
+        """Fail closed on a missing ``TIDAL_ENV`` with an error that names the variable."""
+        if isinstance(data, Mapping) and data.get("env") is None:
+            msg = "TIDAL_ENV is required (local|dev|prod); it has no default"
+            raise ValueError(msg)
+        return data
 
     @field_validator("log_level")
     @classmethod
@@ -260,5 +270,9 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Process-wide settings from ``os.environ``, validated once; ``cache_clear()`` in tests."""
+    """Process-wide settings from ``os.environ``, validated once; ``cache_clear()`` in tests.
+
+    Raises ``ConfigError`` naming ``TIDAL_ENV`` when it is unset (and on any other contract
+    violation); a failed call is not cached, so the next call re-validates.
+    """
     return Settings.from_env(os.environ)

@@ -232,7 +232,7 @@ def test_access_token_struct() -> None:
 
 
 def test_engine_from_settings_password_and_entra() -> None:
-    local = Settings.from_env({"TIDAL_SQL__PASSWORD": "p@ss;word"})
+    local = Settings.from_env({"TIDAL_ENV": "local", "TIDAL_SQL__PASSWORD": "p@ss;word"})
     eng = sr.create_engine_from_settings(local)
     odbc = eng.url.query["odbc_connect"]
     assert "UID=sa" in odbc and "PWD={p@ss;word}" in odbc and "TrustServerCertificate=yes" in odbc
@@ -244,7 +244,11 @@ def test_engine_from_settings_password_and_entra() -> None:
             return type("T", (), {"token": "tok"})()
 
     mi = Settings.from_env(
-        {"TIDAL_SQL__AUTH": "entra_mi", "TIDAL_SQL__SERVER": "x.database.windows.net"}
+        {
+            "TIDAL_ENV": "local",
+            "TIDAL_SQL__AUTH": "entra_mi",
+            "TIDAL_SQL__SERVER": "x.database.windows.net",
+        }
     )
     eng = sr.create_engine_from_settings(mi, credential=Cred())  # type: ignore[arg-type]
     odbc = eng.url.query["odbc_connect"]
@@ -257,6 +261,6 @@ def test_engine_from_settings_password_and_entra() -> None:
 
 
 def test_password_braces_are_escaped_in_odbc_string() -> None:
-    s = Settings.from_env({"TIDAL_SQL__PASSWORD": "a}b;c}}d"})
+    s = Settings.from_env({"TIDAL_ENV": "local", "TIDAL_SQL__PASSWORD": "a}b;c}}d"})
     odbc = sr.create_engine_from_settings(s).url.query["odbc_connect"]
     assert "PWD={a}}b;c}}}}d};" in odbc

@@ -1,7 +1,8 @@
 """Write the app's generated OpenAPI document as JSON: ``export_openapi.py <output-path>``.
 
-Used by the CI ``openapi-diff`` job. Builds the app with default (local) settings and no clients;
-nothing is contacted.
+Used by the CI ``openapi-diff`` job. Builds the app with explicit ``TIDAL_ENV=local`` settings
+(the process environment is ignored, so the document is reproducible) and no clients; nothing is
+contacted.
 """
 
 import json
@@ -14,7 +15,7 @@ from tidal.common.config import Settings
 
 def export(path: Path) -> None:
     """Generate the OpenAPI document and write it to ``path`` (UTF-8, sorted keys)."""
-    app = create_app(Settings.from_env({}))
+    app = create_app(Settings.from_env({"TIDAL_ENV": "local"}))
     path.write_text(json.dumps(app.openapi(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 

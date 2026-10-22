@@ -44,7 +44,7 @@ def _load() -> Any:
     doc: dict[str, Any] = yaml.safe_load(CONTRACT.read_text("utf-8"))
     doc["paths"] = {p: v for p, v in doc["paths"].items() if p in READ_PATHS}
     app = create_app(
-        Settings.from_env({"TIDAL_AUTH__DISABLED": "true"}),
+        Settings.from_env({"TIDAL_ENV": "local", "TIDAL_AUTH__DISABLED": "true"}),
         reader=FakeReader(),
         clock=TickingClock(),
     )

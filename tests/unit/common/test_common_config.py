@@ -15,6 +15,13 @@ from tidal.common.errors import ConfigError
 CONTRACT = Path(__file__).resolve().parents[3] / "docs" / "contracts" / "config-contract.md"
 ROW = re.compile(r"^\| `(TIDAL_[A-Z_]+)` \| (.+?) \| (.+?) \| (.+?) \|")
 TENANT = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b"
+REQUIRED = "**required**"  # Default column of keys without a default
+LOCAL = {"TIDAL_ENV": "local"}
+
+
+def _local(**extra: str) -> dict[str, str]:
+    """Minimal valid local environment (``TIDAL_ENV`` is required, contract v1.1)."""
+    return {**LOCAL, **extra}
 
 
 def _azure(env: str = "prod", **extra: str) -> dict[str, str]:
@@ -78,9 +85,23 @@ def test_code_keys_equal_contract_keys() -> None:
     assert allowed_env_keys() == {key for key, *_ in ROWS}
 
 
+def test_required_keys_match_contract() -> None:
+    required = {key for key, _typ, default, _secret in ROWS if default == REQUIRED}
+    assert required == {"TIDAL_ENV"}
+    code_required = {
+        f"TIDAL_{n}".upper() for n, f in Settings.model_fields.items() if f.is_required()
+    }
+    assert code_required == required
+
+
 @pytest.mark.parametrize(("key", "typ", "default", "secret"), ROWS, ids=[r[0] for r in ROWS])
 def test_default_matches_contract(key: str, typ: str, default: str, secret: bool) -> None:
-    value = _get(Settings.from_env({}), key)
+    if default == REQUIRED:
+        environ = {k: _sample(k, t)[0] for k, t, d, _s in ROWS if d == REQUIRED and k != key}
+        with pytest.raises(ConfigError, match=key):
+            Settings.from_env(environ)
+        return
+    value = _get(Settings.from_env(LOCAL), key)
     if default == "—":
         assert value is None
     else:
@@ -100,16 +121,49 @@ def test_every_contract_key_parsed_from_env() -> None:
 
 
 def test_keys_are_case_insensitive() -> None:
-    assert Settings.from_env({"tidal_sql__database": "lower"}).sql.database == "lower"
+    environ = {"tidal_env": "local", "tidal_sql__database": "lower"}
+    assert Settings.from_env(environ).sql.database == "lower"
+
+
+@pytest.mark.parametrize("environ", [{}, {"TIDAL_SQL__DATABASE": "x"}, {"AZURE_CLIENT_ID": "abc"}])
+def test_missing_env_fails_closed(environ: dict[str, str]) -> None:
+    with pytest.raises(ConfigError, match="TIDAL_ENV is required"):
+        Settings.from_env(environ)
+
+
+@pytest.mark.parametrize("env", ["local", "dev", "prod"])
+def test_explicit_env_accepted(env: str) -> None:
+    environ = LOCAL if env == "local" else _azure(env)
+    assert Settings.from_env(environ).env == env
+
+
+def test_bare_settings_missing_env_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TIDAL_ENV", raising=False)
+    with pytest.raises(ValidationError, match="TIDAL_ENV is required"):
+        Settings()
 
 
 def test_bare_settings_reads_process_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TIDAL_ENV", "local")
     monkeypatch.setenv("TIDAL_SQL__DATABASE", "fromenv")
     assert Settings().sql.database == "fromenv"
 
 
+def test_get_settings_without_env_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    get_settings.cache_clear()
+    monkeypatch.delenv("TIDAL_ENV", raising=False)
+    try:
+        with pytest.raises(ConfigError, match="TIDAL_ENV is required"):
+            get_settings()
+        monkeypatch.setenv("TIDAL_ENV", "local")  # a failed call is not cached
+        assert get_settings().env == "local"
+    finally:
+        get_settings.cache_clear()
+
+
 def test_get_settings_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
     get_settings.cache_clear()
+    monkeypatch.setenv("TIDAL_ENV", "local")
     monkeypatch.setenv("TIDAL_HOT_WINDOW_DAYS", "30")
     try:
         assert get_settings() is get_settings()
@@ -119,7 +173,7 @@ def test_get_settings_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_azure_client_id_is_ignored() -> None:
-    environ = {"AZURE_CLIENT_ID": "abc", "PATH": "x"}
+    environ = _local(AZURE_CLIENT_ID="abc", PATH="x")
     assert Settings.from_env(environ).env == "local"
 
 
@@ -128,10 +182,11 @@ def test_azure_client_id_is_ignored() -> None:
 )
 def test_unknown_tidal_key_fails(key: str) -> None:
     with pytest.raises(ConfigError, match="unknown configuration keys"):
-        Settings.from_env({key: "x"})
+        Settings.from_env(_local(**{key: "x"}))
 
 
 def test_unknown_key_fails_for_bare_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TIDAL_ENV", "local")
     monkeypatch.setenv("TIDAL_LOGLEVEL", "INFO")
     with pytest.raises(ConfigError):
         Settings()
@@ -159,7 +214,7 @@ def test_auth_disabled_outside_local_fails(env: str) -> None:
 
 
 def test_auth_disabled_allowed_locally() -> None:
-    assert Settings.from_env({"TIDAL_AUTH__DISABLED": "true"}).auth.disabled is True
+    assert Settings.from_env(_local(TIDAL_AUTH__DISABLED="true")).auth.disabled is True
 
 
 @pytest.mark.parametrize("env", ["dev", "prod"])
@@ -171,7 +226,7 @@ def test_tenant_required_outside_local(env: str) -> None:
 
 
 def test_tenant_optional_locally() -> None:
-    assert Settings.from_env({}).auth.tenant_id is None
+    assert Settings.from_env(LOCAL).auth.tenant_id is None
 
 
 @pytest.mark.parametrize("env", ["dev", "prod"])
@@ -212,6 +267,7 @@ def test_local_only_keys_fail_outside_local(key: str, env: str) -> None:
 
 def test_local_only_keys_allowed_locally() -> None:
     environ = {
+        **LOCAL,
         "TIDAL_STORAGE__CONNECTION_STRING": "UseDevelopmentStorage=true",
         "TIDAL_SERVICEBUS__CONNECTION_STRING": "UseDevelopmentEmulator=true",
         "TIDAL_SQL__PASSWORD": "pw",
@@ -228,7 +284,7 @@ def test_otel_connection_string_allowed_in_azure() -> None:
 
 @pytest.mark.parametrize("server", [None, "", "localhost", "127.0.0.1"])
 def test_entra_mi_without_server_fails(server: str | None) -> None:
-    environ = {"TIDAL_SQL__AUTH": "entra_mi"}
+    environ = _local(TIDAL_SQL__AUTH="entra_mi")
     if server is not None:
         environ["TIDAL_SQL__SERVER"] = server
     with pytest.raises(ConfigError, match="TIDAL_SQL__SERVER"):
@@ -238,17 +294,17 @@ def test_entra_mi_without_server_fails(server: str | None) -> None:
 @pytest.mark.parametrize("days", ["0", "-1"])
 def test_hot_window_days_must_be_positive(days: str) -> None:
     with pytest.raises(ConfigError, match="hot_window_days"):
-        Settings.from_env({"TIDAL_HOT_WINDOW_DAYS": days})
+        Settings.from_env(_local(TIDAL_HOT_WINDOW_DAYS=days))
 
 
 def test_synth_start_after_end_fails() -> None:
-    environ = {"TIDAL_SYNTH__START": "2020-01-02", "TIDAL_SYNTH__END": "2020-01-01"}
+    environ = _local(TIDAL_SYNTH__START="2020-01-02", TIDAL_SYNTH__END="2020-01-01")
     with pytest.raises(ConfigError, match="TIDAL_SYNTH__START must be <= TIDAL_SYNTH__END"):
         Settings.from_env(environ)
 
 
 def test_synth_single_day_ok() -> None:
-    environ = {"TIDAL_SYNTH__START": "2020-01-01", "TIDAL_SYNTH__END": "2020-01-01"}
+    environ = _local(TIDAL_SYNTH__START="2020-01-01", TIDAL_SYNTH__END="2020-01-01")
     assert Settings.from_env(environ).synth.start == date(2020, 1, 1)
 
 
@@ -264,14 +320,14 @@ def test_synth_single_day_ok() -> None:
 )
 def test_invalid_values_fail_without_echoing_input(key: str, value: str) -> None:
     with pytest.raises(ConfigError) as exc_info:
-        Settings.from_env({key: value})
+        Settings.from_env(_local(**{key: value}))
     assert value not in str(exc_info.value)
 
 
 def test_secrets_never_revealed() -> None:
     secrets = [key for key, typ, *_ in ROWS if typ == "secret"]
     assert len(secrets) == 6
-    settings = Settings.from_env({key: f"pw-{i}-hunter2" for i, key in enumerate(secrets)})
+    settings = Settings.from_env(_local(**{k: f"pw-{i}-hunter2" for i, k in enumerate(secrets)}))
     rendered = [
         repr(settings),
         str(settings),
@@ -285,6 +341,6 @@ def test_secrets_never_revealed() -> None:
 
 
 def test_settings_are_frozen() -> None:
-    settings = Settings.from_env({})
+    settings = Settings.from_env(LOCAL)
     with pytest.raises(ValidationError, match="frozen"):
         settings.env = "prod"  # type: ignore[misc]
