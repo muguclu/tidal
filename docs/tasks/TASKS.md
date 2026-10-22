@@ -85,7 +85,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 |---|---|---|---|---|---|---|
 | T-205 | Migration job, retag, compaction | data-engineer | T-106 | `src/tidal/storage/{tiering,retag,compact,tiering_cli}.py` +tests | SPEC-03 §2–3.1; applock; manifest; `age_band` tags; all versions migrated and kept; sweeps late restatements written to SQL below the watermark into a new `part-` (reader already merges them, T-208) | done |
 | T-206 | Crash-injection property tests | test-engineer | T-205 | `tests/integration/test_tiering_crash.py` | kill at each step ⇒ same final state | todo |
-| T-207 | Lifecycle policy + retag | infra-engineer | T-121, T-205 | `modules/storage/{lifecycle.tf,README.md}`, `docs/finops/deltas/T-207.md`, SPEC-03 §3.1/§4 | rules = SPEC-03 §4 (tag filters match T-205 tag names) | todo |
+| T-207 | Lifecycle policy + retag | infra-engineer | T-121, T-205 | `modules/storage/{lifecycle.tf,README.md}`, `docs/finops/deltas/T-207.md`, `docs/finops/deltas/T-207_model.py`, SPEC-03 §3.1/§4/§6 acceptance line | rules = SPEC-03 §4 (tag filters match T-205 tag names) | todo |
 | T-208 | Unified reader | data-engineer | T-106 | `src/tidal/query/{reader,duck}.py` +tests | hypothesis equality vs SQL baseline (200 ranges) | done |
 
 ### Lane C — API on real data (api-engineer)
