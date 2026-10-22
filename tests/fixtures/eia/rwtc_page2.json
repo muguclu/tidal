@@ -1,0 +1,67 @@
+{
+  "response": {
+    "total": "6",
+    "dateFormat": "YYYY-MM-DD",
+    "frequency": "daily",
+    "data": [
+      {
+        "period": "2020-04-21",
+        "duration": null,
+        "area-name": "NA",
+        "area": "NA",
+        "product": "EPCWTI",
+        "product-name": "WTI Crude Oil",
+        "process": "PF4",
+        "process-name": "Spot Price FOB",
+        "series": "RWTC",
+        "series-description": "Cushing, OK WTI Spot Price FOB (Dollars per Barrel)",
+        "value": "8.91",
+        "units": "$/BBL"
+      },
+      {
+        "period": "2020-04-22",
+        "duration": null,
+        "area-name": "NA",
+        "area": "NA",
+        "product": "EPCWTI",
+        "product-name": "WTI Crude Oil",
+        "process": "PF4",
+        "process-name": "Spot Price FOB",
+        "series": "RWTC",
+        "series-description": "Cushing, OK WTI Spot Price FOB (Dollars per Barrel)",
+        "value": "13.75",
+        "units": "$/BBL"
+      },
+      {
+        "period": "2020-04-23",
+        "duration": null,
+        "area-name": "NA",
+        "area": "NA",
+        "product": "EPCWTI",
+        "product-name": "WTI Crude Oil",
+        "process": "PF4",
+        "process-name": "Spot Price FOB",
+        "series": "RWTC",
+        "series-description": "Cushing, OK WTI Spot Price FOB (Dollars per Barrel)",
+        "value": "15.06",
+        "units": "$/BBL"
+      }
+    ],
+    "description": "Petroleum spot prices."
+  },
+  "request": {
+    "command": "/v2/petroleum/pri/spt/data/",
+    "params": {
+      "frequency": "daily",
+      "data": [
+        "value"
+      ],
+      "facets": {
+        "series": [
+          "RWTC"
+        ]
+      }
+    }
+  },
+  "apiVersion": "2.1.8"
+}

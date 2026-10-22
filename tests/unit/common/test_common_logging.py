@@ -276,3 +276,9 @@ def test_correlation_id_propagates_per_task(capsys: pytest.CaptureFixture[str]) 
     assert len(lines) == 5
     assert all(line["correlation_id"] == line["expected"] for line in lines)
     assert get_correlation_id() is None
+
+
+def test_http_client_loggers_never_log_urls_at_info() -> None:
+    configure_logging(Settings.from_env({"TIDAL_LOG_LEVEL": "DEBUG"}))
+    for name in ("httpx", "httpcore", "urllib3"):
+        assert logging.getLogger(name).getEffectiveLevel() >= logging.WARNING
