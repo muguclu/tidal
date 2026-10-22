@@ -4,6 +4,7 @@
 # ruff: noqa: F811 - the shared fixtures are imported by name and used as arguments
 
 import io
+import re
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -348,7 +349,8 @@ def test_cli_group_is_registered_with_three_commands() -> None:
     for cmd in ("run", "retag", "compact"):
         assert cmd in out.output
     assert CliRunner().invoke(app, ["run", "--table", "nope"]).exit_code != 0
-    help_out = CliRunner().invoke(app, ["run", "--help"]).output
+    raw = CliRunner().invoke(app, ["run", "--help"], env={"COLUMNS": "200"}).output
+    help_out = re.sub(r"\x1b\[[0-9;]*m", "", raw)  # CI renders Rich colours
     assert "--dry-run" in help_out and "--hot-window-days" in help_out
 
 
