@@ -14,17 +14,20 @@ from pydantic import SecretStr
 from tidal.common.errors import ConfigError
 from tidal.common.timeutil import FixedClock
 from tidal.contracts.instruments import CATALOGUE_V1
-from tidal.ingest.sources import eia
-from tidal.ingest.sources.base import RawChunk, raw_blob_path
+from tidal.ingest.sources import base, eia, fred
+from tidal.ingest.sources.base import (
+    RawChunk,
+    raw_blob_path,
+    redact_url,
+    strip_api_key,
+    strip_credential_echo,
+)
 from tidal.ingest.sources.eia import (
     EIA_FUTURES_LAST_DATE,
     EiaRequestRejected,
     EiaSource,
     EiaUnavailable,
     parse_eia_page,
-    redact_url,
-    strip_api_key,
-    strip_credential_echo,
 )
 from tidal.storage.parquet_writer import LocalStore
 
@@ -184,8 +187,8 @@ def test_gives_up_after_max_attempts(tmp_path: Path) -> None:
     src, sleeps, _ = make(tmp_path, server)
     with pytest.raises(EiaUnavailable) as ei:
         run(src)
-    assert len(server.requests) == eia.MAX_ATTEMPTS
-    assert len(sleeps) == eia.MAX_ATTEMPTS - 1
+    assert len(server.requests) == base.MAX_ATTEMPTS
+    assert len(sleeps) == base.MAX_ATTEMPTS - 1
     assert KEY not in str(ei.value)
 
 
@@ -362,4 +365,23 @@ def test_retry_after_capped_at_300(tmp_path: Path) -> None:
     server = Server([httpx.Response(429, headers={"Retry-After": "9999"})])
     src, sleeps, _ = make(tmp_path / "2", server)
     run(src)
-    assert sleeps == [eia.MAX_RETRY_AFTER_S]
+    assert sleeps == [base.MAX_RETRY_AFTER_S]
+
+
+def test_strip_scopes_eia_request_and_fred_observations() -> None:
+    body = {"request": {"params": {"api_key": "k"}}, "response": {"api_key": "keep"}}
+    assert strip_api_key(body, only="request") == {
+        "request": {"params": {}},
+        "response": {"api_key": "keep"},
+    }
+    fred_body = {"api_key": "k", "meta": [{"API_KEY": "k"}], "observations": [{"api_key": "d"}]}
+    assert strip_api_key(fred_body, keep="observations") == {
+        "meta": [{}],
+        "observations": [{"api_key": "d"}],
+    }
+    assert strip_api_key({"x": 1}, only="request") == {"x": 1}
+
+
+def test_redact_url_is_case_insensitive_and_shared_by_both_sources() -> None:
+    assert vars(eia)["redact_url"] is vars(fred)["redact_url"] is base.redact_url
+    assert redact_url("u?API_KEY=abc'") == "u?API_KEY=**********'"

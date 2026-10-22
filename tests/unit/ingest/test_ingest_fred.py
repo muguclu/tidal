@@ -15,14 +15,18 @@ from pydantic import SecretStr
 from tidal.common.errors import ConfigError
 from tidal.common.timeutil import FixedClock
 from tidal.ingest.sources import base, fred
-from tidal.ingest.sources.base import RawChunk, raw_blob_path, redact_url
+from tidal.ingest.sources.base import (
+    RawChunk,
+    raw_blob_path,
+    redact_url,
+    strip_api_key,
+    strip_credential_echo,
+)
 from tidal.ingest.sources.fred import (
     FredRequestRejected,
     FredSource,
     FredUnavailable,
     parse_fred_page,
-    strip_api_key,
-    strip_credential_echo,
 )
 from tidal.storage.parquet_writer import LocalStore
 

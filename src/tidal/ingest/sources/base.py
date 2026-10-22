@@ -7,6 +7,7 @@ replayed without hitting the upstream API again.
 
 import gzip
 import hashlib
+import json
 import re
 import tempfile
 from collections.abc import Iterator
@@ -42,6 +43,52 @@ def retry_delay(attempt: int, retry_after: str | None, rng: np.random.Generator)
     if retry_after is not None and retry_after.strip().isdigit():
         delay = min(max(delay, float(retry_after)), MAX_RETRY_AFTER_S)
     return float(delay)
+
+
+def _drop_api_key(node: object) -> object:
+    if isinstance(node, dict):
+        return {k: _drop_api_key(v) for k, v in node.items() if str(k).lower() != "api_key"}
+    if isinstance(node, list):
+        return [_drop_api_key(v) for v in node]
+    return node
+
+
+def strip_api_key(body: object, *, only: str | None = None, keep: str | None = None) -> object:
+    """Remove ``api_key`` fields (any case, any depth) from a parsed JSON response.
+
+    ``only="request"``: touch just that top-level subtree (EIA echoes params in ``request``);
+    a body without it is returned unchanged. ``keep="observations"``: clean everything else,
+    top level included, but leave that subtree's data alone (FRED). Neither: clean everything.
+    """
+    if not isinstance(body, dict):
+        return body
+    if only is not None:
+        return {**body, only: _drop_api_key(body[only])} if only in body else body
+    return {
+        k: v if k == keep else _drop_api_key(v)
+        for k, v in body.items()
+        if str(k).lower() != "api_key"
+    }
+
+
+def strip_credential_echo(
+    payload: bytes, *, only: str | None = None, keep: str | None = None
+) -> bytes:
+    """Raw payload = verbatim response minus any credential echo.
+
+    Bytes are returned untouched unless an ``api_key`` field is removed; then the document is
+    re-serialised compactly (original key order, ``ensure_ascii=False``) so the sha256 and
+    digest never depend on the key value. Unparseable bodies are returned as is. See
+    :func:`strip_api_key` for ``only`` / ``keep``.
+    """
+    try:
+        body = json.loads(payload)
+    except ValueError:
+        return payload
+    cleaned = strip_api_key(body, only=only, keep=keep)
+    if cleaned == body:
+        return payload
+    return json.dumps(cleaned, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
 @dataclass(frozen=True, slots=True)

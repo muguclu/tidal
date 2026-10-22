@@ -24,7 +24,8 @@ from typing import Any  # Any: decoded JSON bodies from EIA, validated key by ke
 import httpx
 
 from tidal.contracts.instruments import CATALOGUE_V1
-from tidal.ingest.sources.eia import BASE_URL, ROUTES, redact_url, strip_api_key
+from tidal.ingest.sources.base import redact_url, strip_api_key
+from tidal.ingest.sources.eia import BASE_URL, ROUTES
 
 KEY_ENV = "TIDAL_SOURCES__EIA_API_KEY"
 LIVE_DIR = Path("tests/fixtures/eia/live")
@@ -52,7 +53,7 @@ def _get(client: httpx.Client, key: str, path: str, params: dict[str, str | int]
 
 def _record(out: Path, name: str, url: str, body: Any) -> None:
     out.mkdir(parents=True, exist_ok=True)
-    doc = {"url": redact_url(url), "body": strip_api_key(body)}
+    doc = {"url": redact_url(url), "body": strip_api_key(body, only="request")}
     (out / f"{name}.json").write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
 
 
