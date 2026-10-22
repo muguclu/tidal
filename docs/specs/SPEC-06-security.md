@@ -23,6 +23,7 @@ Owner agents: `infra-engineer`, `api-engineer`; reviewer: `security-reviewer` ·
 | id-tiering | Blob Data Owner on container `marketdata` (blob index tags need `tags/write`; the ARM "Tag Contributor" role does **not** cover blob tags; T-403 checks whether Blob Data Contributor + a custom `tags/write` role is tighter) | — | db_datareader/writer + delete on `md`, `ops` | Data Receiver (`tiering-jobs`) | — | — |
 | id-legacy-vm | Blob Data Contributor (`exports`) | — | db_datareader | — | — | — (plus custom role `vm-self-deallocate`: `deallocate/action` on its own VM only) |
 | AKS kubelet | — | — | — | — | — | AcrPull |
+| KEDA operator (workload identity) | — | — | — | Data Owner on `backtest-jobs` (queue-length reads need management rights; T-403 checks whether a narrower custom role works) | — | — |
 | sp-tidal-ci | — | — | — | — | — | AcrPush; Contributor on RG `rg-tidal-dev` only (enough for image push and app updates; **not** for `terraform apply`, which needs role-assignment and Graph rights and stays human-only) |
 
 SQL: Entra-only authentication (`azuread_authentication_only = true`), identities mapped with

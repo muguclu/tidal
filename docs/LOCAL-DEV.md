@@ -9,7 +9,7 @@ planned, time-boxed **cloud window** to collect real evidence (deployments, scal
 |---|---|---|
 | Blob Storage | **Azurite** (`mcr.microsoft.com/azure-storage/azurite`) | Same SDK; lifecycle policies and access tiers are *not* emulated → test tag logic only |
 | Azure SQL | **SQL Server 2022 container** (`mcr.microsoft.com/mssql/server:2022-latest`) | Azure SQL Edge is retired. On Apple Silicon runs via Rosetta (enable in Docker Desktop). Serverless auto-pause not emulated |
-| Service Bus | **Service Bus emulator** (`mcr.microsoft.com/azure-messaging/servicebus-emulator`) | Needs its own SQL container; queues defined in `deploy/local/sb-config.json`. Verify feature limits in its docs |
+| Service Bus | **Service Bus emulator** (`mcr.microsoft.com/azure-messaging/servicebus-emulator`) | Shares the compose SQL Server container (T-112); queues in `deploy/local/sb-config.json`. Emulator caps message TTL at 1 h (Azure: 24 h per contract) and has no duplicate detection |
 | AKS | **kind** or **k3d** + KEDA Helm chart | Scaling demo 0→N→0 works locally; if the KEDA azure-servicebus scaler cannot reach the emulator, use the `redis` or `metrics-api` scaler for the local demo only (document it) |
 | Container Apps / App Service | docker compose services | Scale-to-zero only demonstrable in Azure |
 | Entra ID | Local test JWKS + token minting script (`scripts/dev-token.py`) | Real Entra only in the cloud window |
