@@ -84,7 +84,31 @@ resource "azurerm_consumption_budget_subscription" "this" {
   }
 }
 
-# Subscription-scoped. Needs rights the CI identity does not hold (SPEC-06 section 2), so a human applies it.
+# Cloud-window credit alerts (LOCAL-DEV section 2). Always subscription scope, 100 % Actual only.
+resource "azurerm_consumption_budget_subscription" "credit" {
+  for_each = { for a in var.credit_alert_amounts : tostring(a) => a }
+
+  name            = "${local.budget_name}-credit-${each.key}"
+  subscription_id = "/subscriptions/${local.subscription_id}"
+  amount          = each.value
+  time_grain      = "Monthly"
+
+  time_period {
+    start_date = var.start_date
+    end_date   = var.end_date
+  }
+
+  notification {
+    enabled        = true
+    threshold      = 100
+    threshold_type = "Actual"
+    operator       = "GreaterThan"
+    contact_emails = var.alert_emails
+    contact_groups = [azurerm_monitor_action_group.this.id]
+  }
+}
+
+# Subscription-scoped. Needs subscription-level rights; apply is human-only in this project.
 resource "azurerm_cost_anomaly_alert" "this" {
   count = var.enable_anomaly_alert ? 1 : 0
 

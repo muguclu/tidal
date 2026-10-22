@@ -17,3 +17,8 @@ output "anomaly_alert_id" {
   description = "Cost anomaly alert ID, or null when enable_anomaly_alert is false."
   value       = one(azurerm_cost_anomaly_alert.this[*].id)
 }
+
+output "credit_budget_ids" {
+  description = "Map of credit alert amount to budget ID (empty unless credit_alert_amounts is set)."
+  value       = { for k, b in azurerm_consumption_budget_subscription.credit : k => b.id }
+}

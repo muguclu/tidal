@@ -61,13 +61,24 @@ variable "action_group_short_name" {
 }
 
 variable "budget_scope" {
-  description = "Budget scope. resource_group (default) needs only the Contributor the CI identity holds on rg-tidal-<env> (SPEC-06 section 2) but ignores spend outside the group. subscription covers all spend (needed for the cloud-window credit, LOCAL-DEV section 2) and needs subscription-level rights, so a human applies it."
+  description = "Budget scope. subscription (default) covers all spend including the AKS node resource group MC_*, the largest cost item (SPEC-09 C4), which a resource-group budget misses. Terraform apply is human-only in this project, so the subscription-level rights needed are not a CI concern. resource_group remains available (azurerm_consumption_budget_resource_group, scoped to resource_group_id)."
   type        = string
-  default     = "resource_group"
+  default     = "subscription"
 
   validation {
     condition     = contains(["resource_group", "subscription"], var.budget_scope)
     error_message = "budget_scope must be resource_group or subscription."
+  }
+}
+
+variable "credit_alert_amounts" {
+  description = "Cloud-window credit alerts (LOCAL-DEV section 2: 50, 100, 150). Each amount creates an extra subscription budget with a single 100 % Actual notification to the action group and alert_emails. Amounts are in the subscription billing currency (the USD credit only matches if the account bills in USD). Empty by default."
+  type        = list(number)
+  default     = []
+
+  validation {
+    condition     = alltrue([for a in var.credit_alert_amounts : a > 0 && a <= 100000]) && length(distinct(var.credit_alert_amounts)) == length(var.credit_alert_amounts)
+    error_message = "credit_alert_amounts must be distinct numbers greater than 0 and at most 100000."
   }
 }
 
@@ -104,7 +115,7 @@ variable "end_date" {
 }
 
 variable "enable_anomaly_alert" {
-  description = "Create the subscription-scoped azurerm_cost_anomaly_alert (PLANNING section 6). It needs subscription-level rights (Cost Management Contributor) that the CI identity does not have, so keep false in CI and let a human apply it."
+  description = "Create the subscription-scoped azurerm_cost_anomaly_alert (PLANNING section 6). It needs subscription-level rights (Cost Management Contributor) apply is human-only in this project."
   type        = bool
   default     = false
 }
