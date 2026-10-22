@@ -5,13 +5,13 @@ One Service Bus namespace (**Basic**) with the three queues of messaging-contrac
 `tiering-jobs` (max delivery 3). The `queues` variable defaults equal the contract; a `check` block warns when the
 set of queue names drifts from it.
 
-- `enable_ingest_topic = true` (default false) switches the namespace to **Standard** (topics are not available on Basic) and adds topic `ingest-events` with subscriptions `stats` and `quality-alerts`. This adds a fixed monthly base charge; see `docs/finops/deltas/T-124.md`.
+- `enable_ingest_topic = true` (default false) switches the namespace to **Standard** (topics are not available on Basic) and adds topic `ingest-events` with subscriptions `stats` and `quality-alerts`. This adds a fixed monthly base charge; see `docs/finops/deltas/T-124.md`. Basic → Standard updates in place; Standard → Basic can fail while the topic exists (remove it first). Check with `make tf-plan` before flipping the flag.
 - Security: TLS 1.2, `local_auth_enabled = false` (no SAS keys; Entra ID + RBAC only). The public endpoint stays on per ADR-0006 because a private endpoint needs Premium.
 - Basic has no sessions and no duplicate detection: `requires_session` and `requires_duplicate_detection` are false (ADR-0003, messaging-contract section 4); consumers are idempotent.
 - RBAC (T-403): scope Sender/Receiver data roles to `queue_ids["<name>"]`, per SPEC-06 section 2. Role assignments are not in this module.
 - `fqdn` maps to `TIDAL_SERVICEBUS__FQDN`.
 - No `prevent_destroy`: `terraform destroy` must remove everything except bootstrap (SPEC-07 section 6).
-- Checkov skips (inline, justified): CMK (CKV_AZURE_199, CKV_AZURE_201; Premium-only), public endpoint (CKV_AZURE_204; ADR-0006), managed identity (CKV_AZURE_202), network rule set (CKV_AZURE_218).
+- Checkov skips (inline, justified): double encryption and CMK (CKV_AZURE_199, CKV_AZURE_201; Premium-only), public endpoint (CKV_AZURE_204; ADR-0006), managed identity (CKV_AZURE_202).
 
 Usage: see `examples/basic` (`-var enable_ingest_topic=true` for the Standard variant).
 

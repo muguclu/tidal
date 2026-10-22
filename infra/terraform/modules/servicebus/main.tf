@@ -25,11 +25,10 @@ resource "azurerm_servicebus_namespace" "this" {
   sku                 = local.sku
 
   # Checkov skips (each justified):
-  #checkov:skip=CKV_AZURE_199:No customer-managed key; CMK is Premium-only (ADR-0003), Microsoft-managed keys suffice for job messages
+  #checkov:skip=CKV_AZURE_199:Double encryption is Premium-only (ADR-0003); Microsoft-managed keys suffice for job messages
   #checkov:skip=CKV_AZURE_201:No customer-managed key; CMK is Premium-only (ADR-0003)
   #checkov:skip=CKV_AZURE_204:Public endpoint stays on by design (ADR-0006): a private endpoint needs Premium; access is Entra ID + RBAC with TLS 1.2
   #checkov:skip=CKV_AZURE_202:No managed identity needed: the namespace does not call other resources (no CMK, no capture)
-  #checkov:skip=CKV_AZURE_218:Network rule sets and Premium features are not available on Basic
   minimum_tls_version = "1.2"
 
   # Entra ID + RBAC only: no SAS keys (SPEC-06 section 2). Role assignments are T-403.

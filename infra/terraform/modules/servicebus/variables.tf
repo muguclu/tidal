@@ -47,7 +47,7 @@ variable "enable_ingest_topic" {
 }
 
 variable "queues" {
-  description = "Queues keyed by name. Defaults equal messaging-contract section 1 exactly. null lock_duration / default_message_ttl / max_delivery_count means the Service Bus default (PT1M / unlimited TTL / 10). Basic has no sessions or duplicate detection, so neither is configurable."
+  description = "Queues keyed by name. Defaults equal messaging-contract section 1 exactly. null lock_duration / default_message_ttl / max_delivery_count means the Service Bus default (PT1M / the tier maximum TTL, 14 days on Basic / 10). Basic has no sessions or duplicate detection, so neither is configurable."
   type = map(object({
     lock_duration                        = optional(string)
     max_delivery_count                   = optional(number)
