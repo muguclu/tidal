@@ -12,8 +12,9 @@ Assumptions (stated, not measured):
 - Control plane: Free tier, no meter, 0.
 - System pool: 1x Standard_B2s, on 730 h unless the cluster is stopped. OS disk 32 GB = P4 premium SSD (a managed
   OS disk, billed per month, also while the cluster is stopped because disks are not deleted by `az aks stop`).
-- Spot pool: D4as_v5 spot at the list spot price (real price varies, evictions possible), ephemeral OS disk on the VM
-  cache (no disk meter), scale to zero between sweeps. Node-hours per month are SCENARIOS, not measurements:
+- Spot pool: D4as_v5 spot at the list spot price (real price varies, evictions possible), scale to zero between
+  sweeps. Each node has a 32 GB managed OS disk (P4; Dasv5 has no cache, so no ephemeral disk), billed prorated per
+  node-hour as the monthly P4 meter / 730. Node-hours per month are SCENARIOS, not measurements:
   light = 4 sweeps x 10 nodes x 1 h, heavy = 10 sweeps x 10 nodes x 1.5 h. Node start-up time is ignored.
 - Networking: the AKS standard load balancer (outbound) with one managed static public IP, both billed per hour for
   730 h. Whether `az aks stop` releases them is UNVERIFIED, so the parked column keeps them (conservative).
@@ -38,6 +39,8 @@ P4 = P["disk_premium_p4_month"]
 LB = P["lb_standard_rules_hour"]
 PIP = P["publicip_standard_static_hour"]
 
+SPOT_DISK_HOUR = P4 / HOURS  # prorated managed OS disk per spot node-hour
+
 SCENARIOS = {"light": 4 * 10 * 1.0, "heavy": 10 * 10 * 1.5}  # spot node-hours per month
 
 rows = [
@@ -54,16 +57,17 @@ print("| Component | Quantity x unit price (EUR) | Active EUR/month | Parked EUR
 print("|---|---|---:|---:|")
 for name, qty, act, park, _ in rows:
     print(f"| {name} | {qty} | {act:.2f} | {park:.2f} |")
-print(f"| Spot pool D4as_v5, ephemeral OS disk | node-hours x {SPOT}; scenarios below | 0.00 at idle | 0.00 |")
+print(f"| Spot pool D4as_v5 + 32 GB P4 OS disk | node-hours x ({SPOT} + {P4}/{HOURS}); scenarios below | 0.00 at idle | 0.00 |")
 print(f"| **Fixed subtotal (no sweeps)** | | **{fixed_active:.2f}** | **{fixed_parked:.2f}** |")
 print()
-print("| Spot scenario | Node-hours/month | Spot EUR/month | Same hours on demand EUR/month | Saving EUR/month | Total active EUR/month |")
-print("|---|---:|---:|---:|---:|---:|")
+print("| Spot scenario | Node-hours/month | Spot compute EUR | OS disks EUR | Spot total EUR | Same hours on demand incl. disk EUR | Saving EUR | Total active EUR/month |")
+print("|---|---:|---:|---:|---:|---:|---:|---:|")
 for name, nh in SCENARIOS.items():
-    s, o = nh * SPOT, nh * OND
-    print(f"| {name} | {nh:.0f} | {s:.2f} | {o:.2f} | {o - s:.2f} | {fixed_active + s:.2f} |")
+    c, d = nh * SPOT, nh * SPOT_DISK_HOUR
+    o = nh * OND + d
+    print(f"| {name} | {nh:.0f} | {c:.2f} | {d:.2f} | {c + d:.2f} | {o:.2f} | {o - c - d:.2f} | {fixed_active + c + d:.2f} |")
 print()
 print("| Variant | EUR/month |")
 print("|---|---:|")
-print(f"| Always-on spot node (min_count = 1) instead of 0 | {SPOT * HOURS:.2f} (extra {SPOT * HOURS:.2f} vs scale to zero) |")
+print(f"| Always-on spot node (min_count = 1) instead of 0 | {SPOT * HOURS + P4:.2f} (extra vs scale to zero, compute plus disk) |")
 print(f"| SPEC-09 C4 baseline, compute only: 5x D4as_v5 on demand 24/7 | {5 * OND * HOURS:.2f} |")

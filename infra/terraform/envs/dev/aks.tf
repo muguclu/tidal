@@ -2,7 +2,7 @@
 # Everything AKS-specific lives in this file so the shared main.tf, variables.tf and outputs.tf stay untouched.
 
 variable "aks_extra_admin_object_ids" {
-  description = "Additional Entra object IDs (besides the identity running terraform apply) that get Azure Kubernetes Service RBAC Cluster Admin on the dev cluster."
+  description = "Entra object IDs that get Azure Kubernetes Service RBAC Cluster Admin on the dev cluster. Prefer an Entra admin group; the identity running terraform apply is added only as a bootstrap fallback."
   type        = set(string)
   default     = []
 

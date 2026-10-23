@@ -3,11 +3,11 @@
 One AKS cluster `aks-tidal-<env>` for the backtest fan-out (SPEC-07 section 2, ADR-0002):
 
 - **Free tier** control plane; system pool `system`, 1x `Standard_B2s` (fixed count, `CriticalAddonsOnly` taint).
-- User pool `spot`: `Standard_D4as_v5`, Spot, **min 0 / max 10**, `spot_max_price = -1`, eviction `Delete`, ephemeral OS disk.
+- User pool `spot`: `Standard_D4as_v5`, Spot, **min 0 / max 10**, `spot_max_price = -1`, eviction `Delete`, 32 GB managed OS disk (P4; Dasv5 has no cache or temp disk, so ephemeral OS disks are not supported).
   Label `tidal.io/workload=backtest` and taint `tidal.io/workload=backtest:NoSchedule`; AKS adds its own
   `kubernetes.azure.com/scalesetpriority=spot:NoSchedule` taint. Backtest pods (T-307) must tolerate both taints and select the label (output `spot_pool_selector`).
-- **KEDA add-on** (`workload_autoscaler_profile.keda_enabled`), **OIDC issuer** and **workload identity** on, Secrets Store CSI driver with rotation (SPEC-06 section 3).
-- **Azure CNI Overlay** with the cilium data plane and cilium NetworkPolicy; AKS-managed VNet (pass `vnet_subnet_id` once T-404 provides `snet-aks`).
+- **KEDA add-on** (`workload_autoscaler_profile.keda_enabled`), **OIDC issuer** and **workload identity** on, Secrets Store CSI driver with rotation (SPEC-06 section 3). SecretProviderClass objects must use workload identity; the CSI add-on identity gets no role assignments.
+- **Azure CNI Overlay** with the cilium data plane (the NetworkPolicy enforcement engine; the default-deny + egress 443 policy ships with the T-307 Helm chart); AKS-managed VNet (pass `vnet_subnet_id` once T-404 provides `snet-aks`).
 - **Security:** local accounts disabled, Entra ID integration with Azure RBAC for Kubernetes, system-assigned cluster identity. Cluster admins are `azurerm_role_assignment`s of *Azure Kubernetes Service RBAC Cluster Admin* scoped to the cluster (`cluster_admin_principal_ids`); with local accounts off, an empty set means nobody can administer it.
 - **Federated credentials** (`workload_identities`): one per Kubernetes service account, issuer = the cluster OIDC URL, audience `api://AzureADTokenExchange`, subject `system:serviceaccount:<ns>:<sa>` (SPEC-06 section 1). The dev composition creates `worker` -> `id-worker` for `tidal/tidal-worker`; the Helm chart (T-307) must use that service account name. Role assignments of the identities and the KEDA operator are T-403.
 - **AcrPull** for the kubelet identity is not in this module: `envs/dev/aks.tf` scopes it to the registry from the `kubelet_identity_object_id` output (SPEC-06 section 2).
@@ -27,7 +27,7 @@ The module is designed so that parking does not need Terraform changes:
 
 ## Checkov skips
 
-Each skip carries its justification inline in `main.tf` (Free tier, public API server with Entra-only auth, no Azure Policy add-on, no CMK disk encryption, no host encryption, B2s cannot use an ephemeral OS disk, Container insights opt-in).
+Each skip carries its justification inline in `main.tf` (Free tier, public API server with Entra-only auth, no Azure Policy add-on, no CMK disk encryption, no host encryption, ephemeral OS disks unsupported on B2s and Dasv5, Container insights opt-in).
 
 Usage: see `examples/basic`.
 
@@ -63,7 +63,7 @@ Usage: see `examples/basic`.
 | `spot_pool_vm_size` | Spot node size. | `string` | `"Standard_D4as_v5"` | no |
 | `spot_pool_min_count` | Minimum spot nodes. | `number` | `0` | no |
 | `spot_pool_max_count` | Maximum spot nodes. | `number` | `10` | no |
-| `spot_pool_os_disk_size_gb` | Ephemeral OS disk size of spot nodes. | `number` | `64` | no |
+| `spot_pool_os_disk_size_gb` | Managed OS disk size of spot nodes. | `number` | `32` | no |
 | `workload_label` | Value of the tidal.io/workload label and taint. | `string` | `"backtest"` | no |
 | `pod_cidr` | Overlay pod CIDR. | `string` | `"10.244.0.0/16"` | no |
 | `service_cidr` | Service CIDR. | `string` | `"10.0.0.0/16"` | no |

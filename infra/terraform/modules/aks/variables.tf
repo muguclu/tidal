@@ -118,13 +118,13 @@ variable "spot_pool_max_count" {
 }
 
 variable "spot_pool_os_disk_size_gb" {
-  description = "Size of the ephemeral OS disk of spot nodes in GB. Ephemeral disks live on the VM cache (100 GB on D4as_v5), so they have no disk charge; the size must fit the cache."
+  description = "Size of the managed OS disk of spot nodes in GB. 32 is the smallest size above the AKS minimum of 30 GB and maps to the P4 premium SSD tier; the disk is billed only while the node exists."
   type        = number
-  default     = 64
+  default     = 32
 
   validation {
-    condition     = var.spot_pool_os_disk_size_gb >= 30 && var.spot_pool_os_disk_size_gb <= 100
-    error_message = "spot_pool_os_disk_size_gb must be between 30 and 100 (D4as_v5 cache is 100 GB)."
+    condition     = var.spot_pool_os_disk_size_gb >= 30 && var.spot_pool_os_disk_size_gb <= 128
+    error_message = "spot_pool_os_disk_size_gb must be between 30 and 128."
   }
 }
 

@@ -19,10 +19,10 @@ resource "azurerm_kubernetes_cluster" "this" {
   #checkov:skip=CKV_AZURE_115:Private cluster needs a VNet, private DNS and a jump path; deferred to the private-networking phase (T-404, SPEC-06 section 4). Mitigation: Entra ID + Azure RBAC only, local accounts disabled, optional authorized IP ranges
   #checkov:skip=CKV_AZURE_6:Authorized IP ranges are an opt-in variable (api_server_authorized_ip_ranges) because a dev laptop IP is not known to the module; Entra ID auth is always required
   #checkov:skip=CKV_AZURE_4:Container insights is opt-in (enable_container_insights): it would exhaust the 0.2 GB/day Log Analytics cap (SPEC-07 section 2)
-  #checkov:skip=CKV_AZURE_116:Azure Policy add-on adds a gatekeeper footprint on a 4 GB system node; admission rules are enforced by the Helm chart and NetworkPolicy instead
+  #checkov:skip=CKV_AZURE_116:Azure Policy add-on adds a gatekeeper footprint on a 4 GB system node; admission is Pod Security Admission (T-307 labels namespace tidal pod-security.kubernetes.io/enforce=restricted)
   #checkov:skip=CKV_AZURE_117:A disk encryption set (customer-managed key) needs Key Vault key handling and a DES; platform-managed encryption at rest is accepted for synthetic data (ADR-0013)
-  #checkov:skip=CKV_AZURE_227:Encryption at host needs a subscription feature flag and is not offered for B-series; platform-managed encryption at rest is accepted for synthetic data
-  #checkov:skip=CKV_AZURE_226:The B2s system node has no VM cache for an ephemeral OS disk; the spot pool, which holds the bulk of the nodes, does use an ephemeral OS disk
+  #checkov:skip=CKV_AZURE_227:Encryption at host needs a subscription feature flag (EncryptionAtHost) that dev subscriptions do not have by default; platform-managed encryption at rest is accepted for synthetic data
+  #checkov:skip=CKV_AZURE_226:Ephemeral OS disks are unsupported on the B2s system node and on D4as_v5 spot nodes (Dasv5 has no temp disk or cache); both pools use small managed OS disks
   sku_tier = "Free"
 
   # Entra ID only: no static admin kubeconfig. Access is Azure RBAC for Kubernetes (cluster_admin_principal_ids).
@@ -70,7 +70,7 @@ resource "azurerm_kubernetes_cluster" "this" {
     network_plugin      = "azure"
     network_plugin_mode = "overlay"
     network_data_plane  = "cilium"
-    network_policy      = "cilium" # NetworkPolicy is enforced (deny-all + allow egress 443, SPEC-07 section 4)
+    network_policy      = "cilium" # cilium is the enforcement engine only; default-deny + egress 443 (also blocks IMDS) ships with the T-307 Helm chart
     pod_cidr            = var.pod_cidr
     service_cidr        = var.service_cidr
     dns_service_ip      = var.dns_service_ip
@@ -136,8 +136,8 @@ resource "azurerm_kubernetes_cluster_node_pool" "spot" {
   min_count            = var.spot_pool_min_count
   max_count            = var.spot_pool_max_count
 
-  # Ephemeral OS disk on the VM cache: no managed-disk charge and faster scale-up.
-  os_disk_type    = "Ephemeral"
+  # Small managed OS disk (Dasv5 has no cache or temp disk, so ephemeral OS disks are unsupported); P4 tier, billed per node-hour while the node exists.
+  os_disk_type    = "Managed"
   os_disk_size_gb = var.spot_pool_os_disk_size_gb
   max_pods        = 50
 
@@ -145,10 +145,6 @@ resource "azurerm_kubernetes_cluster_node_pool" "spot" {
     "tidal.io/workload" = var.workload_label
   }
   node_taints = local.spot_taints
-
-  upgrade_settings {
-    max_surge = "10%"
-  }
 
   tags = local.tags
 
