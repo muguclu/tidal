@@ -30,7 +30,7 @@ Per table (`md.bar_hot`, `md.tick_hot`):
 5. Write the planned rows of the month in **one** `parquet_writer` call (rolls at `MAX_PART_ROWS`).
 6. **Verify**: re-read the written parts, compare row count + checksum of (`ts_ns`, `close|price`)
    with the planned rows. On a mismatch delete the parts just written, then fail.
-7. Set blob index tags (`age_band` computed from `data_year`) and rebuild `_manifest.json`
+7. Set blob index tags (`age_band` from the path's year, `compacted`; `ticks` only, ADR-0015) and rebuild `_manifest.json`
    (derived, replaceable, storage-layout §2). Tags are set **before** the delete so that no state
    exists with deleted SQL rows and untagged parts.
 8. Delete the month from SQL in chunks of 50k rows, one short transaction per chunk, each bounded by
@@ -55,7 +55,10 @@ the manifest delete and put.
 ## 3. Yearly re-tagging
 `tidal tiering retag` recomputes `age_band` for all blobs once per year (Jan 2) so lifecycle rules move
 data that "aged" across a band boundary. It runs per dataset under the same table lock as the
-migration (a busy dataset is skipped and reported) and preserves `compacted`.
+migration (a busy dataset is skipped and reported) and preserves `compacted`. Only datasets in
+`retag.TAGGED_DATASETS` (default `ticks`, ADR-0015) are tagged, with `age_band` and `compacted` only; the
+year comes from the path. Retag also removes the retired `dataset`/`instrument`/`data_year` tags and all
+tags of untagged datasets (migration of blobs written by earlier versions). Idempotent.
 
 ## 3.1 Compaction
 `tidal tiering compact --dataset bars_1d` merges the parts of a partition into one file (several if
@@ -65,15 +68,32 @@ partition without touching it. Runs yearly after retag under the table lock and 
 same way as migration: nothing is deleted before the merged parts are verified, a re-run recognises
 the complete set of output parts and resumes at tag + delete.
 
+Compaction runs **yearly for every dataset** (`ticks`, `bars_1s`, `bars_1m`, `bars_1h`, `bars_1d`)
+immediately after retag, in the same scheduled job (T-309). For a tagged dataset (`ticks`) every kept
+part ends with `compacted=true`; that tag is what makes it eligible for the lifecycle tiering of §4. Untagged
+datasets are compacted (small-file control) but no tag call is made; they stay Hot. A partition that is
+already a single part is skipped without reading data: `compacted=true` (ticks), or a manifest listing
+exactly that one part (untagged datasets).
+
 ## 4. Lifecycle policy (Terraform `modules/storage`)
 
 | Rule | Filter | Action |
 |---|---|---|
-| md-cool | container `marketdata`, tag `age_band = cool` | tierToCool after 0 days since modification |
-| md-cold | tag `age_band = cold` | tierToCold after 0 days |
+| md-cool | container `marketdata`, prefix `v1/`, blockBlob, tags `age_band = cool` AND `compacted = true` | tierToCool after 0 days since modification |
+| md-cold | container `marketdata`, prefix `v1/`, blockBlob, tags `age_band = cold` AND `compacted = true` | tierToCold after 0 days (never Archive) |
 | raw | prefix `raw/` | Cool @ 30 d, Archive @ 180 d |
 | backtests | prefix `backtests/` | Cool @ 30 d, delete @ 365 d |
 | exports / bench | prefix | delete @ 14 / 30 d |
+
+Only `ticks` parts carry the tags (ADR-0015), so only tick data is tiered; `bars_*` stay Hot. A dataset joins
+when its measured average part size clears the 2-tag break-even (`docs/finops/deltas/T-207.md`).
+
+**Compaction guard.** md-cool and md-cold also require `compacted = true`. Compaction deletes the old
+parts of a partition after writing the merged one; a part moved to Cool/Cold before that would be billed
+the early-deletion fee (Cool 30 d, Cold 90 d) and a tier-change write for bytes about to be deleted. The
+cost is that a partition leaves Hot only after its first compaction, and a restated (new, uncompacted)
+part stays Hot until the next yearly run. `_manifest.json` is never tagged, so no rule can match it and it
+stays Hot. A partition whose compaction fails (`TieringConflict`) stays Hot and is reported. Cost numbers, including the per-tag storage charge, are in `docs/finops/deltas/T-207.md`.
 
 **Archive is never used for `marketdata/`** — rehydration takes hours and breaks backtests; documented as
 a deliberate trade-off (ADR-0004). Early-deletion penalties (Cool 30 d, Cold 90 d, Archive 180 d) are
@@ -87,7 +107,10 @@ modelled in the cost model.
   and both tiers in full is what keeps reads correct mid-migration (Parquet is written before the SQL delete,
   the watermark advances last) and picks up late restatements written to SQL below the watermark (T-208).
   The watermark only decides the tier label.
-- Returns tier used (`hot|cold|mixed`) for the `X-Tidal-Tier` header.
+- Returns tier used (`hot|cold|mixed`) for the `X-Tidal-Tier` header. Streaming reads (`stream_*`) carry two tiers:
+  `RowStream.tier` is the up-front label of the requested range (arrow/parquet headers are sent before any data), and
+  the stream's `observed` tier is `mixed` as soon as a slice held SQL rows below the watermark or Parquet rows at or
+  above it. JSON paging reads the observed tier after its page is read; arrow/parquet keep the up-front label.
 
 ## 6. Acceptance criteria
 - [ ] After migration, SQL contains only rows inside the hot window rounded down to month start; Parquet + SQL union = original (row-for-row, hash).
@@ -96,5 +119,5 @@ modelled in the cost model.
       including `version`, `ingested_at_ns` and `quality` (so `as_of` reads agree), and the same
       watermarks. File layout is not part of the criterion (T-205's own tests also assert it).
 - [ ] SQL storage before/after recorded in `docs/finops/results/`.
-- [ ] Lifecycle policy applied via Terraform; a test blob tagged `cool` moves tier within 48 h (screenshot).
+- [ ] Lifecycle policy applied via Terraform; a test blob tagged `age_band=cool` and `compacted=true` moves tier within 48 h (screenshot).
 - [ ] Reader result for a range spanning the watermark equals pure-SQL baseline (hypothesis test, 200 random ranges).

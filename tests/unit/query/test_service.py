@@ -331,7 +331,7 @@ def _frame(batch: pa.RecordBatch) -> bytes:
     with pa.ipc.new_stream(sink, batch.schema) as w:
         w.write_batch(batch)
     data = sink.getvalue().to_pybytes()
-    return struct.pack(">Q", len(data)) + data
+    return struct.pack(">Q", len(data)) + bytes([1]) + data  # tier code 1 = cold
 
 
 async def test_framing_requires_terminator_and_rejects_corrupt_length() -> None:

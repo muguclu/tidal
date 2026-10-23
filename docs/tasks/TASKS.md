@@ -52,6 +52,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | T-124 | Module: servicebus (queues per contract) | T-120 | `modules/servicebus/**` | queue settings = messaging-contract §1 | done |
 | T-125 | Module: budget + action group | T-120 | `modules/budget/**` | €60, 50/80/100 % | done |
 | T-127 | iac.yml workflow | T-008 | `.github/workflows/iac.yml` | fmt/validate/tflint/checkov on PRs touching `infra/**`; plan step skipped until `NEEDS-CLOUD` OIDC exists | done |
+| T-128 | Integration test CI job | platform-engineer | T-127 | `.github/workflows/integration.yml`, `docs/runbooks/integration-tests.md` | `pytest -m integration` on PR (path-filtered), dispatch and nightly against SQL Server 2022 CU27 + Azurite 3.37.0; advisory, not a required check; junit on failure | done |
 | T-126 | envs/dev composition + first plan | T-121…T-125 | `infra/terraform/envs/dev/**`, `docs/finops/cost-model.md` | `terraform validate` clean; `NEEDS-CLOUD`: plan clean, human applies, outputs → config | done |
 
 ### Lane C — api & local stack
@@ -84,15 +85,16 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | ID | Title | Agent | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|---|
 | T-205 | Migration job, retag, compaction | data-engineer | T-106 | `src/tidal/storage/{tiering,retag,compact,tiering_cli}.py` +tests | SPEC-03 §2–3.1; applock; manifest; `age_band` tags; all versions migrated and kept; sweeps late restatements written to SQL below the watermark into a new `part-` (reader already merges them, T-208) | done |
-| T-206 | Crash-injection property tests | test-engineer | T-205 | `tests/integration/test_tiering_crash.py` | kill at each step ⇒ same final state | todo |
-| T-207 | Lifecycle policy + retag | infra-engineer | T-121, T-205 | `modules/storage/lifecycle.tf` | rules = SPEC-03 §4 (tag filters match T-205 tag names) | todo |
+| T-206 | Crash-injection property tests | test-engineer | T-205 | `tests/integration/test_tiering_crash.py`, `tests/integration/crash_support.py` | kill at each step ⇒ same final state | done |
+| T-207 | Lifecycle policy + retag | infra-engineer | T-121, T-205 | `modules/storage/{lifecycle.tf,README.md}`, `docs/finops/deltas/T-207.md`, `docs/finops/deltas/T-207_model.py`, SPEC-03 §3.1/§4/§6 acceptance line | rules = SPEC-03 §4 (tag filters match T-205 tag names) | done |
+| T-211 | Minimal blob index tags (ADR-0015) | data-engineer | T-205, T-207 | `docs/adr/0015-minimal-index-tags.md`, storage-layout 4-5, SPEC-03 3/3.1/4 text, `src/tidal/storage/{retag,tiering,compact}.py` (tagging only) +tests | `age_band` + `compacted` only, `ticks` only (`TAGGED_DATASETS`); retag removes retired tags; compaction skips single compacted parts | done |
 | T-208 | Unified reader | data-engineer | T-106 | `src/tidal/query/{reader,duck}.py` +tests | hypothesis equality vs SQL baseline (200 ranges) | done |
 
 ### Lane C — API on real data (api-engineer)
 | ID | Title | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|
 | T-209 | Wire reader; split `tidal-query` service | T-111, T-208 | `src/tidal/api/routers/*` (read), `src/tidal/query/service.py`, `src/tidal/api/app.py` (run/lifespan), `docker-compose.yml` (query service) | `X-Tidal-Tier` correct; internal call via MI | done |
-| T-210 | Arrow/Parquet streaming, as_of, fill | T-209 | `src/tidal/api/streaming.py` +tests | 10M rows RSS < 500 MB | todo |
+| T-210 | Arrow/Parquet streaming, as_of, fill | T-209 | `src/tidal/api/streaming.py` +tests; also `api/routers/{bars,ticks}.py`, `api/pagination.py`, `query/service.py`, `query/protocols.py` (additive `ObservedRowStream`), `query/reader.py` (`RowStream` tier reporting only), `docs/contracts/api-contract.md` §1 (docs note) | 10M rows RSS < 500 MB | todo |
 
 **Gate G2**
 
@@ -119,7 +121,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 ### Lane C — PaaS, serverless & legacy (infra-engineer, platform-engineer)
 | ID | Title | Agent | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|---|
-| T-309 | App Service + Container Apps (+Jobs) | infra-engineer | T-126 | `modules/{app_service,container_apps}/**`, `envs/dev/apps.tf`, `docs/finops/deltas/T-309.md` | scale-to-zero query; cron ingest; SB-triggered tiering job; sets `TIDAL_ENV` explicitly (ADR-0012) | todo |
+| T-309 | App Service + Container Apps (+Jobs) | infra-engineer | T-126 | `modules/{app_service,container_apps}/**`, `envs/dev/apps.tf`, `docs/finops/deltas/T-309.md` | scale-to-zero query; cron ingest; SB-triggered tiering job; scheduled yearly job must run retag and then compact for all five datasets (SPEC-03 §3.1, T-207 `compacted=true` guard); sets `TIDAL_ENV` explicitly (ADR-0012) | todo |
 | T-310 | Legacy VM + exporter | infra-engineer | T-126 | `modules/vm_legacy/**`, `legacy/exporter/**`, `docs/finops/deltas/T-310.md` | Logic App start + self-deallocate; MI to Blob; CSV feed; sets `TIDAL_ENV` explicitly (ADR-0012) | todo |
 | T-311 | deploy.yml | platform-engineer | T-307, T-308, T-309 | `.github/workflows/deploy.yml`, `tests/smoke/**` | tag → env < 15 min | todo |
 | T-312 | integration.yml | test-engineer | T-112 | `.github/workflows/integration.yml`, `tests/integration/conftest.py` | nightly green | todo |

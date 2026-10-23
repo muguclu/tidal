@@ -238,6 +238,16 @@ prices:
   tierMinimumUnits: 0.0
   unit: 10K
   unitPrice: 0.0475
+- effectiveStartDate: '2021-02-01T00:00:00Z'
+  key: blob_index_tags_10k_month
+  meterId: 2fb5f78a-0428-4e17-8fee-5b176a3ef34c
+  meterName: Index Tags
+  note: per 10K index tags per month (not per blob); a blob with 5 tags counts as 5
+  productName: Blob Storage
+  skuName: Hot LRS
+  tierMinimumUnits: 0.0
+  unit: 10K/Month
+  unitPrice: 0.0343
 - effectiveStartDate: '2022-06-01T00:00:00Z'
   key: containerapps_memory_active_gib_second
   meterId: 3ba64b1c-cb46-5ee0-b086-a68736392ac0

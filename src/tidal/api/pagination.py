@@ -6,7 +6,10 @@ per-process random key held on ``app.state``.
 
 LIMITATION (until T-402 adds a configured key): there is no key in settings yet, so cursors are
 valid only on the process that issued them (and die on restart). Multi-instance deployments need
-a shared key. The reader protocol has no offset/limit either, so a page re-reads its range.
+a shared key.
+
+Pages are read from the reader's stream starting at the cursor position (see
+``tidal.api.streaming.page_from_stream``), so a page costs at most one reader slice.
 """
 
 import base64
@@ -16,7 +19,6 @@ import hmac
 import json
 import re
 import secrets
-from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from fastapi import Request
@@ -36,6 +38,7 @@ class Position:
     ts_ns: int
     idx: int
     as_of_ns: int | None = None  # pinned knowledge time (bars only), see the bars router
+    anchor_ns: int | None = None  # ffill: last real bar before this position (read start)
 
 
 def cursor_key(request: Request) -> bytes:
@@ -63,7 +66,9 @@ def _sign(key: bytes, payload: str) -> str:
 def encode_cursor(key: bytes, bound: str, pos: Position) -> str:
     """Serialise and sign ``pos`` for the query identified by ``bound``."""
     payload = _b64(
-        json.dumps([pos.ts_ns, pos.idx, bound, pos.as_of_ns], separators=(",", ":")).encode()
+        json.dumps(
+            [pos.ts_ns, pos.idx, bound, pos.as_of_ns, pos.anchor_ns], separators=(",", ":")
+        ).encode()
     )
     return f"{payload}.{_sign(key, payload)}"
 
@@ -76,33 +81,15 @@ def decode_cursor(key: bytes, bound: str, token: str) -> Position:
     if not hmac.compare_digest(sig.encode(), _sign(key, payload).encode()):
         raise ValidationFailed(_BAD)
     try:
-        ts_ns, idx, got, as_of = json.loads(
+        ts_ns, idx, got, as_of, anchor = json.loads(
             base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
         )
     except (ValueError, binascii.Error):
         raise ValidationFailed(_BAD) from None
     ints = isinstance(ts_ns, int) and isinstance(idx, int)
-    if not ints or not (as_of is None or isinstance(as_of, int)):
+    opt_ints = all(v is None or isinstance(v, int) for v in (as_of, anchor))
+    if not ints or not opt_ints:
         raise ValidationFailed(_BAD)
     if not hmac.compare_digest(str(got).encode(), bound.encode()):
         raise ValidationFailed(_BAD)
-    return Position(ts_ns, idx, as_of)
-
-
-def page_of[T](
-    rows: Iterable[T], ts_of: Callable[[T], int], start: Position | None, limit: int
-) -> tuple[list[T], Position | None]:
-    """Take up to ``limit`` rows at or after ``start``; also return the next position."""
-    out: list[T] = []
-    prev_ts: int | None = None
-    idx = 0
-    for row in rows:
-        ts = ts_of(row)
-        idx = idx + 1 if ts == prev_ts else 0
-        prev_ts = ts
-        if start is not None and (ts, idx) < (start.ts_ns, start.idx):
-            continue
-        if len(out) == limit:
-            return out, Position(ts, idx)
-        out.append(row)
-    return out, None
+    return Position(ts_ns, idx, as_of, anchor)

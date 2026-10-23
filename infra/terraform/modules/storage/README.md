@@ -8,7 +8,7 @@ tags usable for lifecycle (ADR-0004).
 - `enable_private_networking = false` (default) leaves the public endpoint on: access is Entra ID + RBAC only. `true` disables public access; a private endpoint is a Phase 4 task.
 - Versioning off (immutable Parquet; restatements are new parts). Blob and container soft delete 7 d.
 - **Provider requirement:** with shared key disabled, the azurerm provider in the env composition must set `storage_use_azuread = true`. In azurerm 4.x containers created with `storage_account_id` go through ARM; the data-plane role (for example `Storage Blob Data Owner`) is needed for the account resource's own data-plane reads.
-- Lifecycle management policy is T-207 (not here). It needs `id` for the account and `container_names` for `prefix_match = ["<container>/..."]`; rules filter on the `age_band` blob index tag.
+- The lifecycle management policy lives in `lifecycle.tf` (T-207). `marketdata/v1/` rules filter on the `age_band` AND `compacted=true` blob index tags (see SPEC-03 section 4); `raw/`, `backtests/`, `exports/` and `bench/` use prefix and age rules. The prefixes follow the container names created in this module.
 - RBAC (T-403): scope role assignments to `container_ids["<name>"]`, per SPEC-06 section 2.
 - No `prevent_destroy`: `terraform destroy` must remove everything except bootstrap (SPEC-07 section 6). `infrastructure_encryption_enabled` is on (free; changing it later forces a new account). `network_rules` default Allow, or Deny when the private networking flag is on.
 - Checkov skips (inline, justified): LRS (CKV_AZURE_206), public endpoint while flag off (CKV_AZURE_59), no CMK (CKV2_AZURE_1), no private endpoint (CKV2_AZURE_33), queue logging (CKV_AZURE_33), read logging until T-506 (CKV2_AZURE_21, per container).

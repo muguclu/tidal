@@ -4,6 +4,7 @@
 # ruff: noqa: F811 - the shared fixtures are imported by name and used as arguments
 
 import io
+import json
 import re
 from contextlib import contextmanager
 from pathlib import Path
@@ -23,7 +24,14 @@ from tidal.storage import compact as compact_mod
 from tidal.storage import layout, tiering
 from tidal.storage.compact import compact
 from tidal.storage.parquet_writer import LocalStore, write_partition
-from tidal.storage.retag import LocalTagger, age_band, desired_tags, ensure_tags, retag
+from tidal.storage.retag import (
+    TAGGED_DATASETS,
+    LocalTagger,
+    age_band,
+    desired_tags,
+    ensure_tags,
+    retag,
+)
 from tidal.storage.tiering import AppLock
 from tidal.storage.tiering_cli import app
 from unit.query import query_support as qs
@@ -49,6 +57,10 @@ def parts(e: Env, year: int = 2019) -> list[str]:
 
 def logical(e: Env) -> list[tuple[Any, ...]]:
     return sorted(set(cold_rows(e.store)))
+
+
+def tick_parts(e: Env) -> list[str]:
+    return [p for p in all_parts(e) if "/ticks/" in p]
 
 
 def all_parts(e: Env) -> list[str]:
@@ -92,37 +104,62 @@ def test_age_band_only_ever_gets_colder(year: int, extra: int) -> None:
 
 
 def test_desired_tags_names_are_the_lifecycle_contract() -> None:
-    path = layout.md_part_path("bars_1d", "EIA.WTI.SPOT", 2005, 0, 3)
-    assert desired_tags(path, 2026) == {
-        "dataset": "bars_1d",
-        "instrument": "EIA.WTI.SPOT",
-        "data_year": "2005",
-        "age_band": "cold",
-        "compacted": "false",
-    }
+    path = layout.md_part_path("ticks", "EIA.WTI.SPOT", 2005, 3, 0)
+    assert desired_tags(path, 2026) == {"age_band": "cold", "compacted": "false"}
+    assert desired_tags(path, 2026, compacted=True)["compacted"] == "true"
+
+
+def test_only_the_allow_listed_datasets_are_tagged() -> None:
+    assert TAGGED_DATASETS == ("ticks",)
+    for dataset in layout.DATASETS:
+        path = layout.md_part_path(
+            dataset, "EIA.WTI.SPOT", 2005, 0 if dataset == "bars_1d" else 3, 0
+        )
+        assert bool(desired_tags(path, 2026)) == (dataset in TAGGED_DATASETS)
+
+
+@given(st.integers(1990, 2060), st.integers(2060, 2100))
+def test_year_is_derived_from_the_path(year: int, now_year: int) -> None:
+    path = layout.md_part_path("ticks", "EIA.WTI.SPOT", year, 3, 0)
+    assert desired_tags(path, now_year)["age_band"] == age_band(year, now_year)
 
 
 # -- retag ---------------------------------------------------------------------------------------
 def test_retag_moves_blobs_across_band_boundaries_and_is_idempotent(migrated: Env) -> None:
     e = migrated
     n = len(all_parts(e))
+    ticks = tick_parts(e)
+    assert ticks
     first = retag(e.store, e.tagger, e.clock, e.engine)
-    assert (first.blobs, first.changed, first.skipped_datasets) == (n, 0, 0)  # already tagged
+    assert (first.blobs, first.changed, first.skipped_datasets) == (n, 0, 0)  # already as wanted
     later = FixedClock(NOW + 4 * 366 * 86_400 * 10**9)  # clock year 2024
     moved = retag(e.store, e.tagger, later, e.engine)
-    assert moved.changed == n  # 2019/2020 data is 3+ years old: hot -> cool
-    assert e.tagger.get_tags(parts(e)[0])["age_band"] == "cool"
+    assert moved.changed == len(ticks)  # 2020 data is 3+ years old: hot -> cool; bars untagged
+    assert e.tagger.get_tags(ticks[0]) == {"age_band": "cool", "compacted": "false"}
     assert retag(e.store, e.tagger, later, e.engine).changed == 0
 
 
 def test_retag_preserves_compacted_and_completes_missing_tags(migrated: Env) -> None:
     e = migrated
-    path = parts(e)[0]
+    path = tick_parts(e)[0]
     e.tagger.set_tags(path, {"compacted": "true"})
     retag(e.store, e.tagger, e.clock, e.engine)
-    tags = e.tagger.get_tags(path)
-    assert tags["compacted"] == "true" and tags["age_band"] == "hot" and tags["dataset"] == DS
+    assert e.tagger.get_tags(path) == {"age_band": "hot", "compacted": "true"}
     assert not ensure_tags(e.tagger, path, 2020)
+
+
+def test_retag_removes_the_retired_tags_and_all_tags_of_untagged_datasets(migrated: Env) -> None:
+    e = migrated
+    tick = tick_parts(e)[0]
+    bar = parts(e)[0]
+    legacy = {"dataset": "x", "instrument": qs.WTI, "data_year": "2020", "age_band": "hot"}
+    e.tagger.set_tags(tick, {**legacy, "compacted": "true"})
+    e.tagger.set_tags(bar, {**legacy, "compacted": "false"})
+    res = retag(e.store, e.tagger, e.clock, e.engine)
+    assert res.changed == 2
+    assert e.tagger.get_tags(tick) == {"age_band": "hot", "compacted": "true"}  # preserved
+    assert e.tagger.get_tags(bar) == {}
+    assert retag(e.store, e.tagger, e.clock, e.engine).changed == 0  # idempotent
 
 
 def test_retag_counts_blobs_deleted_underneath_it(migrated: Env) -> None:
@@ -165,7 +202,7 @@ def test_compaction_merges_parts_keeping_every_version(migrated: Env) -> None:
     assert len(parts(e)) == 1 and len(parts(e, 2020)) == 1
     assert logical(e) == before and len(cold_rows(e.store)) == len(before)  # all versions
     path = parts(e)[0]
-    assert e.tagger.get_tags(path)["compacted"] == "true"
+    assert e.tagger.get_tags(path) == {}  # bars are compacted but never tagged (ADR-0015)
     table = pq.read_table(io.BytesIO(e.store.read(path)))
     assert np.all(np.diff(table["ts_ns"].to_numpy()) >= 0)
     assert table["version"].to_numpy().max() >= 3
@@ -181,12 +218,175 @@ def test_compaction_is_idempotent_and_byte_stable(migrated: Env) -> None:
 
 
 def test_compaction_deletes_the_tag_sidecars_of_the_parts_it_removes(migrated: Env) -> None:
-    run_compact(migrated)
-    live = set(all_parts(migrated))
-    assert {f"{p}.json" for p in live if "/bars_1d/" in p} <= sidecars(migrated)
-    assert not any(
-        "/bars_1d/" in s and s.removesuffix(".json") not in live for s in sidecars(migrated)
-    )
+    e = migrated
+    path = tick_parts(e)[0]
+    table = pq.read_table(io.BytesIO(e.store.read(path)))
+    e.store.delete(path)
+    e.tagger.discard(path)
+    half = table.num_rows // 2
+    for chunk in (table.slice(0, half), table.slice(half)):
+        written = write_partition(e.store, dataset="ticks", instrument_id=qs.WTI, year=2020,
+                                  month=1, batches=[chunk], source_hash="h")  # fmt: skip
+        tiering.tag_partition(e.store, e.tagger, 2020, "ticks", qs.WTI, 2020, 1, written)
+    assert len(tiering.part_paths(e.store, "ticks", qs.WTI, 2020, 1)) == 2
+    run_compact(e, "ticks")
+    live = set(all_parts(e))
+    ticks = {f"{p}.json" for p in live if "/ticks/" in p}
+    assert ticks and ticks <= sidecars(e)
+    assert not any("/ticks/" in s and s.removesuffix(".json") not in live for s in sidecars(e))
+    run_compact(e)
+    assert not any("/bars_" in s for s in sidecars(e))  # untagged datasets leave no sidecars
+
+
+def test_compaction_marks_ticks_compacted_and_skips_single_compacted_parts_unread(
+    migrated: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    e = migrated
+    path = tick_parts(e)[0]
+    assert e.tagger.get_tags(path)["compacted"] == "false"
+    first = run_compact(e, "ticks")
+    assert not first.errors and first.skipped == 0
+    assert all(e.tagger.get_tags(p) == {"age_band": "hot", "compacted": "true"}
+               for p in tick_parts(e))  # fmt: skip
+    real_read = e.store.read
+
+    def no_parquet(path: str) -> bytes:
+        assert not path.endswith(".parquet"), f"downloaded {path}"
+        return real_read(path)
+
+    monkeypatch.setattr(e.store, "read", no_parquet)
+    again = run_compact(e, "ticks")
+    assert again.skipped == again.partitions > 0 and again.merged == 0
+
+
+def test_compaction_skips_single_part_untagged_partitions_via_the_manifest(
+    migrated: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    e = migrated
+    run_compact(e)
+    real_read = e.store.read
+
+    def no_parquet(path: str) -> bytes:
+        assert not path.endswith(".parquet"), f"downloaded {path}"
+        return real_read(path)
+
+    monkeypatch.setattr(e.store, "read", no_parquet)
+    again = run_compact(e)
+    assert again.skipped == again.partitions > 0 and again.parts_written == 0
+
+
+def test_compaction_does_not_skip_a_single_uncompacted_tick_part(
+    migrated: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    e = migrated
+    path = tick_parts(e)[0]
+    reads: list[str] = []
+    real_read = e.store.read
+
+    def spy(p: str) -> bytes:
+        reads.append(p)
+        return real_read(p)
+
+    monkeypatch.setattr(e.store, "read", spy)
+    res = run_compact(e, "ticks")
+    assert res.skipped == 0 and e.tagger.get_tags(path)["compacted"] == "true"
+    assert path in reads  # the part was read and verified, not just tagged
+
+
+def manifest_names(e: Env, path: str) -> list[str]:
+    part = layout.parse_md_path(path)
+    mpath = layout.md_manifest_path(part.dataset, part.instrument_id, part.year, part.month)
+    return [x["name"] for x in json.loads(e.store.read(mpath))["parts"]]
+
+
+def split_first_tick_part(e: Env) -> tuple[int, int]:
+    """Replace the first tick part by two halves (compaction has something to merge)."""
+    path = tick_parts(e)[0]
+    part = layout.parse_md_path(path)
+    table = pq.read_table(io.BytesIO(e.store.read(path)))
+    e.store.delete(path)
+    e.tagger.discard(path)
+    half = table.num_rows // 2
+    for chunk in (table.slice(0, half), table.slice(half)):
+        written = write_partition(e.store, dataset="ticks", instrument_id=qs.WTI, year=part.year,
+                                  month=part.month, batches=[chunk], source_hash="h")  # fmt: skip
+        tiering.tag_partition(
+            e.store, e.tagger, 2020, "ticks", qs.WTI, part.year, part.month, written
+        )
+    return part.year, part.month
+
+
+def test_crash_after_the_delete_step_then_rerun_leaves_a_current_manifest(
+    migrated: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    e = migrated
+    year, month = split_first_tick_part(e)
+
+    def boom(*a: Any, **k: Any) -> None:
+        raise Boom
+
+    monkeypatch.setattr(compact_mod, "update_manifest", boom)
+    with pytest.raises(Boom):
+        run_compact(e, "ticks")  # old parts deleted, manifest still lists them
+    monkeypatch.undo()
+    (only,) = tiering.part_paths(e.store, "ticks", qs.WTI, year, month)
+    assert manifest_names(e, only) != [only.rsplit("/", 1)[1]]  # stale
+    assert e.tagger.get_tags(only)["compacted"] == "true"
+    res = run_compact(e, "ticks")  # a skip would leave the manifest stale
+    assert res.skipped < res.partitions
+    assert manifest_names(e, only) == [only.rsplit("/", 1)[1]]
+
+
+def test_a_deleted_manifest_of_a_compacted_tick_partition_is_rebuilt_not_skipped(
+    migrated: Env,
+) -> None:
+    e = migrated
+    run_compact(e, "ticks")
+    path = tick_parts(e)[0]
+    part = layout.parse_md_path(path)
+    e.store.delete(layout.md_manifest_path("ticks", qs.WTI, part.year, part.month))
+    res = run_compact(e, "ticks")
+    assert res.skipped == 0 and res.partitions == 1
+    assert manifest_names(e, path) == [path.rsplit("/", 1)[1]]
+
+
+def test_a_compacted_tick_partition_with_an_appended_uncompacted_part_is_merged(
+    migrated: Env,
+) -> None:
+    e = migrated
+    run_compact(e, "ticks")
+    path = tick_parts(e)[0]
+    part = layout.parse_md_path(path)
+    table = pq.read_table(io.BytesIO(e.store.read(path)))
+    written = write_partition(e.store, dataset="ticks", instrument_id=qs.WTI, year=part.year,
+                              month=part.month, batches=[table.slice(0, 5)],
+                              source_hash="late")  # fmt: skip
+    tiering.tag_partition(e.store, e.tagger, 2020, "ticks", qs.WTI, part.year, part.month, written)
+    assert e.tagger.get_tags(written[0])["compacted"] == "false"
+    before = logical(e)
+    res = run_compact(e, "ticks")
+    assert res.skipped < res.partitions and res.merged >= 1
+    (only,) = tiering.part_paths(e.store, "ticks", qs.WTI, part.year, part.month)
+    assert e.tagger.get_tags(only)["compacted"] == "true"
+    assert logical(e) == before
+
+
+@pytest.mark.parametrize("damage", ["missing", "mismatched"])
+def test_a_bars_single_part_with_a_bad_manifest_is_not_skipped(migrated: Env, damage: str) -> None:
+    e = migrated
+    run_compact(e)
+    path = parts(e)[0]
+    mpath = layout.md_manifest_path(DS, qs.WTI, 2019, 0)
+    good = e.store.read(mpath)
+    e.store.delete(mpath)
+    if damage == "mismatched":
+        bad = e.root / "bad-manifest.json"
+        bad.write_bytes(json.dumps({"parts": [{"name": "part-9999.parquet"}]}).encode())
+        e.store.put_new(mpath, bad)
+    res = run_compact(e)
+    assert 0 < res.skipped < res.partitions
+    assert json.loads(e.store.read(mpath)) == json.loads(good)  # rebuilt
+    assert manifest_names(e, path) == [path.rsplit("/", 1)[1]]
 
 
 def test_compaction_collapses_equal_duplicates_and_keeps_the_earliest_ingest(
@@ -247,7 +447,7 @@ def test_compaction_over_max_part_rows_writes_several_parts_and_converges_after_
     assert len(out) > 1
     rows = [pq.ParquetFile(io.BytesIO(e.store.read(p))).metadata.num_rows for p in out]
     assert max(rows) <= 40 and logical(e) == before
-    assert all(e.tagger.get_tags(p)["compacted"] == "true" for p in out)
+    assert all(e.tagger.get_tags(p) == {} for p in out)
     assert run_compact(e, year=2019, max_part_rows=40).parts_removed == 0  # stable
 
 

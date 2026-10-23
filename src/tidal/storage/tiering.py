@@ -30,7 +30,8 @@ Then, per series (instrument, interval) and per calendar-month window, oldest fi
 3. WRITE   all of ``W`` in **one** ``write_partition`` call (it rolls at ``MAX_PART_ROWS``).
 4. VERIFY  re-read the written parts: row count and sha256 of ``ts_ns``/``close|price`` equal ``W``.
            On a mismatch the parts just written are deleted before :class:`TieringVerifyFailed`.
-5. TAG     blob index tags of the partition's parts (``age_band`` etc., see ``retag``).
+5. TAG     blob index tags of the partition's parts (``age_band``, ``compacted``; ticks only,
+           ADR-0015; see ``retag``).
 6. MANIFEST rebuild ``_manifest.json`` (rows, min/max ts, sha256 per part): derived, replaceable,
            never read by the reader.
 7. DELETE  the month from SQL in chunks of ``delete_chunk_rows``, one short transaction each,
@@ -91,7 +92,7 @@ from tidal.storage.parquet_writer import (
     ObjectStore,
     write_partition,
 )
-from tidal.storage.retag import BlobTagger, ensure_tags
+from tidal.storage.retag import BlobTagger, ensure_tags, is_tagged
 
 log = get_logger(__name__)
 
@@ -654,7 +655,12 @@ def tag_partition(  # noqa: PLR0917
     month: int,
     paths: Sequence[str] | None = None,
 ) -> int:
-    """Ensure the tags of every part of a partition; returns the number of tag writes."""
+    """Ensure the tags of every part of a partition; returns the number of tag writes.
+
+    Untagged datasets (ADR-0015) make no tag call at all.
+    """
+    if not is_tagged(dataset):
+        return 0
     todo = paths if paths is not None else part_paths(store, dataset, iid, year, month)
     return sum(ensure_tags(tagger, p, now_year) for p in todo)
 

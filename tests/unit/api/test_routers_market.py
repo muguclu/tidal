@@ -24,7 +24,7 @@ from tidal.common.config import Settings
 from tidal.common.errors import RateLimited
 from tidal.common.timeutil import FixedClock
 from tidal.contracts.models import Bar, Tick, Tier
-from tidal.contracts.schemas import BAR_V1, Interval, TickSide
+from tidal.contracts.schemas import BAR_V1, TICK_V1, Interval, TickSide
 from tidal.query.protocols import Rows, RowStream
 
 pytestmark = pytest.mark.anyio
@@ -69,6 +69,20 @@ class Reader(FakeReader):
         self._known(instrument_id)
         self.starts.append(start_ns)
         return Rows([t for t in self.ticks if start_ns <= t.ts_ns < end_ns], Tier.HOT)
+
+    async def stream_ticks(self, instrument_id: str, start_ns: int, end_ns: int) -> RowStream:
+        got = await self.read_ticks(instrument_id, start_ns, end_ns)
+        rows = [
+            {"ts_ns": t.ts_ns, "instrument_id": instrument_id, "price": t.price, "size": t.size,
+             "side": int(t.side), "quality": t.quality, "ingested_at_ns": t.ts_ns, "version": 1}
+            for t in got.rows
+        ]  # fmt: skip
+
+        async def batches() -> AsyncIterator[pa.RecordBatch]:
+            for i in range(0, len(rows), 2):  # two rows per batch: exercises batch boundaries
+                yield pa.RecordBatch.from_pylist(rows[i : i + 2], schema=TICK_V1)
+
+        return RowStream(got.tier, batches())
 
 
 @pytest.fixture

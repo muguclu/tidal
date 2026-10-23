@@ -13,4 +13,6 @@ regexes = [
   '''Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==?''',
   # Service Bus emulator literal placeholder key.
   '''SharedAccessKey=SAS_KEY_VALUE''',
+  # Fingerprint of Microsoft's public packages signing key (verified in .github/workflows/integration.yml).
+  '''BC528686B50D79E339D3721CEB3E94ADBE1229CF''',
 ]
