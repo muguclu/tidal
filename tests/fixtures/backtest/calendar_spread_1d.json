@@ -1,0 +1,37 @@
+{
+  "name": "calendar_spread_1d",
+  "strategy": "calendar_spread",
+  "interval": "1d",
+  "params": {"lookback": 3, "z_entry": 1.0, "z_exit": 0.2},
+  "costs": {"fee_bps": 20, "slippage_bps": 0},
+  "t0_ns": 1577836800000000000,
+  "step_ns": 86400000000000,
+  "bars": {
+    "T.A.X": {
+      "open":  [30, 30, 25, 27.5, 27.5, 15, 15, 18, 18, 18],
+      "close": [30, 30, 25, 27.5, 27.5, 15, 15, 18, 18, 18]},
+    "T.B.X": {
+      "open":  [20, 20, 20, 20, 20, 20, 20, 20, 20, 20],
+      "close": [20, 20, 20, 20, 20, 20, 20, 20, 20, 20]}},
+  "expected": {
+    "position": [0, 0, 0, 1, 0, 0, 1, 1, -1, -1],
+    "equity": [1000000, 1000000, 1000000, 998100, 996200, 996200, 994800, 1054800, 1051760, 1051760],
+    "drawdown": [0, 0, 0, -0.0019, -0.0038, -0.0038, -0.0052, 0, -0.00288206295032, -0.00288206295032],
+    "trades": [
+      {"idx": 3, "instrument_id": "T.A.X", "qty": 20000, "price": 27.5, "fee": 1100, "slippage": 0},
+      {"idx": 3, "instrument_id": "T.B.X", "qty": -20000, "price": 20, "fee": 800, "slippage": 0},
+      {"idx": 4, "instrument_id": "T.A.X", "qty": -20000, "price": 27.5, "fee": 1100, "slippage": 0},
+      {"idx": 4, "instrument_id": "T.B.X", "qty": 20000, "price": 20, "fee": 800, "slippage": 0},
+      {"idx": 6, "instrument_id": "T.A.X", "qty": 20000, "price": 15, "fee": 600, "slippage": 0},
+      {"idx": 6, "instrument_id": "T.B.X", "qty": -20000, "price": 20, "fee": 800, "slippage": 0},
+      {"idx": 8, "instrument_id": "T.A.X", "qty": -40000, "price": 18, "fee": 1440, "slippage": 0},
+      {"idx": 8, "instrument_id": "T.B.X", "qty": 40000, "price": 20, "fee": 1600, "slippage": 0}
+    ],
+    "n_trades": 3,
+    "hit_rate": 0.5,
+    "max_drawdown": -0.0052,
+    "total_abs_position_change": 5,
+    "periods_per_year": 252
+  },
+  "result_sha256": "20f0da7c5b491a7b00b9ce24ae9fefdd0925f19e0839fcbd752426f0840a1376"
+}
