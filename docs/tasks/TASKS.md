@@ -114,8 +114,8 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | ID | Title | Agent | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|---|
 | T-305 | Production Dockerfile | platform-engineer | T-112 | `deploy/docker/**` | size measured and ≤ 500 MB, non-root, all entrypoints; sets `TIDAL_ENV` explicitly (ADR-0012) | todo |
-| T-306 | Module: aks (spot pool, KEDA, WI) | infra-engineer | T-126 | `modules/aks/**`, `envs/dev/aks.tf`, `docs/finops/deltas/T-306.md` | SPEC-07 §2 AKS row | todo |
-| T-307 | Helm chart + ScaledJob | platform-engineer | T-305, T-306 | `deploy/helm/tidal/**` | lint/kubeconform/kube-linter clean | todo |
+| T-306 | Module: aks (spot pool, KEDA, WI) | infra-engineer | T-126 | `modules/aks/**`, `envs/dev/aks.tf`, `docs/finops/deltas/T-306.md`, `docs/finops/deltas/T-306_model.py` | SPEC-07 §2 AKS row | todo |
+| T-307 | Helm chart + ScaledJob | platform-engineer | T-305, T-306 | `deploy/helm/tidal/**` | lint/kubeconform/kube-linter clean; default-deny NetworkPolicy (egress 443 only) and PSA `restricted` label on namespace `tidal`; SA `tidal/tidal-worker` | todo |
 | T-308 | images.yml pipeline | platform-engineer | T-305, T-122 | `.github/workflows/images.yml` | trivy + sbom + push via OIDC | todo |
 
 ### Lane C — PaaS, serverless & legacy (infra-engineer, platform-engineer)
