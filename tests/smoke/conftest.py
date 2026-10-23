@@ -19,6 +19,8 @@ def pytest_configure(config: pytest.Config) -> None:
 def _base(var: str) -> str:
     url = os.environ.get(var, "").strip().rstrip("/")
     if not url:
+        if os.environ.get("TIDAL_SMOKE_REQUIRED") == "1":
+            pytest.fail(f"{var} is not set but TIDAL_SMOKE_REQUIRED=1")
         pytest.skip(f"{var} is not set")
     if not url.startswith("https://"):
         pytest.fail(f"{var} must be an https URL")

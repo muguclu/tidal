@@ -52,12 +52,16 @@ AcrPull/Reader on the ACR (resolve digests); Website Contributor on the web app;
 Container Apps resource group; `Azure Kubernetes Service Cluster User Role` plus RBAC Writer/Admin on namespace `tidal`
 (local accounts are disabled; kubelogin uses the `azurecli` login). Not granted today: until it is, the matching step fails with 403.
 
+T-403 follow-up: use a separate, deploy-only app registration/environment so deploy rights are not shared with the image push identity (least privilege).
+
 ## Behaviour and limits
 - App Service health is polled from the runner (`/v1/health/live`, up to 4 min). If the app has an IP allow-list
   (`apps.tf`), the runner IPs must be allowed or that step cannot succeed; the same applies to the smoke job.
 - AKS is cost-parked by design. If its power state is not `Running` the Helm step is skipped with a warning and noted in
   the summary; start it (`az aks start`) and re-run via `workflow_dispatch`. Helm runs with `--atomic --wait`.
-- `az containerapp` uses the dynamically installed CLI extension (not version pinned).
+- The `containerapp` CLI extension is pinned (`0.3.55`, dynamic install off) and kubelogin is pinned (`v0.2.21` via a SHA-pinned `azure/use-kubelogin`). Bump deliberately.
+- The smoke job gets its URLs from the deploy job outputs and runs with `TIDAL_SMOKE_REQUIRED=1`: an empty URL fails instead of skipping. Only the backtest-submit test may skip.
+- Forked-repo `workflow_run` events are ignored (`head_repository` must equal this repository). Cleanup removes the kubeconfig and `~/.kube/cache`.
 - The smoke job has no Azure credentials (`id-token` not granted). Concurrency group `deploy-dev` queues deploys and never
   cancels a running one.
 

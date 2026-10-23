@@ -40,6 +40,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
        github.event.workflow_run.event == 'push' &&
        startsWith(github.event.workflow_run.head_branch, 'v'))
     runs-on: ubuntu-24.04
@@ -50,6 +51,8 @@ jobs:
       contents: read
     outputs:
       digest: ${{ steps.resolve.outputs.digest }}
+      api_url: ${{ steps.urls.outputs.api_url }}
+      query_url: ${{ steps.urls.outputs.query_url }}
     env:
       ACR_NAME: ${{ vars.ACR_NAME }}
       RG: ${{ vars.TIDAL_RESOURCE_GROUP }}
@@ -61,6 +64,7 @@ jobs:
           persist-credentials: false
 
       - name: Validate configuration variables
+        id: urls
         env:
           V_CLIENT: ${{ vars.AZURE_CLIENT_ID }}
           V_TENANT: ${{ vars.AZURE_TENANT_ID }}
@@ -87,6 +91,8 @@ jobs:
           for j in $V_JOBS; do [[ "$j" =~ $name ]] || fail "TIDAL_JOB_NAMES"; done
           for v in V_STORAGE V_QUERY_URL V_API_URL; do [[ "${!v}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || fail "$v"; done
           for v in V_SQL V_SB; do [[ "${!v}" =~ ^[a-z0-9.-]+$ ]] || fail "$v"; done
+          echo "api_url=${V_API_URL}" >> "$GITHUB_OUTPUT"
+          echo "query_url=${V_QUERY_URL}" >> "$GITHUB_OUTPUT"
 
       - name: Azure login (OIDC)
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
@@ -151,13 +157,19 @@ jobs:
           JOBS: ${{ vars.TIDAL_JOB_NAMES }}
         run: |
           set -euo pipefail
-          az config set extension.use_dynamic_install=yes_without_prompt >/dev/null
+          az config set extension.use_dynamic_install=no >/dev/null
+          az extension add --name containerapp --version 0.3.55 --yes
           az containerapp update --name "$QUERY_APP" --resource-group "$RG" --image "$IMAGE" --output none
           for j in $JOBS; do
             az containerapp job update --name "$j" --resource-group "$RG" --image "$IMAGE" --output none
           done
           got="$(az containerapp show --name "$QUERY_APP" --resource-group "$RG" --query 'properties.template.containers[0].image' -o tsv)"
           [ "$got" = "$IMAGE" ] || { echo "::error::query app runs ${got}, expected ${IMAGE}"; exit 1; }
+
+      - name: Install kubelogin (pinned)
+        uses: azure/use-kubelogin@0ce7c36141aa27d4934872cf00b0120804c98a29 # v1.3
+        with:
+          kubelogin-version: v0.2.21
 
       - name: AKS - helm upgrade (digest pinned)
         id: aks
@@ -215,7 +227,10 @@ jobs:
 
       - name: Logout (credentials cleanup)
         if: always()
-        run: az logout || true
+        run: |
+          rm -f "$RUNNER_TEMP/kubeconfig"
+          rm -rf ~/.kube/cache
+          az logout || true
 
   smoke:
     name: smoke-dev
@@ -225,8 +240,10 @@ jobs:
     permissions:
       contents: read # no id-token: the smoke job holds no Azure credentials
     env:
-      TIDAL_SMOKE_API_URL: ${{ vars.TIDAL_API_BASE_URL }}
-      TIDAL_SMOKE_QUERY_URL: ${{ vars.TIDAL_QUERY_BASE_URL }}
+      # URLs come from the validated deploy job outputs (smoke has no environment, so vars are empty here).
+      TIDAL_SMOKE_API_URL: ${{ needs.deploy.outputs.api_url }}
+      TIDAL_SMOKE_QUERY_URL: ${{ needs.deploy.outputs.query_url }}
+      TIDAL_SMOKE_REQUIRED: "1" # empty URL fails instead of skipping
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
