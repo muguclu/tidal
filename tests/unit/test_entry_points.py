@@ -12,7 +12,7 @@ SCRIPTS: dict[str, str] = tomllib.loads((ROOT / "pyproject.toml").read_text(enco
     "project"
 ]["scripts"]
 # Entry points whose module lands in a later task; remove the entry when that task merges.
-PENDING = {"tidal-worker": "T-303"}
+PENDING: dict[str, str] = {}
 
 
 def _importable(module: str) -> bool:

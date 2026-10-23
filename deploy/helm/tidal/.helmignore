@@ -1,0 +1,4 @@
+.git
+*.swp
+.kube-linter.yaml
+lint/

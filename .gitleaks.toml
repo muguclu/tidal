@@ -15,4 +15,6 @@ regexes = [
   '''SharedAccessKey=SAS_KEY_VALUE''',
   # Fingerprint of Microsoft's public packages signing key (verified in .github/workflows/integration.yml).
   '''BC528686B50D79E339D3721CEB3E94ADBE1229CF''',
+  # Test sentinel from an earlier T-303 commit (tests/unit/worker); not a credential.
+  '''SENTINEL-sk-12345''',
 ]
