@@ -16,7 +16,7 @@ Rows marked with a delta are MODELLED from `docs/finops/prices.yaml` (captured 2
 | Container Apps | Consumption | 0–3 (free grant covers most) | 0 | min replicas 0 |
 | App Service | B1 Linux | ~12 | ~12 (or delete via flag) | smallest SKU; `enable_app_service` flag |
 | Azure SQL | GP serverless 0.5–2 vCore, 32 GB | 0 on the free offer via azapi (ADR-0011); list 13.95 (0.5 vCore × 40 h) – 44.25 (2 vCore × 40 h) | 0 (free) / 3.85 list (storage only) | auto-pause; free offer is a dev-only lever (T-123 delta) |
-| Storage | LRS Hot, flat namespace, tiered by `age_band` | ≈ 0.02 at rest (M scale, 3 GB) + transactions | ≈ 0.02 | Parquet + tiers (T-121 delta; transactions measured in T-503) |
+| Storage | LRS Hot, flat namespace; tick parts tiered Cool/Cold by `age_band` (2 index tags, ADR-0015), bars stay Hot | ≈ 0.04 at rest (M scale: 0.0516 all-Hot − 0.0100 net ticks-only tiering after index-tag cost) + transactions | ≈ 0.04 | Parquet (F5 is 3.6x smaller than SQL rowstore F0, T-204) + tiers (T-121, T-207, T-211; transactions measured in T-503) |
 | Service Bus | Basic | ≈ 0.001 (30 × 100-job sweeps) | 0 | SKU (T-124 delta); Standard (topic flag) not yet priced → T-502b |
 | ACR | Basic | 4.40 (0.1466/day) + 0.088/GB over 10 GB | 4.40 | weekly purge (T-122 delta) |
 | Key Vault | Standard | 0.03–0.26 (10k–100k ops) | < 0.03 | — (T-121 delta) |
@@ -34,8 +34,8 @@ sum of the rows above; nothing new is estimated.
 
 | Subtotal (EUR/month) | Active month | Parked month |
 |---|---|---|
-| Composed, SQL on the free offer (`use_free_offer = true`, default) | ≈ 7.08 – 7.31 (0 + 0.02 + 0.001 + 4.40 + 0.03–0.26 + 2.63 Log Analytics ceiling) | ≈ 4.45 (0 + 0.02 + 0 + 4.40 + < 0.03) |
-| Composed, SQL at list price (free offer off) | ≈ 21.0 – 51.6 (the line above + 13.95–44.25) | ≈ 8.3 (the line above + 3.85) |
+| Composed, SQL on the free offer (`use_free_offer = true`, default) | ≈ 7.10 – 7.33 (0 + 0.04 + 0.001 + 4.40 + 0.03–0.26 + 2.63 Log Analytics ceiling) | ≈ 4.47 (0 + 0.04 + 0 + 4.40 + < 0.03) |
+| Composed, SQL at list price (free offer off) | ≈ 21.1 – 51.6 (the line above + 13.95–44.25) | ≈ 8.3 (the line above + 3.85) |
 | Not yet composed (T-306 AKS, T-309 App Service + Container Apps, T-310 VM + Logic App, T-404 network) | rows AKS ×4, Container Apps, App Service, VM, Logic App above | same rows |
 
 The **Total** row above stays the target for the full environment; the subtotal above is what a plan of `envs/dev`
@@ -48,3 +48,13 @@ Observations to act on (before Phase 3):
 - App Service B1 and ACR Basic dominate the parked cost → `enable_app_service` flag to delete when parked;
   consider keeping images in GHCR during development and pushing to ACR only for demos (document trade-off).
 - Target ≤ €60 active is realistic only with disciplined parking; budget alerts enforce it.
+
+Wave 2 fold (T-204, T-207, T-211):
+- **Storage figure raised from ≈ 0.02 to ≈ 0.04.** The T-207 model (`docs/finops/deltas/T-207_model.py`, per-scale
+  `age_band` split) puts M all-Hot at 0.0516 EUR/month; the earlier ≈ 0.02 used T-121's 20-year split at every scale.
+- **Blob index tags cost money.** At 0.0343 EUR per 10K tags per month, five tags on every part made tiering a net loss at
+  S, M and L. ADR-0015 tags tick parts only, with two tags: net +0.0010 / +0.0100 / +0.1108 EUR/month at S / M / L.
+  Bars stay Hot. A dataset joins tiering when its measured average part size clears the 2-tag break-even
+  (0.85–1.50 MB); re-check with T-503.
+- **Format choice.** Locally measured (T-204, 3-month slice of S): F5 Parquet is 3.6x smaller than the SQL rowstore
+  baseline F0 and 25.4x cheaper at rest at list price. Azure absolute numbers are NEEDS-CLOUD.

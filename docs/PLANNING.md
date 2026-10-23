@@ -92,9 +92,9 @@ Lane C api: FastAPI skeleton against contract with in-memory fake repository.
 Lane A: storage benchmark (4 formats) + results. Lane B: tiering/migration job + lifecycle
 policy. Lane C: unified reader + duckdb engine wired into API.
 **Gate G2**
-- [ ] Benchmark report committed with size, write time, scan time, point-query latency, €/month
-- [ ] Migration moves rows older than the hot window from SQL → Parquet idempotently
-- [ ] API queries spanning hot+cold return identical results to a pure-SQL baseline (property test)
+- [x] Benchmark report committed with size, write time, scan time, point-query latency, €/month
+- [x] Migration moves rows older than the hot window from SQL → Parquet idempotently
+- [x] API queries spanning hot+cold return identical results to a pure-SQL baseline (property test)
 
 ### Phase 3 — Compute & platform (Wave 3, 3 lanes)
 Lane A: backtest engine + worker. Lane B: Docker images, Helm chart, KEDA ScaledJob, AKS spot
