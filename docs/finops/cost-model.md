@@ -11,8 +11,8 @@ Rows marked with a delta are MODELLED from `docs/finops/prices.yaml` (captured 2
 |---|---|---|---|---|
 | AKS control plane | Free tier | 0 | 0 | tier |
 | AKS system pool | 1× B2s | 10–35 (35 if never stopped) | 0 (`az aks stop`) | stop cluster |
-| AKS spot pool | D4as_v5 spot, 0–10 | 1–5 (only during sweeps) | 0 | spot + KEDA min 0 |
-| AKS disks / LB / public IP | managed | 3–6 | 1–4 | stop cluster |
+| AKS spot pool | D4as_v5 spot, 0–10, 32 GB P4 OS disk | 1.63–6.12 (40–150 node-hours, incl. prorated OS disk) | 0 | spot + KEDA min 0 (T-306 delta) |
+| AKS disks / LB / public IP | P4 system OS disk, Standard LB, static public IP | 24.38 (5.11 + 16.06 + 3.21) | 24.38 if `az aks stop` keeps LB + IP; 5.11 if released (unverified, T-313) | delete cluster when parked long (T-306 delta) |
 | Container Apps | Consumption | 0–3 (free grant covers most) | 0 | min replicas 0 |
 | App Service | B1 Linux | ~12 | ~12 (or delete via flag) | smallest SKU; `enable_app_service` flag |
 | Azure SQL | GP serverless 0.5–2 vCore, 32 GB | 0 on the free offer via azapi (ADR-0011); list 13.95 (0.5 vCore × 40 h) – 44.25 (2 vCore × 40 h) | 0 (free) / 3.85 list (storage only) | auto-pause; free offer is a dev-only lever (T-123 delta) |
@@ -24,7 +24,7 @@ Rows marked with a delta are MODELLED from `docs/finops/prices.yaml` (captured 2
 | VM legacy | B1s + disk | 2–4 | ~1 (disk) | schedule |
 | Logic App (VM start) | Consumption | < 0.1 | < 0.1 | ≈ 2 actions/day |
 | Budget + action group + TF state | — / email / LRS few KB | 0 / 0 / < 0.01 | same | free (T-125, T-008 deltas) |
-| **Total** | | **≈ 40–100** | **≈ 25** (≈ 13 with `enable_app_service=false`) | |
+| **Total** | | **≈ 61–120** | **≈ 45** (≈ 33 with `enable_app_service=false`) | |
 
 ### Composed so far: `envs/dev` (T-126)
 
@@ -48,6 +48,11 @@ Observations to act on (before Phase 3):
 - App Service B1 and ACR Basic dominate the parked cost → `enable_app_service` flag to delete when parked;
   consider keeping images in GHCR during development and pushing to ACR only for demos (document trade-off).
 - Target ≤ €60 active is realistic only with disciplined parking; budget alerts enforce it.
+
+Wave 3 fold (T-306): the AKS load balancer and public IP alone cost 19.27 EUR/month and do not stop with the
+cluster unless `az aks stop` releases them (unverified). The old 3–6 estimate was too low; the totals above are
+raised accordingly (61–120 active, ≈ 45 parked). Parking the AKS cluster for weeks therefore means deleting it
+(T-313 decides), otherwise the ≤ €60 active target is not met. Figures from `docs/finops/deltas/T-306_model.py`.
 
 Wave 2 fold (T-204, T-207, T-211):
 - **Storage figure raised from ≈ 0.02 to ≈ 0.04.** The T-207 model (`docs/finops/deltas/T-207_model.py`, per-scale
