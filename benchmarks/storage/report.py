@@ -543,7 +543,13 @@ def render_repro(cmp: dict[str, Any]) -> str:
     """The reproducibility section; states what was measured against the SPEC-02 tolerances."""
     worst = sorted(cmp["cells"], key=lambda c: -c["time_delta"])[:8]
     ok = "PASS" if cmp["max_size_delta"] <= SIZE_TOL else "FAIL"
-    time_ok = "PASS" if cmp["n_big_time_fail"] == 0 else "FAIL"
+    time_ok = timing_verdict(cmp)
+    note = {
+        "FAIL": "on a shared laptop with other containers running they are not, so timing ratios "
+        "in this report are indicative only",
+        "PASS": "they are",
+        "not measured": "no cell was above the noise floor",
+    }[time_ok]
     floor_ms = NOISE_FLOOR_S * 1000
     head = (
         f"Same scale and seed, second run: {cmp['n']} format x workload x cache cells compared.\n\n"
@@ -554,8 +560,7 @@ def render_repro(cmp: dict[str, Any]) -> str:
         f"* Timings, cells with p50 >= {floor_ms:.0f} ms: "
         f"{cmp['n_big'] - cmp['n_big_time_fail']} of {cmp['n_big']} within "
         f"{100 * TIME_TOL:.0f} % (worst {100 * cmp['max_time_delta_big']:.1f} %): {time_ok}. "
-        "SPEC-02 section 6 asks for timings within this tolerance; on a shared laptop with other "
-        "containers running they are not, so timing ratios in this report are indicative only.\n\n"
+        f"SPEC-02 section 6 asks for timings within this tolerance; {note}.\n\n"
         "Worst timing deltas:\n\n"
     )
     body = [
@@ -692,14 +697,20 @@ def render_markdown(
         read = "n/a" if r.bytes_read is None else f"{r.bytes_read:,}"
         rest = eur_per_month_at_rest(r.bytes_billed or r.bytes_at_rest, prices, r.storage_price_key)
         w1 = r.workload_id == "W1"
-        q = None if w1 else eur_per_1k_queries(r.bytes_read, prices)
+        # The 4 MiB-GET bound only applies to bytes fetched from storage, not to SQL pages.
+        blob = bytes_read_class(r.bytes_read_source) in {"storage_bytes", "http_bytes"}
+        q = eur_per_1k_queries(r.bytes_read, prices) if blob and not w1 else None
         name = r.format_id + (" [azurite]" if r.target == "azurite" else "")
         cells = [
             r.scale, name, r.workload_id, r.cache, f"{r.wall_p50_s:.4f}", f"{r.wall_p95_s:.4f}",
             rate, f"{r.cpu_s:.3f}", f"{r.bytes_at_rest:,}", read, _cell(rest), _cell(q),
         ]  # fmt: skip
         if internet_egress:
-            q2 = None if w1 else eur_per_1k_queries(r.bytes_read, prices, internet_egress=True)
+            q2 = (
+                eur_per_1k_queries(r.bytes_read, prices, internet_egress=True)
+                if blob and not w1
+                else None
+            )
             cells.append(_cell(q2))
         lines.append("| " + " | ".join(cells) + " |")
     envs = ", ".join(f"{k}={v}" for k, v in sorted(env.items()))
@@ -880,9 +891,24 @@ def render_scale_charts(
 
 
 # --- the report ----------------------------------------------------------------------------------
-def exec_summary(rs: RunSet, prices: PriceBook, scale: str) -> str:
+def timing_verdict(repro: dict[str, Any] | None) -> str:
+    """PASS / FAIL of the SPEC-02 timing tolerance, or ``not measured`` without a repro run."""
+    if repro is None or repro["n_big"] == 0:
+        return "not measured"
+    return "PASS" if repro["n_big_time_fail"] == 0 else "FAIL"
+
+
+def exec_summary(
+    rs: RunSet, prices: PriceBook, scale: str, repro: dict[str, Any] | None = None
+) -> str:
     """Three business bullets whose numbers are all taken from the measured rows."""
     h = headline_ratios(rs.rows, prices, scale)
+    verdict = timing_verdict(repro)
+    caution = {
+        "FAIL": "indicative only (timing reproducibility FAILED the 15 % tolerance)",
+        "PASS": "reproducible within the 15 % tolerance",
+        "not measured": "timing reproducibility not measured",
+    }[verdict]
 
     def warm(fid: str, wl: str) -> float | None:
         r = _main_row(rs.rows, scale, fid, wl, "warm")
@@ -909,8 +935,7 @@ def exec_summary(rs: RunSet, prices: PriceBook, scale: str) -> str:
         f"faster than F0 by these factors (F0 time / F5 time): {speeds}. W2 is daily bars, W3 a "
         "one-month range, W5 a ten-instrument scan, W6 an as-of query with restatements. "
         f"The point lookup (W4) factor is {w4}, where a clustered index is at its best. "
-        "Local, in-process numbers, indicative only (timing reproducibility FAILED the 15 % "
-        "tolerance): see the caveats."
+        f"Local, in-process numbers, {caution}: see the caveats."
     )
     az = _find(rs.rows, scale, "F5", "W3", "warm", target="azurite")
     cost = eur_per_1k_from_requests(az, prices) if az else None
@@ -920,8 +945,9 @@ def exec_summary(rs: RunSet, prices: PriceBook, scale: str) -> str:
     tail = "."
     if az is not None and cost is not None:
         tail = (
-            f" and, counted against Azurite, issues {az.requests_get} GET + {az.requests_list} "
-            f"LIST requests, about EUR {cost:.4f} of Blob transactions per 1,000 queries "
+            f" and, counted against Azurite, issues {az.requests_get} GET + {az.requests_head} "
+            f"HEAD + {az.requests_list} LIST requests, about EUR {cost:.4f} of Blob "
+            "transactions per 1,000 queries "
             "(MODELLED from MEASURED counts)."
         )
     b3 = (
@@ -1010,7 +1036,7 @@ def render_report(
         "is MEASURED (harness) or MODELLED (EUR = quantity x `docs/finops/prices.yaml`) and "
         "labelled so. Local run only; Azure runs are NEEDS-CLOUD._\n",
         "## Executive summary\n",
-        exec_summary(rs, prices, main),
+        exec_summary(rs, prices, main, repro),
         _METHOD.format(datasets=ds or "dataset sizes not recorded"),
     ]
     if len(scales) > 1:

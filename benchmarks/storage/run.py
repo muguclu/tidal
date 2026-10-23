@@ -28,6 +28,7 @@ from datetime import date, datetime, timedelta
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 import duckdb
 import numpy as np
@@ -201,6 +202,9 @@ def sweep_stale_schemas(
     return dropped
 
 
+_EMULATOR_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "azurite"})
+
+
 def sweep_stale_containers(
     service: "BlobServiceClient",
     *,
@@ -208,7 +212,14 @@ def sweep_stale_containers(
     now: datetime | None = None,
     prefix: str = "bench-",
 ) -> list[str]:
-    """Delete ``bench-*`` containers (starting with ``prefix``) older than ``min_age_min``."""
+    """Delete ``bench-*`` containers (starting with ``prefix``) older than ``min_age_min``.
+
+    Refuses to run against anything but a local emulator: a misconfigured connection string
+    must never let a benchmark delete containers in a real storage account.
+    """
+    host = urlparse(service.url).hostname or ""
+    if host not in _EMULATOR_HOSTS and service.account_name != "devstoreaccount1":
+        raise ConfigError(f"container sweep only runs against Azurite, not {host!r}")
     cutoff = (now or SystemClock().now()) - timedelta(minutes=min_age_min)
     dropped: list[str] = []
     for c in service.list_containers(name_starts_with=prefix):

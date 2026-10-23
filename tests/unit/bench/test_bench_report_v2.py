@@ -26,6 +26,7 @@ from benchmarks.storage.workloads import Dataset
 from hypothesis import given
 from hypothesis import strategies as st
 
+from tidal.common.errors import ConfigError
 from tidal.finops.fetch_prices import Price, PriceBook
 
 
@@ -178,9 +179,13 @@ class _Container:
 
 
 class _FakeService:
-    def __init__(self, containers: list[_Container]) -> None:
+    def __init__(
+        self, containers: list[_Container], url: str = "http://127.0.0.1:10000/devstoreaccount1"
+    ) -> None:
         self.containers = containers
         self.deleted: list[str] = []
+        self.url = url
+        self.account_name = url.rstrip("/").rsplit("/", 1)[-1]
 
     def list_containers(self, name_starts_with: str = "") -> list[_Container]:
         return [c for c in self.containers if c.name.startswith(name_starts_with)]
@@ -199,6 +204,12 @@ def test_container_sweep_keeps_young_and_foreign() -> None:
     ])  # fmt: skip
     gone = sweep_stale_containers(svc, min_age_min=60, now=now)  # type: ignore[arg-type]
     assert gone == ["bench-f5-abcdef12"] == svc.deleted
+
+
+def test_container_sweep_refuses_a_real_account() -> None:
+    svc = _FakeService([], url="https://tidaldev.blob.core.windows.net/")
+    with pytest.raises(ConfigError, match="only runs against Azurite"):
+        sweep_stale_containers(svc)  # type: ignore[arg-type]
 
 
 class _Cur:

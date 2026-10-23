@@ -46,7 +46,7 @@ class ResultRow(BaseModel):
     rows_per_s: float | None  # rows / wall_p50_s
     bytes_at_rest: int
     bytes_read: int | None
-    bytes_read_source: str  # "duckdb_profile" | "sql_statistics_io" | "n/a"
+    bytes_read_source: str  # a key of BYTES_READ_CLASS
     storage_price_key: str  # prices.yaml key used for the at-rest EUR column
     # --- schema v2 -------------------------------------------------------------------------
     bytes_billed: int | None = None  # basis the provider bills at rest (SQL: allocated pages)
