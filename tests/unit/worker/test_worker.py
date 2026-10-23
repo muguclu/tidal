@@ -550,15 +550,15 @@ def test_same_job_id_race_treats_existing_outputs_as_written(tmp_path: Path) -> 
 
 
 def test_dlq_description_never_contains_input_values_or_messages() -> None:
-    secret = "SENTINEL-sk-12345"  # noqa: S105
+    sentinel = "SENTINELVALUE"
     p = job_payload()
-    p["output_prefix"] = f"backtests/{secret}/"  # model validator raises ValueError(msg)
-    p["request"]["instrument_ids"] = [secret]
+    p["output_prefix"] = f"backtests/{sentinel}/"  # model validator raises ValueError(msg)
+    p["request"]["instrument_ids"] = [sentinel]
     try:
         BacktestJobMessage.model_validate_json(envelope("backtest.job/v1", p))
     except Exception as exc:
         text = validation_summary(exc)  # type: ignore[arg-type]
-    assert secret not in text
+    assert sentinel not in text
     assert "output_prefix" in text or "instrument_ids" in text
 
 
