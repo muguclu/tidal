@@ -78,7 +78,7 @@ def test_precision_limited_price_is_refused() -> None:
 def test_markdown_labels_every_eur_cell_modelled(tmp_path: Path) -> None:
     rows = [_row(), _row(workload_id="W1", cache="n/a")]
     md = report.render_markdown(rows, BOOK, {"python": "3.12"})
-    body = [ln for ln in md.splitlines() if ln.startswith("| F5")]
+    body = [ln for ln in md.splitlines() if ln.startswith("| S | F5")]
     assert len(body) == 2
     assert all(ln.count("(MODELLED)") >= 1 for ln in body)
     assert "0.040000 (MODELLED)" in body[0] or "0.040000 (MODELLED)" in body[1]

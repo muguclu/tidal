@@ -245,6 +245,27 @@ class SqlFormat:
         )
         return int(row[0]) * PAGE_BYTES if row else 0
 
+    def allocated_bytes(self) -> int:
+        """Reserved (allocated) pages of the table x 8 KiB: the at-rest EUR billing basis.
+
+        Azure SQL Database bills data storage on the provisioned maximum data size, not on the
+        pages in use, and a database can never be provisioned below what is allocated. Used pages
+        (:meth:`size_bytes`) therefore UNDER-state what a SQL format costs at rest; reserved pages
+        (whole extents, including the free pages in them) are the tightest basis a single table
+        measurement supports. Real bills add system objects, the log and headroom, which are not
+        modelled. Blob bills the stored bytes, so for files the runner uses ``size_bytes``.
+        """
+        row = (
+            self._conn()
+            .execute(
+                "SELECT COALESCE(SUM(reserved_page_count), 0) FROM sys.dm_db_partition_stats"
+                " WHERE object_id = OBJECT_ID(?)",
+                self.table,
+            )
+            .fetchone()
+        )
+        return int(row[0]) * PAGE_BYTES if row else 0
+
     def reopen(self) -> None:
         """New connection and an empty buffer pool (``CHECKPOINT`` + ``DBCC DROPCLEANBUFFERS``).
 
