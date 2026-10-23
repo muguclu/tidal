@@ -5,13 +5,24 @@ implementation is injected (tests use ``tests/fakes/backtest_store``). The aggre
 on redelivery (messaging §4): a child already in a terminal state is never counted again, the
 first terminal result wins, and the parent status is always recomputed from the children so a
 crash between the two steps heals on the next delivery.
+
+Parent status: all children succeeded -> ``succeeded``; all failed -> ``failed``; a mix once every
+child is terminal -> ``partial``; some terminal -> ``running``; none -> ``queued``.
+``update_parent`` is monotonic (a stale concurrent refresh cannot move the counters backwards).
+
+Expiry: the router calls :func:`expire_stale` on reads. A non-terminal child older than the
+``backtest-jobs`` TTL (24 h, messaging §1) plus a 1 h margin can no longer be delivered, so it is
+reported ``failed`` / ``EXPIRED`` and persisted. This also covers a crash between the store insert
+and the send, and a swallowed error while marking unsent children after a failed send. The one
+exception to "first terminal result wins": a worker result overrides ``ENQUEUE_FAILED``, because a
+send that raised may still have reached the broker (ambiguous send).
 """
 
 import asyncio
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Final, Protocol
 
 from pydantic import ValidationError
@@ -29,8 +40,11 @@ from tidal.worker.consumer import ReceivedMessage, Receiver, Verdict, validation
 
 _log = get_logger(__name__)
 
-MAX_DELIVERY: Final = 5  # backtest-results (messaging §1)
 _UNKNOWN_SCHEMA: Final = "unknown-schema"
+ENQUEUE_FAILED: Final = "ENQUEUE_FAILED"
+EXPIRED: Final = "EXPIRED"
+#: backtest-jobs TTL (24 h) plus a margin: after this a queued job can no longer run.
+JOB_EXPIRY: Final = timedelta(hours=25)
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +59,8 @@ class JobRecord:
     request_json: str
     submitted_at: datetime
     children_total: int | None = None  # set on sweep parents only
+    children_succeeded: int | None = None
+    children_failed: int | None = None
     metrics_json: str | None = None
     result_sha256: str | None = None
     error_code: str | None = None
@@ -86,7 +102,11 @@ class BacktestStore(Protocol):
         error_code: str | None,
         finished_at: datetime,
     ) -> bool:
-        """``UPDATE ... WHERE job_id = ? AND status NOT IN (terminal)``; True if a row changed."""
+        """Apply a terminal result once; True if a row changed.
+
+        SQL form: ``UPDATE ... WHERE job_id = :id AND (status NOT IN (terminal) OR
+        (status = 'failed' AND error_code = 'ENQUEUE_FAILED'))``.
+        """
         ...
 
     async def update_parent(
@@ -98,13 +118,23 @@ class BacktestStore(Protocol):
         failed: int,
         finished_at: datetime | None,
     ) -> None:
-        """Set status and counters; never overwrites a non-null ``finished_at``."""
+        """Set status and counters, monotonically; never overwrites a non-null ``finished_at``.
+
+        Writes only if the new done count (succeeded + failed) is >= the stored one; SQL form:
+        ``UPDATE ... WHERE job_id = :id AND COALESCE(children_succeeded, 0) +
+        COALESCE(children_failed, 0) <= :done``.
+        """
         ...
 
     async def list_parents(
-        self, owner_hash: str, status: JobStatus | None, offset: int, limit: int
+        self, owner_hash: str, status: JobStatus | None, before_job_id: str | None, limit: int
     ) -> list[JobRecord]:
-        """Top-level jobs (``parent_job_id IS NULL``) of the owner, newest first."""
+        """Top-level jobs of the owner with ``job_id < before_job_id``, newest (ULID) first."""
+        ...
+
+    async def stale_children(self, job_id: str, submitted_before: datetime) -> list[str]:
+        """Non-terminal jobs submitted before the cutoff: the children of ``job_id``, or the
+        job itself when it is a leaf (``parent_job_id IS NULL`` and no children)."""
         ...
 
 
@@ -135,6 +165,23 @@ async def refresh_parent(store: BacktestStore, parent_job_id: str, now: datetime
     return status
 
 
+async def expire_stale(store: BacktestStore, job_id: str, now: datetime) -> None:
+    """Fail jobs that sat non-terminal beyond :data:`JOB_EXPIRY` (``EXPIRED``) and refresh."""
+    stale = await store.stale_children(job_id, now - JOB_EXPIRY)
+    for stale_id in stale:
+        await store.finish_child(
+            stale_id,
+            status=JobStatus.FAILED,
+            metrics_json=None,
+            result_sha256=None,
+            error_code=EXPIRED,
+            finished_at=now,
+        )
+    record = await store.get(job_id)
+    if stale and record is not None and record.children_total is not None:
+        await refresh_parent(store, job_id, now)
+
+
 def _fill_metrics(data: dict[str, Any]) -> None:  # Any: JSON dict
     """Inverse of the worker's ``exclude_none`` restore: absent nullable metrics are null."""
     payload = data.get("payload")
@@ -152,7 +199,6 @@ class ResultAggregator:
     store: BacktestStore
     clock: Clock
     receiver: Receiver
-    max_delivery: int = MAX_DELIVERY
 
     async def _settle(
         self,

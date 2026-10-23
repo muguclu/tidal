@@ -437,3 +437,98 @@ async def test_list_paging_and_filter(
     assert (await client.get("/v1/backtests", params=params)).status_code == 400
     r = await client.get("/v1/backtests", params={"status": "succeeded"})
     assert r.json()["items"] == []
+
+
+# --- review round ------------------------------------------------------------------------------
+
+HOUR_NS = 3600 * 10**9
+
+
+async def test_single_axis_over_200_is_413(client: httpx.AsyncClient, bus: FakeBus) -> None:
+    r = await client.post("/v1/backtests", json=request_body(sweep={"slow": list(range(2, 203))}))
+    assert r.status_code == 413
+    assert not bus.sent
+
+
+async def test_stale_queued_jobs_expire_on_read(
+    client: httpx.AsyncClient, clock: FixedClock, store: FakeBacktestStore, bus: FakeBus
+) -> None:
+    single = (await client.post("/v1/backtests", json=request_body())).json()["job_id"]
+    sweep = (
+        await client.post("/v1/backtests", json=request_body(sweep={"slow": [10, 20]}))
+    ).json()["job_id"]
+    clock.advance(24 * HOUR_NS)  # inside TTL + margin: still queued
+    assert (await client.get(f"/v1/backtests/{single}")).json()["status"] == "queued"
+    clock.advance(2 * HOUR_NS)
+    body = (await client.get(f"/v1/backtests/{single}")).json()
+    assert body["status"] == "failed"
+    assert store.rows[single].error_code == "EXPIRED"
+    body = (await client.get(f"/v1/backtests/{sweep}")).json()
+    assert body["status"] == "failed"
+    assert body["children"] == {"total": 2, "succeeded": 0, "failed": 2}
+    assert {c.error_code for c in store.children(sweep)} == {"EXPIRED"}
+    assert store.rows[sweep].status == JobStatus.FAILED
+
+
+async def test_worker_result_overrides_enqueue_failed_only(
+    client: httpx.AsyncClient, bus: FakeBus, agg: ResultAggregator, store: FakeBacktestStore
+) -> None:
+    await client.post("/v1/backtests", json=request_body())
+    job = jobs_of(bus)[0]
+    jid = job.payload.job_id
+    now = agg.clock.now()
+    await store.finish_child(  # ambiguous send: marked failed although it reached the broker
+        jid,
+        status=JobStatus.FAILED,
+        metrics_json=None,
+        result_sha256=None,
+        error_code="ENQUEUE_FAILED",
+        finished_at=now,
+    )
+    await apply(agg, result_msg(job))
+    assert store.rows[jid].status == JobStatus.SUCCEEDED
+    await apply(agg, result_msg(job, "failed"))  # now first-terminal-wins again
+    assert store.rows[jid].status == JobStatus.SUCCEEDED
+
+
+async def test_update_parent_is_monotonic(
+    client: httpx.AsyncClient, bus: FakeBus, store: FakeBacktestStore, agg: ResultAggregator
+) -> None:
+    parent = (
+        await client.post("/v1/backtests", json=request_body(sweep={"slow": [10, 20, 30]}))
+    ).json()["job_id"]
+    jobs = jobs_of(bus)
+    await apply(agg, result_msg(jobs[0]))
+    # refresh A reads the counters, then children 2 and 3 finish and refresh B commits ...
+    stale = await store.child_counts(parent)
+    await apply(agg, result_msg(jobs[1]))
+    await apply(agg, result_msg(jobs[2]))
+    assert store.rows[parent].status == JobStatus.SUCCEEDED
+    # ... then A writes its stale view: it must not move the parent backwards
+    await store.update_parent(
+        parent, status=JobStatus.RUNNING, succeeded=stale.succeeded, failed=stale.failed,
+        finished_at=None,
+    )  # fmt: skip
+    assert store.rows[parent].status == JobStatus.SUCCEEDED
+    assert store.rows[parent].children_succeeded == 3
+
+
+async def test_aggregator_accepts_real_worker_serialisation(
+    client: httpx.AsyncClient, bus: FakeBus, agg: ResultAggregator, store: FakeBacktestStore
+) -> None:
+    from tidal.contracts.messages import BacktestResultMessage  # noqa: PLC0415
+    from tidal.worker.handlers import _restore_metrics  # noqa: PLC0415
+
+    await client.post("/v1/backtests", json=request_body())
+    job = jobs_of(bus)[0]
+    env = BacktestResultMessage.model_validate(
+        result_msg(job)
+        | {
+            "payload": result_msg(job)["payload"]
+            | {"metrics": METRICS | {"hit_rate": None, "turnover": None}}
+        }
+    )
+    body = serialise(env, _restore_metrics)
+    assert await agg.process(Msg(body)) == Verdict.COMPLETED
+    assert store.rows[job.payload.job_id].status == JobStatus.SUCCEEDED
+    assert '"hit_rate":null' in (store.rows[job.payload.job_id].metrics_json or "").replace(" ", "")

@@ -6,7 +6,11 @@ from typing import Any
 import schemathesis
 import yaml
 from hypothesis import HealthCheck, settings
-from schemathesis.specs.openapi.checks import allow_header_conformance, positive_data_acceptance
+from schemathesis.specs.openapi.checks import (
+    allow_header_conformance,
+    negative_data_rejection,
+    positive_data_acceptance,
+)
 
 from fakes.backtest_store import FakeBacktestStore
 from fakes.bus import FakeBus
@@ -71,5 +75,13 @@ def test_backtest_api_conforms_to_contract(case: Any) -> None:
     """Status codes, headers, content types and bodies match the contract."""
     # allow_header_conformance: GET and POST are separate Starlette routes on one path, so a 405
     # advertises only the first route's method (framework behaviour, not a contract difference).
+    # negative_data_rejection: a sweep axis over 200 values violates maxItems but is a documented
+    # 413 (product limit), not a 400.
     # Schema-valid submissions can be semantically invalid (start >= end, sweep keys, 413).
-    case.call_and_validate(excluded_checks=[positive_data_acceptance, allow_header_conformance])
+    case.call_and_validate(
+        excluded_checks=[
+            positive_data_acceptance,
+            allow_header_conformance,
+            negative_data_rejection,
+        ]
+    )

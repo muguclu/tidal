@@ -15,7 +15,14 @@ from fastapi import APIRouter, Depends, Query, Request
 from ulid import ULID
 
 from tidal import __version__
-from tidal.api.aggregator import BacktestStore, JobRecord, derive_status, refresh_parent
+from tidal.api.aggregator import (
+    ENQUEUE_FAILED,
+    BacktestStore,
+    JobRecord,
+    derive_status,
+    expire_stale,
+    refresh_parent,
+)
 from tidal.api.auth_roles import QUANT, require_role
 from tidal.api.deps import Principal, get_bus, get_clock
 from tidal.api.errors import problem_docs
@@ -28,7 +35,7 @@ from tidal.api.pagination import (
     decode_cursor,
     encode_cursor,
 )
-from tidal.common.errors import DependencyUnavailable, NotFound, RangeTooLarge
+from tidal.common.errors import DependencyUnavailable, NotFound, RangeTooLarge, ValidationFailed
 from tidal.common.logging import get_correlation_id, get_logger, new_correlation_id
 from tidal.contracts.messages import (
     SCHEMA_BACKTEST_JOB,
@@ -58,7 +65,6 @@ logger = get_logger(__name__)
 BATCH_MAX_MESSAGES = 100
 BATCH_MAX_BYTES = 200_000
 PRODUCER = f"tidal-api@{__version__}"
-ENQUEUE_FAILED = "ENQUEUE_FAILED"
 _TERMINAL = frozenset({JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.PARTIAL})
 
 router = APIRouter(prefix="/v1", tags=["backtests"])
@@ -89,10 +95,10 @@ async def sweep_guard(request: Request, _principal: QuantPrincipal) -> None:
 
 
 def _is_value_list(value: object) -> bool:
-    """A schema-valid sweep axis: 1..200 numbers (bool is not a number)."""
+    """A sweep axis of numbers (bool is not a number); an axis over 200 is still a 413."""
     return (
         isinstance(value, list)
-        and 1 <= len(value) <= MAX_SWEEP_CHILDREN
+        and len(value) >= 1
         and all(isinstance(x, int | float) and not isinstance(x, bool) for x in value)
     )
 
@@ -244,8 +250,10 @@ async def _fail_unsent(
 
 
 async def _status_of(
-    store: BacktestStore, record: JobRecord, *, with_result: bool
+    store: BacktestStore, clock: Clock, record: JobRecord, *, with_result: bool
 ) -> BacktestStatus:
+    await expire_stale(store, record.job_id, clock.now())
+    record = await store.get(record.job_id) or record
     if record.children_total is not None:  # sweep parent: aggregate live from the children
         counts = await store.child_counts(record.job_id)
         status = derive_status(counts.total, counts.succeeded, counts.failed)
@@ -282,6 +290,18 @@ async def _status_of(
     )
 
 
+def _position_of(job_id: str) -> Position:
+    """The ULID of ``job_id`` as an integer: reuses the HMAC cursor, ULIDs sort by time."""
+    return Position(int(ULID.from_str(job_id.removeprefix("bt_"))), 0)
+
+
+def _job_id_of(pos: Position) -> str:
+    try:
+        return f"bt_{ULID.from_int(pos.ts_ns)}"
+    except ValueError:
+        raise ValidationFailed("Invalid cursor.") from None
+
+
 @router.get(
     "/backtests",
     operation_id="listBacktests",
@@ -294,21 +314,22 @@ async def list_backtests(  # noqa: PLR0917 - contract query parameters
     request: Request,
     principal: QuantPrincipal,
     store: Annotated[BacktestStore, Depends(get_store)],
+    clock: Annotated[Clock, Depends(get_clock)],
     status: Annotated[JobStatus | None, Query()] = None,
     cursor: Annotated[str | None, Query(max_length=512)] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = DEFAULT_LIMIT,
 ) -> BacktestList:
-    """Newest first; the signed cursor carries the offset and is bound to principal and filter."""
+    """Newest first; the signed keyset cursor (last job_id) is bound to principal and filter."""
     owner = owner_hash(principal)
     key = cursor_key(request)
     bound = binding("backtests", owner, status.value if status else "")
-    offset = decode_cursor(key, bound, cursor).idx if cursor else 0
-    rows = await store.list_parents(owner, status, offset, limit + 1)
-    items = [await _status_of(store, r, with_result=False) for r in rows[:limit]]
+    before = _job_id_of(decode_cursor(key, bound, cursor)) if cursor else None
+    rows = await store.list_parents(owner, status, before, limit + 1)
+    items = [await _status_of(store, clock, r, with_result=False) for r in rows[:limit]]
     more = len(rows) > limit
     return BacktestList(
         items=items,
-        next_cursor=encode_cursor(key, bound, Position(0, offset + limit)) if more else None,
+        next_cursor=encode_cursor(key, bound, _position_of(items[-1].job_id)) if more else None,
     )
 
 
@@ -325,9 +346,10 @@ async def get_backtest(
     job_id: JobId,
     principal: QuantPrincipal,
     store: Annotated[BacktestStore, Depends(get_store)],
+    clock: Annotated[Clock, Depends(get_clock)],
 ) -> BacktestStatus:
     """Parent status aggregated from the children; foreign and child ids are 404."""
     record = await store.get(job_id)
     if record is None or record.owner_hash != owner_hash(principal) or record.parent_job_id:
         raise NotFound("Backtest job not found.")
-    return await _status_of(store, record, with_result=True)
+    return await _status_of(store, clock, record, with_result=True)

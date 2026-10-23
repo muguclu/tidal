@@ -3,7 +3,7 @@
 from dataclasses import replace
 from datetime import datetime
 
-from tidal.api.aggregator import ChildCounts, JobRecord
+from tidal.api.aggregator import ENQUEUE_FAILED, ChildCounts, JobRecord
 from tidal.contracts.models import JobStatus
 
 _TERMINAL = {JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.PARTIAL}
@@ -59,10 +59,11 @@ class FakeBacktestStore:
         error_code: str | None,
         finished_at: datetime,
     ) -> bool:
-        """Conditional update: only a non-terminal row changes."""
+        """Conditional update: non-terminal rows, or a failed ``ENQUEUE_FAILED`` row, change."""
         self._maybe_fail()
         row = self.rows[job_id]
-        if row.status in _TERMINAL:
+        overridable = row.status == JobStatus.FAILED and row.error_code == ENQUEUE_FAILED
+        if row.status in _TERMINAL and not overridable:
             return False
         self.rows[job_id] = replace(
             row, status=status, metrics_json=metrics_json, result_sha256=result_sha256,
@@ -74,18 +75,36 @@ class FakeBacktestStore:
         self, job_id: str, *, status: JobStatus, succeeded: int, failed: int,
         finished_at: datetime | None,
     ) -> None:  # fmt: skip
-        """Set status; keep an existing ``finished_at``."""
+        """Monotonic: only if the done count does not go backwards; keep ``finished_at``."""
+        self._maybe_fail()
         row = self.rows[job_id]
-        self.rows[job_id] = replace(row, status=status, finished_at=row.finished_at or finished_at)
+        stored = (row.children_succeeded or 0) + (row.children_failed or 0)
+        if succeeded + failed < stored:
+            return
+        self.rows[job_id] = replace(
+            row, status=status, children_succeeded=succeeded, children_failed=failed,
+            finished_at=row.finished_at or finished_at,
+        )  # fmt: skip
 
     async def list_parents(
-        self, owner_hash: str, status: JobStatus | None, offset: int, limit: int
+        self, owner_hash: str, status: JobStatus | None, before_job_id: str | None, limit: int
     ) -> list[JobRecord]:
-        """Owner's top-level jobs, newest (highest id) first."""
+        """Owner's top-level jobs with ``job_id < before_job_id``, newest first."""
         rows = [
             r for r in self.rows.values()
             if r.parent_job_id is None and r.owner_hash == owner_hash
             and (status is None or r.status == status)
+            and (before_job_id is None or r.job_id < before_job_id)
         ]  # fmt: skip
         rows.sort(key=lambda r: r.job_id, reverse=True)
-        return rows[offset : offset + limit]
+        return rows[:limit]
+
+    async def stale_children(self, job_id: str, submitted_before: datetime) -> list[str]:
+        """Non-terminal children (or the leaf itself) submitted before the cutoff."""
+        row = self.rows[job_id]
+        pool = self.children(job_id) if row.children_total is not None else [row]
+        return [
+            r.job_id for r in pool
+            if r.status in (JobStatus.QUEUED, JobStatus.RUNNING)
+            and r.submitted_at < submitted_before
+        ]  # fmt: skip
