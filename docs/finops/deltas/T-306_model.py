@@ -1,4 +1,4 @@
-# ruff: noqa: T201, E501, PLR2004  # standalone report script: prints the delta tables
+# ruff: noqa: T201, E501  # standalone report script: prints the delta tables
 """Deterministic cost model behind docs/finops/deltas/T-306.md (CLAUDE.md 2.2: no number comes from a model).
 
 Run from the repository root (stdlib + pyyaml, no randomness, no network):
@@ -57,17 +57,25 @@ print("| Component | Quantity x unit price (EUR) | Active EUR/month | Parked EUR
 print("|---|---|---:|---:|")
 for name, qty, act, park, _ in rows:
     print(f"| {name} | {qty} | {act:.2f} | {park:.2f} |")
-print(f"| Spot pool D4as_v5 + 32 GB P4 OS disk | node-hours x ({SPOT} + {P4}/{HOURS}); scenarios below | 0.00 at idle | 0.00 |")
+print(
+    f"| Spot pool D4as_v5 + 32 GB P4 OS disk | node-hours x ({SPOT} + {P4}/{HOURS}); scenarios below | 0.00 at idle | 0.00 |"
+)
 print(f"| **Fixed subtotal (no sweeps)** | | **{fixed_active:.2f}** | **{fixed_parked:.2f}** |")
 print()
-print("| Spot scenario | Node-hours/month | Spot compute EUR | OS disks EUR | Spot total EUR | Same hours on demand incl. disk EUR | Saving EUR | Total active EUR/month |")
+print(
+    "| Spot scenario | Node-hours/month | Spot compute EUR | OS disks EUR | Spot total EUR | Same hours on demand incl. disk EUR | Saving EUR | Total active EUR/month |"
+)
 print("|---|---:|---:|---:|---:|---:|---:|---:|")
 for name, nh in SCENARIOS.items():
     c, d = nh * SPOT, nh * SPOT_DISK_HOUR
     o = nh * OND + d
-    print(f"| {name} | {nh:.0f} | {c:.2f} | {d:.2f} | {c + d:.2f} | {o:.2f} | {o - c - d:.2f} | {fixed_active + c + d:.2f} |")
+    print(
+        f"| {name} | {nh:.0f} | {c:.2f} | {d:.2f} | {c + d:.2f} | {o:.2f} | {o - c - d:.2f} | {fixed_active + c + d:.2f} |"
+    )
 print()
 print("| Variant | EUR/month |")
 print("|---|---:|")
-print(f"| Always-on spot node (min_count = 1) instead of 0 | {SPOT * HOURS + P4:.2f} (extra vs scale to zero, compute plus disk) |")
+print(
+    f"| Always-on spot node (min_count = 1) instead of 0 | {SPOT * HOURS + P4:.2f} (extra vs scale to zero, compute plus disk) |"
+)
 print(f"| SPEC-09 C4 baseline, compute only: 5x D4as_v5 on demand 24/7 | {5 * OND * HOURS:.2f} |")
