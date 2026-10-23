@@ -25,7 +25,7 @@ from tidal.api.aggregator import (
 )
 from tidal.api.auth_roles import QUANT, require_role
 from tidal.api.deps import Principal, get_bus, get_clock
-from tidal.api.errors import problem_docs
+from tidal.api.errors import CORRELATION_HEADER, correlation_header_doc, problem_docs
 from tidal.api.pagination import (
     DEFAULT_LIMIT,
     MAX_LIMIT,
@@ -68,6 +68,7 @@ PRODUCER = f"tidal-api@{__version__}"
 _TERMINAL = frozenset({JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.PARTIAL})
 
 router = APIRouter(prefix="/v1", tags=["backtests"])
+_OK_HEADERS: dict[str, Any] = {"headers": {CORRELATION_HEADER: correlation_header_doc()}}
 QuantPrincipal = Annotated[Principal, require_role(QUANT)]
 
 
@@ -155,7 +156,7 @@ def _chunks(items: list[tuple[BacktestJobMessage, int]]) -> list[list[BacktestJo
     status_code=202,
     response_model=BacktestAccepted,
     openapi_extra={"x-tidal-min-role": QUANT},
-    responses=problem_docs(400, 401, 403, 404, 413, 429, 503),
+    responses={202: _OK_HEADERS, **problem_docs(400, 401, 403, 404, 413, 429, 503)},
 )
 async def submit_backtest(
     body: BacktestRequest,
@@ -308,7 +309,7 @@ def _job_id_of(pos: Position) -> str:
     summary="List the own backtest jobs of the caller",
     response_model=BacktestList,
     openapi_extra={"x-tidal-min-role": QUANT},
-    responses=problem_docs(400, 401, 403, 429, 503),
+    responses={200: _OK_HEADERS, **problem_docs(400, 401, 403, 429, 503)},
 )
 async def list_backtests(  # noqa: PLR0917 - contract query parameters
     request: Request,
@@ -340,7 +341,7 @@ async def list_backtests(  # noqa: PLR0917 - contract query parameters
     description="Jobs owned by another principal are reported as 404.",
     response_model=BacktestStatus,
     openapi_extra={"x-tidal-min-role": QUANT},
-    responses=problem_docs(400, 401, 403, 404, 429, 503),
+    responses={200: _OK_HEADERS, **problem_docs(400, 401, 403, 404, 429, 503)},
 )
 async def get_backtest(
     job_id: JobId,

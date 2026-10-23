@@ -73,9 +73,52 @@ def _walk(doc: dict[str, Any], node: Any, *, name: str = "", param: bool = False
                 _walk(doc, child, name=name, param=param)
 
 
+_REQUESTS = ("MaCrossoverRequest", "MeanReversionRequest", "CalendarSpreadRequest")
+_BASE_FIELDS = ("interval", "start", "end", "costs", "seed", "sweep")
+_BASE_REQUIRED = ("interval", "start", "end", "costs", "seed")
+
+
+def _split_request_bases(schemas: dict[str, Any]) -> None:
+    """Express the strategy requests as ``allOf: [BacktestRequestBase, {...}]`` (contract form).
+
+    pydantic flattens inheritance; the contract factors the shared fields into a base component.
+    """
+    if not all(name in schemas for name in _REQUESTS):
+        return
+    first = schemas[_REQUESTS[0]]["properties"]
+    schemas["BacktestRequestBase"] = {
+        "type": "object",
+        "description": "Fields shared by every strategy request.",
+        "required": list(_BASE_REQUIRED),
+        "properties": {k: first[k] for k in _BASE_FIELDS},
+    }
+    for name in _REQUESTS:
+        node = schemas[name]
+        own = {k: v for k, v in node["properties"].items() if k not in _BASE_FIELDS}
+        required = [k for k in node["required"] if k not in _BASE_REQUIRED]
+        schemas[name] = {
+            "allOf": [
+                {"$ref": "#/components/schemas/BacktestRequestBase"},
+                {"type": "object", "required": required, "properties": own},
+            ],
+            "description": node.get("description", ""),
+        }
+
+
+def _result_one_of(schemas: dict[str, Any]) -> None:
+    """``BacktestStatus.result`` is ``oneOf: [$ref BacktestResult, null]`` in the contract."""
+    status = schemas.get("BacktestStatus")
+    if status and "result" in status.get("properties", {}):
+        status["properties"]["result"] = {
+            "oneOf": [{"$ref": "#/components/schemas/BacktestResult"}, {"type": "null"}]
+        }
+
+
 def normalize(doc: dict[str, Any]) -> dict[str, Any]:
     """Rewrite ``doc`` in place to the contract's schema style and return it."""
     _walk(doc, doc.get("components", {}).get("schemas", {}))
+    _split_request_bases(doc.get("components", {}).get("schemas", {}))
+    _result_one_of(doc.get("components", {}).get("schemas", {}))
     for item in doc.get("paths", {}).values():
         for operation in item.values():
             _walk(doc, operation)
