@@ -1,0 +1,32 @@
+#cloud-config
+# Rendered by infra/terraform/envs/dev/vm.tf. Contains no secrets: the VM authenticates with its managed identity.
+package_update: true
+packages:
+  - python3-venv
+write_files:
+  - path: /etc/tidal/exporter.env
+    permissions: "0644"
+    content: |
+      TIDAL_ENV=${tidal_env}
+      TIDAL_STORAGE__ACCOUNT_URL=${storage_account_url}
+      AZURE_CLIENT_ID=${client_id}
+      EXPORT_LOOKBACK_DAYS=${lookback_days}
+  - path: /opt/tidal-exporter/requirements.txt
+    permissions: "0644"
+    content: |
+      ${indent(6, requirements)}
+  - path: /opt/tidal-exporter/export_daily_bars.py
+    permissions: "0755"
+    content: |
+      ${indent(6, script)}
+  - path: /etc/systemd/system/tidal-exporter.service
+    permissions: "0644"
+    content: |
+      ${indent(6, unit)}
+runcmd:
+  - python3 -m venv /opt/tidal-exporter/venv
+  - /opt/tidal-exporter/venv/bin/pip install --no-cache-dir -r /opt/tidal-exporter/requirements.txt
+  - systemctl daemon-reload
+  # Enabled for every later boot (the Logic App start). --no-block lets cloud-init finish before the unit
+  # deallocates the VM; the first boot runs the export too.
+  - systemctl enable --now --no-block tidal-exporter.service

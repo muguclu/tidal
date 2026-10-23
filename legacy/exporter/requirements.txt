@@ -1,0 +1,4 @@
+# Pinned to the versions in the repository uv.lock (ADR-0007 baseline). Installed into /opt/tidal-exporter/venv.
+pyarrow==26.0.0
+azure-identity==1.26.0
+azure-storage-blob==12.31.0
