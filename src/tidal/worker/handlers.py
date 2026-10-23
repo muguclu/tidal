@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import polars as pl
 import pyarrow as pa
@@ -36,7 +36,7 @@ from tidal.contracts.models import BacktestMetrics
 from tidal.contracts.schemas import SCHEMAS, pyarrow_write_kwargs
 from tidal.query.protocols import Reader
 from tidal.storage import parquet_writer as pw
-from tidal.storage.parquet_writer import ObjectStore
+from tidal.storage.parquet_writer import ImmutableFileExists, ObjectStore
 from tidal.storage.retag import BlobTagger
 from tidal.storage.tiering import run_job
 from tidal.worker.consumer import PRODUCER, Outbound, serialise
@@ -52,6 +52,14 @@ class DataGap(TidalError):  # noqa: N818 - slug-named like tidal.common.errors
     status = 422
     slug = "data-gap"
     title = "No data in the requested window"
+
+
+def _restore_metrics(data: dict[str, Any], model: Any) -> None:  # Any: JSON dict / envelope
+    """``exclude_none`` drops required-but-nullable metrics (hit_rate...): put them back as null."""
+    metrics = data.get("payload", {}).get("metrics")
+    if metrics is not None:
+        full = model.payload.metrics.model_dump(mode="json")
+        data["payload"]["metrics"] = {k: metrics.get(k, full[k]) for k in full}
 
 
 def _code(exc: TidalError) -> str:
@@ -76,7 +84,10 @@ def _write_parquet(store: ObjectStore, path: str, df: pl.DataFrame, schema_name:
             **pyarrow_write_kwargs(schema_name),  # type: ignore[arg-type]
         ) as writer:
             writer.write_table(table, row_group_size=pw.ROW_GROUP_ROWS)
-        store.put_new(path, local)
+        try:
+            store.put_new(path, local)
+        except ImmutableFileExists:
+            return  # another worker with the same job id won the race; content is identical
 
 
 def _put_bytes(store: ObjectStore, path: str, data: bytes) -> None:
@@ -85,7 +96,10 @@ def _put_bytes(store: ObjectStore, path: str, data: bytes) -> None:
     with tempfile.TemporaryDirectory(prefix="tidal-bt-") as tmp:
         local = Path(tmp) / "blob"
         local.write_bytes(data)
-        store.put_new(path, local)
+        try:
+            store.put_new(path, local)
+        except ImmutableFileExists:
+            return  # lost a race with an identical writer
 
 
 @dataclass
@@ -154,7 +168,7 @@ class BacktestHandler:
         )
         return Outbound(
             QUEUE_BACKTEST_RESULTS,
-            serialise(env),
+            serialise(env, _restore_metrics),
             env.message_id,
             corr,
             SCHEMA_BACKTEST_RESULT,

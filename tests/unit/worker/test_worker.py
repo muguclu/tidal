@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import jsonschema_rs
 import pytest
 from azure.servicebus import TransportType
 from pydantic import SecretStr
@@ -20,13 +21,22 @@ from tidal.common.timeutil import FixedClock
 from tidal.contracts.messages import (
     MAX_MESSAGE_BYTES,
     QUEUE_BACKTEST_RESULTS,
+    BacktestJobMessage,
     BacktestResultMessage,
 )
 from tidal.storage.parquet_writer import LocalStore
 from tidal.storage.tiering import TableResult
 from tidal.worker import dlq
-from tidal.worker.consumer import MessageTooLarge, Outbound, Verdict, Worker, serialise
+from tidal.worker.consumer import (
+    MessageTooLarge,
+    Outbound,
+    Verdict,
+    Worker,
+    serialise,
+    validation_summary,
+)
 from tidal.worker.handlers import BacktestHandler, TieringHandler
+from tidal.worker.main import run_worker
 
 JOB = "bt_01HZX3Y7K9QWE5TY8VPAS3DFGH"
 PREFIX = f"backtests/{JOB}/"
@@ -40,7 +50,7 @@ class Msg:
     payload: bytes
     message_id: str = "m1"
     correlation_id: str | None = "corr-1"
-    delivery_count: int | None = 1
+    delivery_count: int | None = 0  # azure: prior failed attempts
 
     @property
     def body(self) -> Iterator[bytes]:
@@ -148,7 +158,7 @@ def test_redelivery_is_idempotent(tmp_path: Path) -> None:
     worker, _, tx, store = make(tmp_path)
     worker.process(Msg(envelope("backtest.job/v1", job_payload())))
     before = {p: store.read(p) for p in store.list("backtests/")}
-    worker.process(Msg(envelope("backtest.job/v1", job_payload()), delivery_count=2))
+    worker.process(Msg(envelope("backtest.job/v1", job_payload()), delivery_count=1))
     assert {p: store.read(p) for p in store.list("backtests/")} == before  # nothing rewritten
     first, second = result_of(tx, 0).payload, result_of(tx, 1).payload
     assert (first.result_sha256, first.metrics) == (second.result_sha256, second.metrics)
@@ -219,8 +229,8 @@ def test_transient_error_abandons_then_last_attempt_dead_letters(tmp_path: Path)
     assert isinstance(worker.handler, BacktestHandler)
     worker.handler = Boom(worker.handler)
     body = envelope("backtest.job/v1", job_payload())
-    assert worker.process(Msg(body, delivery_count=1)) is Verdict.ABANDONED
-    assert worker.process(Msg(body, delivery_count=3)) is Verdict.DEAD_LETTERED
+    assert worker.process(Msg(body, delivery_count=0)) is Verdict.ABANDONED
+    assert worker.process(Msg(body, delivery_count=2)) is Verdict.DEAD_LETTERED
     assert [s[0] for s in rx.settled] == ["abandon", "dlq"]
     failed = result_of(tx).payload  # the aggregator is told on the last attempt
     assert failed.status == "failed"
@@ -476,3 +486,117 @@ def test_websocket_transport_off_local(monkeypatch: pytest.MonkeyPatch) -> None:
         )
         dlq.client_from_settings(settings)  # type: ignore[arg-type]
         assert seen["transport_type"] == expected
+
+
+# -- review round ------------------------------------------------------------------------------
+def test_third_real_delivery_reports_failed_and_dead_letters(tmp_path: Path) -> None:
+    worker, rx, tx, _ = make(tmp_path)
+    assert isinstance(worker.handler, BacktestHandler)
+    worker.handler = Boom(worker.handler)
+    body = envelope("backtest.job/v1", job_payload())
+    assert worker.process(Msg(body, delivery_count=2)) is Verdict.DEAD_LETTERED
+    res = result_of(tx).payload
+    assert res.status == "failed"
+    assert res.attempt == 3
+    assert res.error is not None
+    assert res.error.code == "INTERNAL"
+    assert rx.settled == [("dlq", "max-delivery-exceeded")]
+
+
+def test_message_received_after_sigterm_is_abandoned_without_running(tmp_path: Path) -> None:
+    worker, rx, tx, store = make(tmp_path)
+    worker.request_stop()
+    msg = Msg(envelope("backtest.job/v1", job_payload()))
+    assert worker.process(msg) is Verdict.ABANDONED
+    assert rx.settled == [("abandon", None)]
+    assert not store.exists(PREFIX + "_SUCCESS")
+    assert tx.sent == []
+
+
+def test_orphaned_job_thread_is_joined_before_next_receive(tmp_path: Path) -> None:
+    worker, rx, _, _ = make(tmp_path)
+    assert isinstance(worker.handler, BacktestHandler)
+    slow = Slow(worker.handler)
+    worker.handler = slow
+    rx.renew_error = RuntimeError("lock lost")
+    worker.wait = lambda ev, t: False
+    worker.orphan_join_s = 0.01
+    assert worker.process(Msg(envelope("backtest.job/v1", job_payload()))) is Verdict.LOCK_LOST
+    assert len(worker._orphans) == 1
+    worker.run(max_messages=1, max_wait_s=0)
+    assert len(worker._orphans) == 1  # still running after the bounded join: recorded, not lost
+    slow.release.set()
+    worker._orphans[0].join(5)
+    worker._join_orphans()
+    assert worker._orphans == []
+
+
+class RacingStore(LocalStore):
+    """Reports every path as absent, so put_new meets files another worker already wrote."""
+
+    def exists(self, path: str) -> bool:
+        return False
+
+
+def test_same_job_id_race_treats_existing_outputs_as_written(tmp_path: Path) -> None:
+    worker, _, tx, store = make(tmp_path)
+    worker.process(Msg(envelope("backtest.job/v1", job_payload())))  # the "other" worker
+    racer = BacktestHandler(RacingStore(tmp_path), FixedClock(START), reader=FakeReader())
+    rx2 = FakeReceiver()
+    w2 = Worker(rx2, racer, {QUEUE_BACKTEST_RESULTS: tx})
+    assert w2.process(Msg(envelope("backtest.job/v1", job_payload()))) is Verdict.COMPLETED
+    assert rx2.settled == [("complete", None)]
+    assert result_of(tx, 1).payload.result_sha256 == store.read(PREFIX + "_SUCCESS").decode()
+
+
+def test_dlq_description_never_contains_input_values_or_messages() -> None:
+    secret = "SENTINEL-sk-12345"  # noqa: S105
+    p = job_payload()
+    p["output_prefix"] = f"backtests/{secret}/"  # model validator raises ValueError(msg)
+    p["request"]["instrument_ids"] = [secret]
+    try:
+        BacktestJobMessage.model_validate_json(envelope("backtest.job/v1", p))
+    except Exception as exc:
+        text = validation_summary(exc)  # type: ignore[arg-type]
+    assert secret not in text
+    assert "output_prefix" in text or "instrument_ids" in text
+
+
+def test_result_body_validates_against_json_schema_with_null_hit_rate(tmp_path: Path) -> None:
+    schema = json.loads(Path("docs/contracts/schemas/backtest.result.v1.json").read_text("utf-8"))
+    worker, _, tx, _ = make(tmp_path)
+    worker.process(Msg(envelope("backtest.job/v1", job_payload())))
+    body = json.loads(b"".join(tx.sent[0].body))
+    jsonschema_rs.validator_for(schema).validate(body)
+    assert "hit_rate" in body["payload"]["metrics"]
+    assert body["payload"]["metrics"]["hit_rate"] is None
+    assert "error" not in body["payload"]
+
+
+def test_tiering_queue_opens_no_results_sender() -> None:
+    opened: list[str] = []
+
+    class Ep:
+        def __enter__(self) -> "Ep":
+            return self
+
+        def __exit__(self, *a: object) -> None:
+            return None
+
+        def receive_messages(self, **kw: Any) -> list[Any]:
+            return []
+
+    class Client:
+        def get_queue_receiver(self, queue_name: str, **kw: Any) -> Any:
+            opened.append(f"rx:{queue_name}")
+            return Ep()
+
+        def get_queue_sender(self, queue_name: str, **kw: Any) -> Any:
+            opened.append(f"tx:{queue_name}")
+            return Ep()
+
+    handler = TieringHandler(None, None, None, FixedClock(START))  # type: ignore[arg-type]
+    assert run_worker(Client(), handler, "tiering-jobs", 1, 0) == 0
+    assert opened == ["rx:tiering-jobs"]
+    run_worker(Client(), BacktestHandler(None, FixedClock(START)), "backtest-jobs", 1, 0)  # type: ignore[arg-type]
+    assert "tx:backtest-results" in opened

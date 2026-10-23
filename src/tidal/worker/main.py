@@ -14,6 +14,7 @@ import argparse
 import signal
 import sys
 from collections.abc import Sequence
+from contextlib import ExitStack
 from types import FrameType
 
 from tidal.common.config import Settings, get_settings
@@ -68,16 +69,14 @@ def run_worker(
     max_wait_s: float = 30.0,
 ) -> int:
     """Consume ``queue`` with ``client``; returns the exit code (0, or 143 after SIGTERM)."""
-    with (
-        client.get_queue_receiver(queue) as receiver,
-        client.get_queue_sender(QUEUE_BACKTEST_RESULTS) as results,
-    ):
-        worker = Worker(
-            receiver,
-            handler,
-            {QUEUE_BACKTEST_RESULTS: results},
-            max_delivery=MAX_DELIVERY.get(queue, 3),
-        )
+    with ExitStack() as stack:
+        receiver = stack.enter_context(client.get_queue_receiver(queue))
+        senders = {}
+        if queue == QUEUE_BACKTEST_JOBS:  # the tiering identity needs no Send right on results
+            senders[QUEUE_BACKTEST_RESULTS] = stack.enter_context(
+                client.get_queue_sender(QUEUE_BACKTEST_RESULTS)
+            )
+        worker = Worker(receiver, handler, senders, max_delivery=MAX_DELIVERY.get(queue, 3))
 
         def on_term(_signum: int, _frame: FrameType | None) -> None:
             worker.request_stop()

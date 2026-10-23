@@ -51,8 +51,8 @@ application property `schema` = `<name>/v<major>`.
 `hot_window_days`: the cut-off `now - hot_window` is rounded down to a month start, so SQL keeps the
 window plus the partial month. `dry_run`: plan and report what would move, change nothing.
 `batch_rows`: rows per SQL read page (memory bound; one month is still one Parquet write). The
-consumer that reads `tiering-jobs` and calls `tidal.storage.tiering.run_job` is future work (see the
-T-303 note in TASKS); until then `tidal tiering run` runs the same code.
+consumer that reads `tiering-jobs` and calls `tidal.storage.tiering.run_job` is `tidal-worker
+--queue tiering-jobs` (T-303); `tidal tiering run` runs the same code by hand.
 
 ## 4. Consumer rules
 
