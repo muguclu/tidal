@@ -16,11 +16,11 @@ Owner agents: `infra-engineer`, `api-engineer`; reviewer: `security-reviewer` ·
 
 | Identity | Storage (md, reference) | Storage (backtests) | SQL | Service Bus | Key Vault | ACR |
 |---|---|---|---|---|---|---|
-| id-api | Blob Data Reader | Blob Data Reader | db_datareader + exec on `ops` procs | Data Sender (`backtest-jobs`, `tiering-jobs`), Data Receiver (`backtest-results`) | Secrets User | — |
-| id-query | Blob Data Reader | — | db_datareader | — | Secrets User | — |
+| id-api | Blob Data Reader | Blob Data Reader | db_datareader + exec on `ops` procs | Data Sender (`backtest-jobs`, `tiering-jobs`), Data Receiver (`backtest-results`) | Secrets User | AcrPull on the registry (only while `enable_app_service` is true) |
+| id-query | Blob Data Reader | — | db_datareader | — | Secrets User | AcrPull on the registry |
 | id-worker | Blob Data Reader | Blob Data Contributor | calls tidal-query (app role/audience per T-402), no SQL access (ADR-0016) | Data Receiver (`backtest-jobs`), Data Sender (`backtest-results`) | — | — |
-| id-ingest | Blob Data Contributor (`raw`,`marketdata`,`reference`) | — | db_datareader + db_datawriter on `md`, `ref`, `ops` (checkpoints, instrument first/last ts) | — | — | — |
-| id-tiering | Blob Data Owner on container `marketdata` (blob index tags need `tags/write`; the ARM "Tag Contributor" role does **not** cover blob tags; T-403 checks whether Blob Data Contributor + a custom `tags/write` role is tighter) | — | db_datareader/writer + delete on `md`, `ops` | Data Receiver (`tiering-jobs`) | — | — |
+| id-ingest | Blob Data Contributor (`raw`,`marketdata`,`reference`) | — | db_datareader + db_datawriter on `md`, `ref`, `ops` (checkpoints, instrument first/last ts) | — | — | AcrPull on the registry |
+| id-tiering | Blob Data Owner on container `marketdata` (blob index tags need `tags/write`; the ARM "Tag Contributor" role does **not** cover blob tags; T-403 checks whether Blob Data Contributor + a custom `tags/write` role is tighter) | — | db_datareader/writer + delete on `md`, `ops` | Data Receiver (`tiering-jobs`) | — | AcrPull on the registry |
 | id-legacy-vm | Blob Data Contributor (`exports`) | — | db_datareader | — | — | — (plus custom role `vm-self-deallocate`: `deallocate/action` on its own VM only) |
 | AKS kubelet | — | — | — | — | — | AcrPull |
 | KEDA operator (workload identity) | — | — | — | Data Owner on `backtest-jobs` (queue-length reads need management rights; T-403 checks whether a narrower custom role works) | — | — |

@@ -20,3 +20,6 @@ budget_start_date = "2026-11-01T00:00:00Z"
 # enable_ingest_topic       = false
 # use_free_offer            = true
 # budget_scope              = "subscription"
+
+# Image tag deployed to App Service and Container Apps (T-309); `latest` is rejected.
+apps_image_tag = "v0.1.0"
