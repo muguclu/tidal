@@ -29,7 +29,12 @@ import matplotlib.pyplot as plt
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from benchmarks.storage.results_schema import ResultRow, bytes_read_class, read_results
+from benchmarks.storage.results_schema import (
+    ResultRow,
+    bytes_read_class,
+    read_results,
+    write_results,
+)
 from tidal.contracts.schemas import pyarrow_write_kwargs
 from tidal.finops.fetch_prices import PriceBook, load_prices
 from tidal.storage import parquet_writer as pw
@@ -145,6 +150,24 @@ def _scales(rows: Sequence[ResultRow]) -> list[str]:
     return sorted({r.scale for r in rows})
 
 
+def ordered_scales(rs: "RunSet") -> list[str]:
+    """Scales by dataset size (unknown size last), so slices come before the full scales."""
+    return sorted(
+        _scales(rs.rows), key=lambda sc: (sc not in rs.ds_rows, rs.ds_rows.get(sc, 0), sc)
+    )
+
+
+def headline_scale(rs: "RunSet") -> str:
+    """The largest scale on which F0 and F5 both ran (the F5-vs-F0 comparison needs both)."""
+    both = [
+        sc
+        for sc in ordered_scales(rs)
+        if _size_row(rs.rows, sc, "F0") is not None and _size_row(rs.rows, sc, "F5") is not None
+    ]
+    scales = ordered_scales(rs)
+    return both[-1] if both else (scales[-1] if scales else "S")
+
+
 def _fids(rows: Sequence[ResultRow], scale: str, *, sweep: bool) -> list[str]:
     ids = {r.format_id for r in rows if r.scale == scale}
     return sorted((f for f in ids if ("-z" in f) == sweep), key=format_sort_key)
@@ -200,6 +223,8 @@ class RunSet:
     env: dict[str, str] = field(default_factory=dict)
     ds_rows: dict[str, int] = field(default_factory=dict)  # scale -> base ticks in the dataset
     not_run: list[str] = field(default_factory=list)
+    #: repeated measurements of the same cell inside one results file (F6 == F6-z9-rg1m)
+    replicates: list[ResultRow] = field(default_factory=list)
 
 
 def load_runs(dirs: Sequence[Path]) -> RunSet:
@@ -209,12 +234,17 @@ def load_runs(dirs: Sequence[Path]) -> RunSet:
     for d in dirs:
         rows, env = read_results(d / "results.parquet")
         rs.env = rs.env or env
+        before, local = set(seen), set()
         for r in rows:
             k = (r.scale, r.target, r.format_id, r.workload_id, r.cache)
-            if k in seen:
+            if k in before:
                 raise ValueError(f"duplicate result {k} while merging {d}")
-            seen.add(k)
-        rs.rows += rows
+            if k in local:  # same cell twice in one run: keep the first, remember the second
+                rs.replicates.append(r)
+                continue
+            local.add(k)
+            rs.rows.append(r)
+        seen |= local
         s = d / "summary.json"
         if s.exists() and rows:
             ds = json.loads(s.read_text(encoding="utf-8"))["dataset"]["rows"]
@@ -297,6 +327,23 @@ def render_size_table(
     return _table([*head, "EUR/month (MODELLED)", "vs F5 (EUR)"], body)
 
 
+def render_scale_comparison(rs: RunSet) -> str:
+    """Bytes per tick of every format at every scale: shows how stable the ratios are."""
+    scales = ordered_scales(rs)
+    fids = sorted({r.format_id for r in rs.rows if "-z" not in r.format_id}, key=format_sort_key)
+    body = []
+    for fid in fids:
+        cells = []
+        for sc in scales:
+            r, n = _size_row(rs.rows, sc, fid), rs.ds_rows.get(sc)
+            cells.append("n/a" if r is None or not n else f"{r.bytes_at_rest / n:.2f}")
+        body.append([fid, *cells])
+    head = ["Format (used bytes / tick)"] + [
+        f"{sc} ({rs.ds_rows[sc] / 1e6:.1f}M ticks)" if sc in rs.ds_rows else sc for sc in scales
+    ]
+    return _table(head, body)
+
+
 def render_w1_table(rows: Sequence[ResultRow], scale: str) -> str:
     """W1 bulk-write wall time and throughput (one instrument, fresh store per run)."""
     body = []
@@ -324,6 +371,32 @@ def render_query_table(rows: Sequence[ResultRow], scale: str, cache: str) -> str
         if any(c != "n/a" for c in cells):
             body.append([fid, *cells])
     return _table(["Format", *QUERY_WLS], body)
+
+
+def render_replicates(rs: RunSet) -> str:
+    """Noise estimate: cells measured twice by the same run (F6 is the F6-z9-rg1m grid point)."""
+    first = {(r.scale, r.target, r.format_id, r.workload_id, r.cache): r for r in rs.rows}
+    body, deltas = [], []
+    for rep in rs.replicates:
+        r0 = first.get((rep.scale, rep.target, rep.format_id, rep.workload_id, rep.cache))
+        if r0 is None or rep.workload_id == "W1" or r0.wall_p50_s <= 0:
+            continue
+        d = abs(rep.wall_p50_s - r0.wall_p50_s) / r0.wall_p50_s
+        deltas.append((d, r0.wall_p50_s))
+        body.append([rep.format_id, rep.workload_id, rep.cache, _sec(r0.wall_p50_s),
+                     _sec(rep.wall_p50_s), f"{100 * d:.1f} %"])  # fmt: skip
+    if not body:
+        return ""
+    big = [d for d, p in deltas if p >= NOISE_FLOOR_S]
+    within = sum(d <= TIME_TOL for d, _ in deltas)
+    note = (
+        f"Identical configuration measured twice in one run ({len(deltas)} cells, {within} "
+        f"within {100 * TIME_TOL:.0f} %; of the {len(big)} cells with p50 >= "
+        f"{NOISE_FLOOR_S * 1000:.0f} ms, {sum(d <= TIME_TOL for d in big)} within). "
+        "This is the floor for how far two honest runs can differ.\n\n"
+    )
+    head = ["Format", "Workload", "Cache", "First p50", "Second p50", "Delta"]
+    return note + _table(head, body)
 
 
 def render_cold_modes(rows: Sequence[ResultRow], scale: str) -> str:
@@ -470,6 +543,7 @@ def render_repro(cmp: dict[str, Any]) -> str:
     """The reproducibility section; states what was measured against the SPEC-02 tolerances."""
     worst = sorted(cmp["cells"], key=lambda c: -c["time_delta"])[:8]
     ok = "PASS" if cmp["max_size_delta"] <= SIZE_TOL else "FAIL"
+    time_ok = "PASS" if cmp["n_big_time_fail"] == 0 else "FAIL"
     floor_ms = NOISE_FLOOR_S * 1000
     head = (
         f"Same scale and seed, second run: {cmp['n']} format x workload x cache cells compared.\n\n"
@@ -479,7 +553,9 @@ def render_repro(cmp: dict[str, Any]) -> str:
         f"{100 * TIME_TOL:.0f} %.\n"
         f"* Timings, cells with p50 >= {floor_ms:.0f} ms: "
         f"{cmp['n_big'] - cmp['n_big_time_fail']} of {cmp['n_big']} within "
-        f"{100 * TIME_TOL:.0f} % (worst {100 * cmp['max_time_delta_big']:.1f} %).\n\n"
+        f"{100 * TIME_TOL:.0f} % (worst {100 * cmp['max_time_delta_big']:.1f} %): {time_ok}. "
+        "SPEC-02 section 6 asks for timings within this tolerance; on a shared laptop with other "
+        "containers running they are not, so timing ratios in this report are indicative only.\n\n"
         "Worst timing deltas:\n\n"
     )
     body = [
@@ -529,6 +605,55 @@ def encoding_ablation(table: pa.Table, workdir: Path) -> list[dict[str, Any]]:
         })  # fmt: skip
         path.unlink()
     return out
+
+
+def stats_probe(table: pa.Table, workdir: Path) -> str:
+    """MEASURED: bytes DuckDB reads for a narrow time window with 1M- vs 128k-row groups."""
+    base: dict[str, Any] = dict(pyarrow_write_kwargs(pw.schema_name_for("ticks")))
+    ts = table.column("ts_ns").to_numpy()
+    lo, hi = int(ts[len(ts) // 2]), int(ts[len(ts) // 2 + len(ts) // 50])  # about 2 % of ticks
+    body = []
+    for rg in (pw.ROW_GROUP_ROWS, 128_000):
+        path = workdir / f"probe-{rg}.parquet"
+        pq.write_table(
+            table, path, compression=pw.COMPRESSION, compression_level=pw.COMPRESSION_LEVEL,
+            data_page_size=pw.DATA_PAGE_BYTES, row_group_size=rg,
+            sorting_columns=[pq.SortingColumn(0)], write_statistics=True, **base,
+        )  # fmt: skip
+        md = pq.ParquetFile(path).metadata
+        hit_groups, hit_bytes, hit_rows = 0, 0, 0
+        for g in range(md.num_row_groups):
+            rg_md = md.row_group(g)
+            st = rg_md.column(0).statistics  # ts_ns is column 0
+            # the pruning test an engine applies; no statistics means the group must be read
+            if (
+                st is None
+                or not st.has_min_max
+                or (int(st.max or 0) >= lo and int(st.min or 0) < hi)
+            ):
+                hit_groups += 1
+                hit_rows += rg_md.num_rows
+                hit_bytes += sum(
+                    rg_md.column(c).total_compressed_size for c in range(md.num_columns)
+                )
+        body.append([
+            f"{rg:,}", str(md.num_row_groups), str(hit_groups), f"{hit_rows:,}",
+            _bytes(hit_bytes), f"{100 * hit_bytes / path.stat().st_size:.1f} %",
+        ])  # fmt: skip
+        path.unlink()
+    head = [
+        "Row-group rows",
+        "Row groups",
+        "Rows returned",
+        "Rows scanned",
+        "Bytes read",
+        "of file",
+    ]
+    return (
+        "Row-group statistics probe: one instrument-month, a window of about 2 % of its ticks "
+        "(MEASURED from the footer statistics; groups whose ts_ns range misses the window "
+        "are skipped):\n\n" + _table(head, body)
+    )
 
 
 def render_ablation(res: Sequence[dict[str, Any]]) -> str:
@@ -769,7 +894,7 @@ def exec_summary(rs: RunSet, prices: PriceBook, scale: str) -> str:
     held = f" in {_bytes(f5.used)}" if f5 else ""
     b1 = (
         f"* **Smaller and cheaper to keep.** Tidal's epoch-optimised Parquet (F5) holds the "
-        f"scale-{scale} dataset{ticks}{held}: {_x(h['size_f0_raw_over_f5'])} smaller than the "
+        f"{scale} dataset{ticks}{held}: {_x(h['size_f0_raw_over_f5'])} smaller than the "
         f"naive relational baseline F0 ({_x(h['size_f0_adj_over_f5'])} after removing the extra "
         f"column F0 needs for nanosecond accuracy) and {_x(h['size_f4_over_f5'])} smaller than "
         f"default Parquet. At list prices that is {_x(h['eur_f0_raw_over_f5'])} lower monthly "
@@ -780,10 +905,12 @@ def exec_summary(rs: RunSet, prices: PriceBook, scale: str) -> str:
     speeds = ", ".join(f"{_x(v)} ({wl})" for wl, v in sp)
     w4 = _x(_ratio(warm("F0", "W4"), warm("F5", "W4")))
     b2 = (
-        f"* **Faster analytical reads.** On the same machine, warm queries over F5 take a "
-        f"fraction of F0's time: F0/F5 = {speeds} (W2 daily bars, W3 one-month range, W5 "
-        f"ten-instrument scan, W6 as-of with restatements). The point lookup (W4) is {w4} (F0/F5), "
-        "where a clustered index is at its best. Local, in-process numbers: see the caveats."
+        f"* **Faster analytical reads.** On the same machine, warm queries over F5 are "
+        f"faster than F0 by these factors (F0 time / F5 time): {speeds}. W2 is daily bars, W3 a "
+        "one-month range, W5 a ten-instrument scan, W6 an as-of query with restatements. "
+        f"The point lookup (W4) factor is {w4}, where a clustered index is at its best. "
+        "Local, in-process numbers, indicative only (timing reproducibility FAILED the 15 % "
+        "tolerance): see the caveats."
     )
     az = _find(rs.rows, scale, "F5", "W3", "warm", target="azurite")
     cost = eur_per_1k_from_requests(az, prices) if az else None
@@ -799,8 +926,8 @@ def exec_summary(rs: RunSet, prices: PriceBook, scale: str) -> str:
         )
     b3 = (
         "* **Reads are cheap per query because most of the file is skipped.** A one-month "
-        f"range query on F5 reads {share} of the stored bytes (row-group statistics let the "
-        f"engine skip the rest){tail} Absolute Azure numbers are pending (local run only)."
+        f"range query on F5 reads {share} of the stored bytes (the month-partitioned objects let "
+        f"the engine skip the rest){tail} Absolute Azure numbers are pending (local run only)."
     )
     return "\n".join([b1, b2, b3]) + "\n"
 
@@ -850,6 +977,14 @@ _CAVEATS: Final = """## Caveats
   physical I/O.
 * F6 row groups: an instrument-month holds fewer ticks than one 1M-row group at the larger rows
   per month, so the 1m and 4m settings can produce identical files; see the row-group table.
+* Slice: F0-F2 ran on the 3-month slice "S-3m" (2.2M ticks), not on full S, so SQL and file timings
+  are compared on the slice only; full-S rows exist for F3-F6. Size ratios are compared per tick
+  across scales in the bytes-per-tick table.
+* Shared machine: other containers (further SQL Server instances, an emulator spinning at over
+  100 % CPU) competed for the 6 cores during all runs, and run A of full S overlapped with
+  other work of mine. Timings are therefore noisy; see the reproducibility and replicate sections
+  for the measured spread. Sizes and byte counts are deterministic and unaffected.
+* SQL loads ran at about 1.5k-15k rows/s here, far below an uncontended host.
 * Synthetic data: compression ratios depend on the generator's price process and tick spacing.
 """
 
@@ -863,10 +998,11 @@ def render_report(
     ablation: Sequence[dict[str, Any]] | None = None,
     ablation_note: str = "",
     img_rel: str = "img",
+    probe: str = "",
 ) -> str:
     """The full Markdown report."""
-    scales = _scales(rs.rows)
-    main = scales[0] if scales else "S"
+    scales = ordered_scales(rs)
+    main = headline_scale(rs)
     ds = ", ".join(f"scale {s}: {rs.ds_rows[s]:,} base ticks" for s in scales if s in rs.ds_rows)
     parts = [
         f"# Storage format benchmark, {date_str}\n",
@@ -877,6 +1013,13 @@ def render_report(
         exec_summary(rs, prices, main),
         _METHOD.format(datasets=ds or "dataset sizes not recorded"),
     ]
+    if len(scales) > 1:
+        parts += [
+            "## Bytes per tick across scales\n\n"
+            "Used bytes at rest divided by the dataset's base ticks (restatements are included in "
+            "the bytes, about 0.03 % of ticks). A format whose bytes/tick barely moves between "
+            "scales can be compared across them.\n\n" + render_scale_comparison(rs)
+        ]
     for scale in scales:
         n = rs.ds_rows.get(scale)
         rows = rs.rows
@@ -930,12 +1073,18 @@ def render_report(
         "stores small deltas; the ablation table gives the measured ts_ns bytes per tick.\n"
         "* Byte-stream-split: it regroups the float bytes so zstd sees the near-constant exponent "
         "bytes together; see the price column.\n"
-        "* Statistics skipping: files are sorted on `ts_ns` with min/max statistics, so W3/W4 "
-        "touch only the row groups of the requested range; the table above is the measured "
-        "effect.\n"
+        "* Skipping: W3/W4 read a small share of the bytes, but in these runs that is month-"
+        "partition pruning, which F3, F4 and F5 share. Every F4/F5 object holds one row group "
+        "(row-group table), so row-group min/max statistics could not skip anything at this "
+        "object size; the probe below measures what they do with 128k-row groups.\n"
     )
+    if probe:
+        parts.append(probe)
     if repro:
         parts.append("## Reproducibility\n\n" + render_repro(repro))
+    reps = render_replicates(rs)
+    if reps:
+        parts.append("### Same-run replicates\n\n" + reps)
     not_run = "\n".join(f"* {x}" for x in rs.not_run) or "Nothing recorded."
     parts += ["## Not run\n\n" + not_run + "\n", _CAVEATS]
     parts.append("## Appendix, every cell\n\n" + render_markdown(rs.rows, prices, rs.env))
@@ -960,6 +1109,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--prices", type=Path, default=Path("docs/finops/prices.yaml"))
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--img", type=Path, default=Path("docs/finops/results/img"))
+    ap.add_argument("--raw-out", type=Path, default=None, help="write the merged rows as Parquet")
     ap.add_argument("--date", default="2026-10-22")
     ap.add_argument("--explain-dataset", type=Path, default=None, help=".data/bench/<key> dir")
     ap.add_argument("--not-run", action="append", default=[], help="a line for 'Not run'")
@@ -967,18 +1117,24 @@ def main(argv: list[str] | None = None) -> None:
     rs = load_runs(a.results)
     rs.not_run = list(a.not_run)
     prices = load_prices(a.prices)
+    if a.raw_out is not None:
+        a.raw_out.parent.mkdir(parents=True, exist_ok=True)
+        write_results(a.raw_out, rs.rows, rs.env)
     repro = None
     if a.repro:
         ra, _ = read_results(a.repro[0] / "results.parquet")
         rb, _ = read_results(a.repro[1] / "results.parquet")
         repro = compare_runs(ra, rb)
-    abl, note = None, ""
+    abl, note, probe = None, "", ""
     ex = _explain_table(a.explain_dataset)
     if ex is not None:
         with tempfile.TemporaryDirectory() as d:
             abl, note = encoding_ablation(ex[0], Path(d)), ex[1]
+            probe = stats_probe(ex[0], Path(d))
     a.out.parent.mkdir(parents=True, exist_ok=True)
-    md = render_report(rs, prices, date_str=a.date, repro=repro, ablation=abl, ablation_note=note)
+    md = render_report(
+        rs, prices, date_str=a.date, repro=repro, ablation=abl, ablation_note=note, probe=probe
+    )
     a.out.write_text(md, encoding="utf-8")
     for scale in _scales(rs.rows):
         render_scale_charts(rs.rows, prices, a.img, scale)

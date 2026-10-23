@@ -14,6 +14,20 @@
 | Backtest compute | fixed on-demand nodes | KEDA + spot, 0→N | _tbd_ |
 | Idle API/query cost | always-on | Container Apps scale-to-zero | _tbd_ |
 
+## Storage benchmark: epoch Parquet (F5) vs SQL rowstore (F0)
+
+Measured locally (T-204; full report in `docs/finops/results/storage-benchmark-2026-10-22.md`). Same synthetic ticks
+(seed 42) in both formats, 3-month slice of scale S (2.24M ticks), because the SQL load was too slow for full S on a
+shared laptop:
+
+| | F0 SQL rowstore (`DATETIME2` + `FLOAT`, no compression) | F5 epoch Parquet | F0 / F5 |
+|---|---|---|---|
+| Size at rest, F0 as built (MEASURED) | 98.35 MiB (45.96 B/tick) | 27.10 MiB (12.66 B/tick) | **3.63x** |
+| Size at rest, F0 minus its `ts_sub` byte (MEASURED) | 96.21 MiB | 27.10 MiB | **3.55x** |
+| EUR/month at rest at list price (MODELLED from `prices.yaml`; SQL on allocated pages) | 0.0116 | 0.00046 | **25.4x** (24.9x adjusted) |
+
+F5 bytes per tick are the same on full S (50.1M ticks): 12.63. Azure runs are pending (NEEDS-CLOUD); scale M was not run.
+
 ## Architecture
 See `docs/PLANNING.md` §3 (diagram added in T-601).
 

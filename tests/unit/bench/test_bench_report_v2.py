@@ -369,3 +369,24 @@ def test_parallel_load_matches_sequential_and_flushes(
         assert r.bytes_read == by_seq[_key(r)].bytes_read
     back, _ = read_results(tmp_path / "p" / "results.parquet")
     assert len(back) == len(par)
+
+
+def test_bare_f6_is_the_grid_point_and_never_runs_twice() -> None:
+    ids = format_ids_from_arg("F5,F6,F6-sweep")
+    assert ids.count("F6-z9-rg1m") == 1
+    assert "F6" not in ids
+    assert len(ids) == 10
+
+
+def test_same_run_duplicates_become_replicates(tmp_path: Path) -> None:
+    write_results(
+        tmp_path / "results.parquet",
+        [_row(wall_p50_s=0.5), _row(wall_p50_s=0.55), _row(wall_p50_s=0.5, workload_id="W3")],
+        {},
+    )
+    rs = report.load_runs([tmp_path])
+    assert len(rs.rows) == 2
+    assert [r.wall_p50_s for r in rs.replicates] == [0.55]
+    text = report.render_replicates(rs)
+    assert "10.0 %" in text
+    assert "1 cells" in text

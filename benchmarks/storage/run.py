@@ -25,6 +25,7 @@ from collections.abc import Callable, Collection, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -35,7 +36,7 @@ import pyarrow as pa
 
 from benchmarks.storage.formats import ALL_FORMATS, SQL_FORMATS, f6_ids, file_formats
 from benchmarks.storage.formats.file_base import BlobTarget
-from benchmarks.storage.formats.file_f5 import F5Format
+from benchmarks.storage.formats.file_f5 import F6_DEFAULT, F5Format, rg_label
 from benchmarks.storage.formats.sql_base import SqlTarget
 from benchmarks.storage.results_schema import ResultRow, write_results
 from benchmarks.storage.workloads import (
@@ -57,6 +58,7 @@ from tidal.common.timeutil import SystemClock
 if TYPE_CHECKING:
     from azure.storage.blob import BlobServiceClient
 
+F6_DEFAULT_ID = f"F6-z{F6_DEFAULT[0]}-rg{rg_label(F6_DEFAULT[1])}"
 _STALE_SCHEMA = re.compile(r"bench_[0-9a-f]{10}")
 _STALE_CONTAINER = re.compile(r"bench-[a-z0-9-]+")
 
@@ -100,7 +102,8 @@ def format_ids_from_arg(arg: str) -> list[str]:
     out: list[str] = []
     for part in arg.split(","):
         out += f6_ids() if part == "F6-sweep" else parse_ids(part, "F")
-    return out
+    # bare F6 is the F6-z9-rg1m grid point (its results carry that id): never run it twice
+    return list(dict.fromkeys(F6_DEFAULT_ID if f == "F6" else f for f in out))
 
 
 def _time(fn: Callable[[], Any]) -> tuple[float, float, Any]:  # Any: whatever fn returns
@@ -229,6 +232,7 @@ def run_benchmark(
     target: str = "local",
     w1_runs: int | None = None,
     parallel_load: bool = False,
+    scale_label: str | None = None,
 ) -> list[ResultRow]:
     """Run every format x workload, check each result against the oracle, write ``out``.
 
@@ -236,11 +240,14 @@ def run_benchmark(
     of fresh-store W1 loads (SQL loads are slow). ``parallel_load`` runs all W1s first (one at a
     time, nothing else running), then loads every format's query store concurrently in threads
     (an untimed phase), then runs the timed queries one format at a time. Results are flushed to
-    ``out`` after every format so a crash keeps what finished.
+    ``out`` after every format so a crash keeps what finished. ``scale_label`` renames the
+    ``scale`` column of the rows (a slice of S is labelled e.g. "S-1y"; ``dataset_key`` keeps the
+    real dataset identity).
     """
     ds = build_dataset(spec, data_root)
     out.mkdir(parents=True, exist_ok=True)
     rows: list[ResultRow] = []
+    flush = partial(_flush, out, spec, ds, label=scale_label)
     tmp = Path(tempfile.mkdtemp(prefix="tidal-bench-"))
     try:
         queries = [w for w in workload_ids if w != "W1"]
@@ -250,7 +257,7 @@ def run_benchmark(
                 rows.append(
                     _run_w1(spec, ds, factories[fid], tmp / f"{fid}-w1", runs=w1_n, target=target)
                 )
-                _flush(out, spec, ds, rows)
+                flush(rows)
         if parallel_load:
             _run_loaded_together(
                 spec,
@@ -261,7 +268,7 @@ def run_benchmark(
                 factories=factories,
                 tmp=tmp,
                 target=target,
-                out=out,
+                flush=flush,
                 rows=rows,
             )
         else:
@@ -283,15 +290,18 @@ def run_benchmark(
                         )
                 finally:
                     fmt.teardown()
-                _flush(out, spec, ds, rows)
+                flush(rows)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    _flush(out, spec, ds, rows)
-    return rows
+    return flush(rows)
 
 
-def _flush(out: Path, spec: DatasetSpec, ds: Dataset, rows: list[ResultRow]) -> None:
-    """Write ``results.parquet`` and ``summary.json`` for the rows so far."""
+def _flush(
+    out: Path, spec: DatasetSpec, ds: Dataset, rows: list[ResultRow], *, label: str | None = None
+) -> list[ResultRow]:
+    """Write ``results.parquet`` and ``summary.json`` so far; returns the rows (relabelled)."""
+    if label:
+        rows = [r.model_copy(update={"scale": label}) for r in rows]
     env = env_info()
     write_results(out / "results.parquet", rows, env)
     summary = {
@@ -301,6 +311,7 @@ def _flush(out: Path, spec: DatasetSpec, ds: Dataset, rows: list[ResultRow]) -> 
         "results": [r.model_dump() for r in rows],
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
+    return rows
 
 
 def _run_loaded_together(
@@ -313,7 +324,7 @@ def _run_loaded_together(
     factories: Mapping[str, Callable[[Path], Format]],
     tmp: Path,
     target: str,
-    out: Path,
+    flush: Callable[[list[ResultRow]], object],
     rows: list[ResultRow],
 ) -> None:
     """Load all formats' stores concurrently (untimed), then time queries one format at a time.
@@ -335,7 +346,7 @@ def _run_loaded_together(
                     rows += _run_query(
                         spec, ds, fmt, wid, runs=runs, at_rest=at_rest, target=target
                     )
-                _flush(out, spec, ds, rows)
+                flush(rows)
     finally:
         for fmt in fmts.values():
             fmt.teardown()
@@ -446,6 +457,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument(
         "--parallel-load", action="store_true", help="W1s first, then load all formats concurrently"
     )
+    ap.add_argument("--label", default=None, help='scale column in the results, e.g. "S-1y"')
     ap.add_argument("--no-sweep", action="store_true", help="skip the stale bench_*/bench-* sweep")
     ap.add_argument("--sweep-min-age", type=int, default=60, help="minutes; younger is kept")
     a = ap.parse_args(argv)
@@ -465,7 +477,8 @@ def main(argv: list[str] | None = None) -> None:
             print(f"swept {len(gone)} stale bench-* containers")
     res = run_benchmark(
         spec, fids, parse_ids(a.workloads, "W"), a.runs, a.out, data_root=a.data_root,
-        factories=factories, target=a.target, w1_runs=a.w1_runs, parallel_load=a.parallel_load,
+        factories=factories, target=a.target, w1_runs=a.w1_runs,
+        parallel_load=a.parallel_load, scale_label=a.label,
     )  # fmt: skip
     for r in res:
         print(
