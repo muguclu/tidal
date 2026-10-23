@@ -9,14 +9,16 @@ Execution model
   ``t+1``: ``position_held[t] = signal[t-1]``.
 * Fill price is the *next close* for ``1d`` bars (daily bars are synthetic with
   open == close, ADR-0013) and the *next open* for intraday bars.
-* Sizing: one unit of ``position`` = ``INITIAL_CAPITAL / mean(|fill price|)`` contracts,
-  fixed for the run. P&L is additive in price (``qty x dPrice``), so zero and negative
-  prices (WTI 2020-04-20) pass through without ratios or clamping.
-* Costs: ``(fee_bps | slippage_bps) / 1e4 x |qty traded| x |fill price|``, in currency
-  units, deducted from equity at the fill bar.
+* Sizing (no look-ahead): a fixed contract count ``q = INITIAL_CAPITAL / notional`` set at the
+  FIRST usable fill (``notional >= MIN_PRICE``; |p| for one leg, |p_a| + |p_b| for a spread).
+  The position is flat before that fill; the run is flat if none exists. P&L is additive in
+  price (``q x dPrice``), so zero and negative prices (WTI 2020-04-20) pass through without
+  ratios or clamping.
+* Costs: ``(fee_bps | slippage_bps) / 1e4 x |qty traded| x |fill price|`` (spread: over
+  both legs' notionals), in currency units, deducted from equity at the fill bar.
 * Window: bars with ``start <= ts_ns < end`` (half-open) are used.
-* ``calendar_spread`` trades the synthetic instrument ``"{leg_a}-{leg_b}"`` (one row per
-  fill; long = long leg_a / short leg_b); legs are inner-joined on ``ts_ns``.
+* ``calendar_spread`` emits one trades row per LEG per fill (+q leg_a, -q leg_b for a long
+  spread); legs are inner-joined on ``ts_ns``; equity P&L is q x d(spread).
 * ``n_trades`` counts position segments entered (closed + one still open at the end);
   ``hit_rate`` uses closed segments only, net of costs.
 """
@@ -35,6 +37,7 @@ from tidal.backtest.strategies import (
     ma_crossover_signals,
     mean_reversion_signals,
 )
+from tidal.common.errors import ValidationFailed
 from tidal.contracts.models import (
     BacktestMetrics,
     CalendarSpreadRequest,
@@ -43,6 +46,7 @@ from tidal.contracts.models import (
 )
 
 INITIAL_CAPITAL = 1_000_000.0
+MIN_PRICE = 1e-9  # below this a fill price cannot size a position
 
 _EQUITY_SCHEMA = {
     "ts_ns": pl.Int64,
@@ -87,7 +91,7 @@ def _prepare(bars: pl.DataFrame, start: int, end: int) -> pl.DataFrame:
     missing = [c for c in _REQUIRED if c not in bars.columns]
     if missing:
         msg = f"bars missing columns: {missing}"
-        raise ValueError(msg)
+        raise ValidationFailed(msg)
     out = (
         bars.select(
             pl.col("ts_ns").cast(pl.Int64),
@@ -99,39 +103,45 @@ def _prepare(bars: pl.DataFrame, start: int, end: int) -> pl.DataFrame:
     )
     if out["ts_ns"].n_unique() != out.height:
         msg = "bars contain duplicate ts_ns; pass one version per bar"
-        raise ValueError(msg)
+        raise ValidationFailed(msg)
     return out
 
 
-def _spread(a: pl.DataFrame, b: pl.DataFrame) -> pl.DataFrame:
-    return (
-        a.join(b, on="ts_ns", how="inner", suffix="_b")
-        .select(
-            "ts_ns",
-            (pl.col("open") - pl.col("open_b")).alias("open"),
-            (pl.col("close") - pl.col("close_b")).alias("close"),
-        )
-        .sort("ts_ns")
+def _spread(
+    a: pl.DataFrame, b: pl.DataFrame, fill_col: str
+) -> tuple[pl.DataFrame, NDArray[np.float64], NDArray[np.float64]]:
+    """Inner-join legs on ts_ns; return the spread frame and each leg's fill prices."""
+    j = a.join(b, on="ts_ns", how="inner", suffix="_b").sort("ts_ns")
+    frame = j.select(
+        "ts_ns",
+        (pl.col("open") - pl.col("open_b")).alias("open"),
+        (pl.col("close") - pl.col("close_b")).alias("close"),
     )
+    return frame, j[fill_col].to_numpy(), j[f"{fill_col}_b"].to_numpy()
 
 
-def _simulate(  # noqa: PLR0917
+def _simulate(
     ts: NDArray[np.int64],
     signal: NDArray[np.float64],
-    fill: NDArray[np.float64],
+    legs: list[tuple[str, NDArray[np.float64], float]],
     fee_bps: float,
     slip_bps: float,
-    instrument: str,
 ) -> _Sim:
+    """Simulate; ``legs`` is ``(instrument_id, fill prices, weight)``, traded value = sum w*p."""
+    fill = sum((w * px for _, px, w in legs), np.zeros(len(ts)))
+    notional = sum((np.abs(px) for _, px, _ in legs), np.zeros(len(ts)))  # per unit traded
     pos = np.concatenate(([0.0], signal[:-1]))  # held from the fill of each bar
+    # Fixed size from the FIRST usable fill (no future data): flat before it.
+    usable = np.flatnonzero(notional >= MIN_PRICE)
+    first = int(usable[0]) if len(usable) else len(ts)
+    pos[:first] = 0.0
+    unit = INITIAL_CAPITAL / notional[first] if first < len(ts) else 0.0
     pos_prev = np.concatenate(([0.0], pos[:-1]))
-    mean_abs = float(np.abs(fill).mean())
-    unit = INITIAL_CAPITAL / mean_abs if mean_abs > 0 else 1.0
     dprice = np.concatenate(([0.0], np.diff(fill)))
     gross = unit * pos_prev * dprice
     dq = unit * (pos - pos_prev)
-    fee = fee_bps / 1e4 * np.abs(dq) * np.abs(fill)
-    slip = slip_bps / 1e4 * np.abs(dq) * np.abs(fill)
+    fee = fee_bps / 1e4 * np.abs(dq) * notional
+    slip = slip_bps / 1e4 * np.abs(dq) * notional
     equity = INITIAL_CAPITAL + np.cumsum(gross - fee - slip)
     peak = np.maximum.accumulate(equity)
     with np.errstate(all="ignore"):
@@ -145,7 +155,7 @@ def _simulate(  # noqa: PLR0917
     seg_prev = np.concatenate(([0], seg[:-1]))
     cost = fee + slip
     rate = (fee_bps + slip_bps) / 1e4
-    close_cost = np.where(flipped, rate * unit * np.abs(pos_prev) * np.abs(fill), 0.0)
+    close_cost = np.where(flipped, rate * unit * np.abs(pos_prev) * notional, 0.0)
     k = int(seg[-1]) + 1
     seg_pnl = np.bincount(seg_prev, weights=gross - close_cost, minlength=k)
     seg_pnl = seg_pnl - np.bincount(seg, weights=cost - close_cost, minlength=k)
@@ -155,35 +165,51 @@ def _simulate(  # noqa: PLR0917
     closed = entered & (np.arange(k) < k - 1)
 
     m = dq != 0
-    trades = pl.DataFrame(
-        {
-            "ts_ns": ts[m],
-            "instrument_id": [instrument] * int(m.sum()),
-            "qty": dq[m],
-            "price": fill[m],
-            "fee": fee[m],
-            "slippage": slip[m],
-        },
-        schema=_TRADES_SCHEMA,
-    )
+    parts = [
+        pl.DataFrame(
+            {
+                "ts_ns": ts[m],
+                "instrument_id": [iid] * int(m.sum()),
+                "qty": w * dq[m],
+                "price": px[m],
+                "fee": fee_bps / 1e4 * np.abs(dq[m]) * np.abs(px[m]),
+                "slippage": slip_bps / 1e4 * np.abs(dq[m]) * np.abs(px[m]),
+            },
+            schema=_TRADES_SCHEMA,
+        )
+        for iid, px, w in legs
+    ]
+    trades = pl.concat(parts).sort("ts_ns", maintain_order=True)
     equity_df = pl.DataFrame(
         {"ts_ns": ts, "equity": equity, "position": pos, "drawdown": dd}, schema=_EQUITY_SCHEMA
     )
     return _Sim(trades, equity_df, equity, pos, seg_pnl[closed], int(entered.sum()))
 
 
-def _hash(request_json: str, trades: pl.DataFrame, equity: pl.DataFrame, metrics_json: str) -> str:
+def _metrics_json(metrics: BacktestMetrics) -> str:
+    """Metrics rounded to 12 significant digits so libm differences cannot change the hash."""
+    d = {
+        k: (v if v is None or isinstance(v, int) else format(v, ".12g"))
+        for k, v in metrics.model_dump().items()
+    }
+    return json.dumps(d, sort_keys=True)
+
+
+def _hash(
+    request_json: str, trades: pl.DataFrame, equity: pl.DataFrame, metrics: BacktestMetrics
+) -> str:
     h = hashlib.sha256()
     h.update(request_json.encode())
     for df in (equity, trades):
         for col in df.columns:
             s = df[col]
-            h.update(col.encode())
             if s.dtype == pl.String:
-                h.update("\x00".join(s.to_list()).encode())
+                data = "\x00".join(s.to_list()).encode()
             else:
-                h.update(s.to_numpy().astype("<i8" if s.dtype == pl.Int64 else "<f8").tobytes())
-    h.update(metrics_json.encode())
+                data = s.to_numpy().astype("<i8" if s.dtype == pl.Int64 else "<f8").tobytes()
+            h.update(col.encode() + b"\x00" + len(data).to_bytes(8, "little"))
+            h.update(data)
+    h.update(_metrics_json(metrics).encode())
     return h.hexdigest()
 
 
@@ -192,20 +218,26 @@ def run_backtest(request: Request, bars: dict[str, pl.DataFrame]) -> BacktestOut
 
     ``bars`` maps ``instrument_id`` to a frame with ``ts_ns``, ``open``, ``close`` for each id
     in ``request.instrument_ids``. The output is a pure function of ``(request, bars)``.
+    Raises ``ValidationFailed`` for a sweep request, missing instruments or bad frames.
     """
     if request.sweep is not None:
         msg = "run_backtest takes a resolved request: expand the sweep first"
-        raise ValueError(msg)
+        raise ValidationFailed(msg)
     ids = request.instrument_ids
+    absent = [i for i in ids if i not in bars]
+    if absent:
+        msg = f"bars missing for instruments: {absent}"
+        raise ValidationFailed(msg)
     frames = [_prepare(bars[i], request.start, request.end) for i in ids]
     interval = request.interval.value
     ppy = PERIODS_PER_YEAR[interval]
+    col = "close" if interval == "1d" else "open"
     if isinstance(request, CalendarSpreadRequest):
-        frame = _spread(frames[0], frames[1])
-        instrument = f"{ids[0]}-{ids[1]}"
+        frame, fa, fb = _spread(frames[0], frames[1], col)
+        legs = [(ids[0], fa, 1.0), (ids[1], fb, -1.0)]
     else:
         frame = frames[0]
-        instrument = ids[0]
+        legs = [(ids[0], frame[col].to_numpy(), 1.0)]
     request_json = request.model_dump_json(exclude_none=True)
 
     if frame.height == 0:
@@ -213,8 +245,7 @@ def run_backtest(request: Request, bars: dict[str, pl.DataFrame]) -> BacktestOut
         tr = pl.DataFrame(schema=_TRADES_SCHEMA)
         empty = np.empty(0)
         metrics = compute_metrics(empty, empty, empty, 0, ppy)
-        digest = _hash(request_json, tr, eq, json.dumps(metrics.model_dump(), sort_keys=True))
-        return BacktestOutput(tr, eq, metrics, digest)
+        return BacktestOutput(tr, eq, metrics, _hash(request_json, tr, eq, metrics))
 
     if isinstance(request, MaCrossoverRequest):
         sig = ma_crossover_signals(frame, request.params)
@@ -223,17 +254,14 @@ def run_backtest(request: Request, bars: dict[str, pl.DataFrame]) -> BacktestOut
     else:
         sig = calendar_spread_signals(frame, request.params)
 
-    fill = (frame["close"] if interval == "1d" else frame["open"]).to_numpy()
     sim = _simulate(
         frame["ts_ns"].to_numpy(),
         sig.to_numpy(),
-        fill,
+        legs,
         request.costs.fee_bps,
         request.costs.slippage_bps,
-        instrument,
     )
     metrics = compute_metrics(sim.equity, sim.position, sim.closed_pnls, sim.n_trades, ppy)
-    digest = _hash(
-        request_json, sim.trades, sim.equity_df, json.dumps(metrics.model_dump(), sort_keys=True)
+    return BacktestOutput(
+        sim.trades, sim.equity_df, metrics, _hash(request_json, sim.trades, sim.equity_df, metrics)
     )
-    return BacktestOutput(sim.trades, sim.equity_df, metrics, digest)

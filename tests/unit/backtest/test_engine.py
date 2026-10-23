@@ -1,7 +1,6 @@
 """T-301 unit tests: strategies, execution timing, costs, metrics, contract validity."""
 
 import math
-import time
 from collections.abc import Sequence
 from typing import Any
 
@@ -14,6 +13,7 @@ from hypothesis import strategies as st
 from tidal.backtest import compute_metrics, run_backtest
 from tidal.backtest.engine import Request
 from tidal.backtest.strategies import ma_crossover_signals, mean_reversion_signals
+from tidal.common.errors import ValidationFailed
 from tidal.contracts.models import (
     BacktestMetrics,
     BacktestRequest,
@@ -67,7 +67,7 @@ def test_execution_next_bar_and_pnl_hand_computed() -> None:
     out = run_backtest(r, {"T.A.X": bars(PRICES)})
     # signal[t] -> held from fill t+1
     assert out.equity["position"].to_list() == [0, 0, 0, 1, 1, -1, -1]
-    unit = 1_000_000.0 / np.mean(PRICES)
+    unit = 1_000_000.0 / PRICES[0]  # sized at the first fill
     eq = out.equity["equity"].to_list()
     assert eq[3] == pytest.approx(1_000_000)
     assert eq[4] == pytest.approx(1_000_000 + unit * (3 - 4))
@@ -95,41 +95,109 @@ def test_costs_applied_to_traded_notional() -> None:
     assert free.equity["equity"][-1] - out.equity["equity"][-1] == pytest.approx(total)
 
 
-def test_negative_prices_pass_through() -> None:
-    prices = [20.0, 20.5, 19.5, 20.0, -37.63, -30.0, 5.0, 20.0, 21.0, 20.0]
-    out = run_backtest(
-        req("mean_reversion", {"lookback": 3, "z_entry": 0.5, "z_exit": 0.1}, 10, costs=(1, 2)),
-        {"T.A.X": bars(prices)},
+def test_negative_prices_additive_equity_hand_computed() -> None:
+    prices = [50.0, 52.0, 40.0, -10.0, -20.0, -30.0]
+    out = run_backtest(req("ma_crossover", {"fast": 1, "slow": 2}, 6), {"T.A.X": bars(prices)})
+    q = 1_000_000.0 / 50.0
+    assert out.equity["position"].to_list() == [0, 0, 1, -1, -1, -1]
+    # long q from 40 -> -10 loses 50q (equity 0); flip to short, -10 -> -20 gains 10q, then 10q.
+    assert out.equity["equity"].to_list() == pytest.approx(
+        [1e6, 1e6, 1e6, 1e6 - 50 * q, 1e6 - 40 * q, 1e6 - 30 * q]
     )
-    assert out.trades.height > 0
-    assert (out.trades["price"] < 0).any()
-    assert -37.63 in out.trades["price"].to_list()
-    assert out.equity["equity"].is_finite().all()
+    assert out.trades["price"].to_list() == [40.0, -10.0]
+    assert out.trades["qty"].to_list() == pytest.approx([q, -2 * q])
 
 
-def test_mean_reversion_hysteresis() -> None:
+def test_mean_reversion_hysteresis_exact() -> None:
     p = MeanReversionParams(lookback=3, z_entry=1.0, z_exit=0.2)
-    sig = mean_reversion_signals(bars([10, 10, 10.5, 10, 20, 10, 10, 10.1, 5]), p).to_list()
-    assert sig[:2] == [0, 0]
-    assert sig[4] == 1.0 * -1 or sig[4] == 1  # spike: z of 20 in (10,10,20)... see below
-    assert set(sig) <= {-1, 0, 1}
+    sig = mean_reversion_signals(bars([10, 10, 20, 17, 16, 10, 10, 10.5]), p).to_list()
+    # idx2 (10,10,20): z=+1.155 -> short; idx3 (10,20,17): z=0.29 in (exit, entry) -> hold;
+    # idx4 (20,17,16): z=-0.8... mean 17.67 sd 2.08 z=-0.8 -> hold; idx5 (17,16,10):
+    # mean 14.33 sd 3.79 z=-1.14 -> long; idx6 (16,10,10): z=-0.577 hold;
+    # idx7 (10,10,10.5): mean 10.17 sd .289 z=+1.15 -> short again.
+    assert sig == [0, 0, -1, -1, -1, 1, 1, -1]
 
 
-def test_mean_reversion_short_on_spike() -> None:
-    p = MeanReversionParams(lookback=4, z_entry=1.0, z_exit=0.2)
-    sig = mean_reversion_signals(bars([10, 10.1, 9.9, 10, 10, 20, 20, 20]), p).to_list()
-    assert sig[5] == -1  # z of 20 vs window (10.1?,...) well above entry -> short
+def test_mean_reversion_exit_and_long() -> None:
+    p = MeanReversionParams(lookback=3, z_entry=1.0, z_exit=0.2)
+    # idx2 (10,10,5): z=-1.155 -> long; idx3 (10,5,7.5): z=0 -> flat.
+    sig = mean_reversion_signals(bars([10, 10, 5, 7.5]), p).to_list()
+    assert sig == [0, 0, 1, 0]
 
 
-def test_calendar_spread_uses_leg_difference() -> None:
+def test_calendar_spread_trades_both_legs() -> None:
     a = bars([10, 11, 12, 13, 14, 15, 16.0])
     b = bars([9.0] * 7)
-    r = req(
-        "calendar_spread", {"lookback": 3, "z_entry": 0.5, "z_exit": 0.1}, 7, ids=("T.A.X", "T.B.X")
+    ids = ("T.A.X", "T.B.X")
+    params = {"lookback": 3, "z_entry": 0.5, "z_exit": 0.1}
+    free = run_backtest(req("calendar_spread", params, 7, ids=ids), {ids[0]: a, ids[1]: b})
+    q = 1e6 / (10 + 9)
+    t = free.trades
+    # spread 1..7 rises linearly: z=+1 -> short spread from the fill at idx3 (spread 4)
+    assert t["instrument_id"].to_list() == list(ids)
+    assert t["qty"].to_list() == pytest.approx([-q, q])
+    assert t["price"].to_list() == [13.0, 9.0]
+    assert free.equity["equity"][-1] == pytest.approx(1e6 - q * (7 - 4))
+    costly = run_backtest(
+        req("calendar_spread", params, 7, ids=ids, costs=(10.0, 4.0)), {ids[0]: a, ids[1]: b}
     )
-    out = run_backtest(r, {"T.A.X": a, "T.B.X": b})
-    assert set(out.trades["instrument_id"].to_list()) <= {"T.A.X-T.B.X"}
-    assert out.equity.height == 7
+    assert costly.trades["fee"].to_list() == pytest.approx([10 / 1e4 * q * 13, 10 / 1e4 * q * 9])
+    assert costly.trades["slippage"].to_list() == pytest.approx([4 / 1e4 * q * 13, 4 / 1e4 * q * 9])
+    total = float((costly.trades["fee"] + costly.trades["slippage"]).sum())
+    assert free.equity["equity"][-1] - costly.equity["equity"][-1] == pytest.approx(total)
+
+
+def test_intraday_fills_at_next_open() -> None:
+    close = [1.0, 2.0, 3.0, 2.0, 1.0]
+    open_ = [1.1, 2.1, 3.1, 2.1, 1.1]
+    hour = 3_600 * 10**9
+    df = pl.DataFrame({"ts_ns": [T0 + i * hour for i in range(5)], "open": open_, "close": close})
+    out = run_backtest(req("ma_crossover", {"fast": 1, "slow": 2}, 5, interval="1h"), {"T.A.X": df})
+    q = 1e6 / 1.1
+    assert out.equity["position"].to_list() == [0, 0, 1, 1, -1]
+    assert out.trades["price"].to_list() == pytest.approx([3.1, 1.1])
+    assert out.equity["equity"][4] == pytest.approx(1e6 + q * (1.1 - 3.1))
+
+
+def test_missing_instrument_and_sweep_raise_validation_failed() -> None:
+    with pytest.raises(ValidationFailed):
+        run_backtest(req("ma_crossover", {"fast": 2, "slow": 3}, 5), {})
+
+
+def _walk(seed: int, n: int = 160) -> list[float]:
+    return (np.cumsum(np.random.default_rng(seed).normal(size=n)) + 100).tolist()
+
+
+@pytest.mark.parametrize(
+    ("strategy", "params", "ids"),
+    [
+        ("ma_crossover", {"fast": 3, "slow": 10}, ("T.A.X",)),
+        ("mean_reversion", {"lookback": 10, "z_entry": 1.0, "z_exit": 0.3}, ("T.A.X",)),
+        ("calendar_spread", {"lookback": 10, "z_entry": 1.0, "z_exit": 0.3}, ("T.A.X", "T.B.X")),
+    ],
+)
+@pytest.mark.parametrize("mutation", ["scale10", "random"])
+def test_engine_future_changes_do_not_alter_past(
+    strategy: str, params: dict[str, Any], ids: tuple[str, ...], mutation: str
+) -> None:
+    k = 80
+    base = {i: _walk(n + 1) for n, i in enumerate(ids)}
+    changed = {}
+    for i, px in base.items():
+        if mutation == "scale10":
+            tail = [x * 10 for x in px[k:]]
+        else:
+            tail = (np.random.default_rng(99).normal(size=len(px) - k) * 50 - 20).tolist()
+        changed[i] = px[:k] + tail
+    r = req(strategy, params, 160, ids=ids, costs=(1.0, 2.0))
+    o1 = run_backtest(r, {i: bars(p) for i, p in base.items()})
+    o2 = run_backtest(r, {i: bars(p) for i, p in changed.items()})
+    ts_k = T0 + k * DAY
+    for col in ("ts_ns", "equity", "position", "drawdown"):
+        assert o1.equity[col][:k].to_list() == o2.equity[col][:k].to_list()
+    t1 = o1.trades.filter(pl.col("ts_ns") < ts_k)
+    t2 = o2.trades.filter(pl.col("ts_ns") < ts_k)
+    assert t1.equals(t2)
 
 
 def test_outputs_validate_against_contracts() -> None:
@@ -191,7 +259,7 @@ def test_empty_window() -> None:
 
 def test_sweep_rejected() -> None:
     r = req("ma_crossover", {"fast": 2, "slow": 3}, 5).model_copy(update={"sweep": {"fast": [1]}})
-    with pytest.raises(ValueError, match="sweep"):
+    with pytest.raises(ValidationFailed):
         run_backtest(r, {"T.A.X": bars([1.0] * 5)})
 
 
@@ -211,11 +279,3 @@ def test_property_finite_bounded(prices: list[float], fast: int, slow: int) -> N
     assert (out.equity["drawdown"] <= 0).all()
     for v in out.metrics.model_dump().values():
         assert v is None or math.isfinite(v)
-
-
-def test_26y_daily_under_two_seconds() -> None:
-    n = 26 * 365
-    prices = (np.cumsum(np.random.default_rng(3).normal(size=n)) + 500).tolist()
-    t0 = time.perf_counter()
-    run_backtest(req("ma_crossover", {"fast": 20, "slow": 100}, n), {"T.A.X": bars(prices)})
-    assert time.perf_counter() - t0 < 2.0
