@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "namespace": {
+      "type": "object",
+      "properties": {
+        "name": {"const": "tidal"},
+        "create": {"type": "boolean"},
+        "externallyManagedAck": {"type": "boolean"}
+      }
+    },
+    "env": {"enum": ["", "dev", "prod"]},
+    "image": {
+      "type": "object",
+      "properties": {
+        "repository": {"type": "string", "pattern": "^[A-Za-z0-9._/:-]*$"},
+        "tag": {"type": "string", "pattern": "^[A-Za-z0-9._-]*$"},
+        "digest": {"type": "string", "pattern": "^(sha256:[a-f0-9]{64})?$"},
+        "pullPolicy": {"enum": ["IfNotPresent", "Always", "Never"]}
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "name": {"const": "tidal-worker"},
+        "clientId": {"type": "string", "pattern": "^([0-9a-fA-F-]{36})?$"},
+        "tenantId": {"type": "string", "pattern": "^([0-9a-fA-F-]{36})?$"}
+      }
+    },
+    "keda": {
+      "type": "object",
+      "properties": {
+        "identityClientId": {"type": "string", "pattern": "^([0-9a-fA-F-]{36})?$"}
+      }
+    },
+    "worker": {
+      "type": "object",
+      "properties": {
+        "command": {"type": "array", "items": {"type": "string", "pattern": "^tidal-[a-z]+$"}},
+        "logLevel": {"enum": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]},
+        "config": {
+          "type": "object",
+          "propertyNames": {"pattern": "^TIDAL_[A-Z0-9_]+$"},
+          "additionalProperties": {"type": "string"}
+        },
+        "resources": {
+          "type": "object",
+          "properties": {
+            "requests": {"$ref": "#/definitions/quantities"},
+            "limits": {"$ref": "#/definitions/quantities"}
+          }
+        },
+        "tmpSizeLimit": {"$ref": "#/definitions/quantity"}
+      }
+    },
+    "scaledJob": {
+      "type": "object",
+      "properties": {
+        "queueName": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+        "serviceBusNamespace": {"type": "string", "pattern": "^[a-z0-9-]*$"},
+        "messageCount": {"type": "string", "pattern": "^[0-9]+$"},
+        "minReplicaCount": {"type": "integer", "minimum": 0},
+        "maxReplicaCount": {"type": "integer", "minimum": 1, "maximum": 100}
+      }
+    }
+  },
+  "definitions": {
+    "quantity": {"type": ["string", "number"], "pattern": "^[0-9]+(\\.[0-9]+)?(m|Ki|Mi|Gi|Ti|k|M|G|T)?$"},
+    "quantities": {"type": "object", "additionalProperties": {"$ref": "#/definitions/quantity"}}
+  }
+}

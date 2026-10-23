@@ -1,0 +1,6 @@
+apiVersion: v2
+name: tidal
+description: Tidal backtest fan-out on AKS (KEDA ScaledJob, workload identity, default-deny network)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
