@@ -10,7 +10,9 @@ name: images
 #   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID  OIDC app (needs AcrPush on the ACR)
 #   ACR_NAME                                                  registry name, e.g. the dev ACR (no .azurecr.io)
 # Optional: IMAGE_ATTEST=true enables build provenance attestations (needs a plan that supports them).
-# Required GitHub environment: "dev" (federated credential subject: environment:dev).
+# Required GitHub environment: "dev" (federated credential subject: environment:dev). Its deployment
+# branch/tag policy, the v* tag ruleset and the runner rules are a mandatory one-time setup:
+# see docs/runbooks/images.md ("One-time setup"). GitHub-hosted runners only.
 
 on:
   push:
@@ -39,12 +41,13 @@ env:
 jobs:
   build:
     name: build-scan-sbom
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
     outputs:
       short_sha: ${{ steps.meta.outputs.short_sha }}
+      image_id: ${{ steps.imgid.outputs.image_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -67,8 +70,14 @@ jobs:
           push: false
           load: true
           tags: ${{ env.LOCAL_IMAGE }}
+          # Release (tag) builds ignore the cache; PRs read it but never write it (no cache poisoning).
+          no-cache: ${{ github.ref_type == 'tag' }}
           cache-from: type=gha,scope=tidal-image
-          cache-to: type=gha,scope=tidal-image,mode=max
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,scope=tidal-image,mode=max' || '' }}
+
+      - name: Record image id
+        id: imgid
+        run: echo "image_id=$(docker image inspect --format '{{.Id}}' "$LOCAL_IMAGE")" >> "$GITHUB_OUTPUT"
 
       - name: Report image size
         run: |
@@ -110,7 +119,13 @@ jobs:
 
       - name: Export scanned image
         if: github.event_name != 'pull_request'
-        run: docker save "$LOCAL_IMAGE" -o tidal-image.tar
+        env:
+          EXPECTED_ID: ${{ steps.imgid.outputs.image_id }}
+        run: |
+          set -euo pipefail
+          actual="$(docker image inspect --format '{{.Id}}' "$LOCAL_IMAGE")"
+          [ "$actual" = "$EXPECTED_ID" ] || { echo "::error::image id changed after scan"; exit 1; }
+          docker save "$LOCAL_IMAGE" -o tidal-image.tar
 
       - name: Upload scanned image
         if: github.event_name != 'pull_request'
@@ -125,13 +140,13 @@ jobs:
     name: push-acr
     needs: build
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: dev
     permissions:
       id-token: write # OIDC to Entra, and to sign attestations
       contents: read
-      attestations: write # only used when IMAGE_ATTEST=true
+      attestations: write # unused (no effect) unless IMAGE_ATTEST=true
     steps:
       - name: Download scanned image
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -155,6 +170,7 @@ jobs:
         env:
           ACR_NAME: ${{ vars.ACR_NAME }}
           SHORT_SHA: ${{ needs.build.outputs.short_sha }}
+          EXPECTED_ID: ${{ needs.build.outputs.image_id }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
         run: |
@@ -169,11 +185,15 @@ jobs:
             tags+=("$REF_NAME")
           fi
           docker load -i tidal-image.tar
+          actual="$(docker image inspect --format '{{.Id}}' "$LOCAL_IMAGE")"
+          [ "$actual" = "$EXPECTED_ID" ] || { echo "::error::loaded image id differs from the scanned one"; exit 1; }
           for t in "${tags[@]}"; do
             docker tag "$LOCAL_IMAGE" "${repo}:${t}"
             docker push "${repo}:${t}"
           done
           digest="$(docker inspect --format '{{index .RepoDigests 0}}' "${repo}:${tags[0]}" | cut -d@ -f2)"
+          acr_digest="$(az acr repository show --name "$ACR_NAME" --image "tidal:${tags[0]}" --query digest -o tsv)"
+          [ "$acr_digest" = "$digest" ] || { echo "::error::ACR digest ${acr_digest} != local ${digest}"; exit 1; }
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
           echo "repo=${repo}" >> "$GITHUB_OUTPUT"
           {
@@ -183,6 +203,12 @@ jobs:
             echo "- digest: \`${digest}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Download SBOM
+        if: vars.IMAGE_ATTEST == 'true' && github.ref_type == 'tag'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tidal-sbom-spdx
+
       - name: Attest build provenance
         if: vars.IMAGE_ATTEST == 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -190,3 +216,20 @@ jobs:
           subject-name: ${{ steps.push.outputs.repo }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: false
+
+      - name: Attest SBOM (tag builds)
+        if: vars.IMAGE_ATTEST == 'true' && github.ref_type == 'tag'
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ steps.push.outputs.repo }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          sbom-path: tidal-sbom.spdx.json
+          push-to-registry: false
+
+      - name: Logout (credentials cleanup)
+        if: always()
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+        run: |
+          docker logout "${ACR_NAME}.azurecr.io" || true
+          az logout || true
