@@ -42,3 +42,7 @@ exactly the story the role asks for.
 - Monitor: per-host cost by tag, Container Apps cold-start p95 (C5), spot evictions.
 - Revisit at G3 with measured numbers. In a real enterprise, consolidating onto fewer platforms may be
   better for operations; the final report says so.
+
+> **Note (2026-10-23, T-306):** the AKS "disks/LB/IP €3–6" figure above was an early estimate. Priced from
+> `prices.yaml` it is 24.38 EUR/month (P4 OS disk 5.11 + Standard LB 16.06 + public IP 3.21), see
+> `docs/finops/deltas/T-306.md` and `docs/finops/cost-model.md`. The decision stands; the parking plan (T-313) changes.
