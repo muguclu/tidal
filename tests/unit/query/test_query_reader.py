@@ -361,3 +361,31 @@ def test_sessions_are_locked_down(tmp_path: Path) -> None:
         pytest.skip("azure extension is not installed in this environment")
     with pytest.raises(duckdb.Error, match="locked"):
         az.query("SET azure_storage_connection_string = 'x'", [])
+
+
+def test_extension_directory_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(duck.EXTENSION_DIR_ENV, raising=False)
+    assert duck.extension_directory() is None  # local default: DuckDB's own cache
+    monkeypatch.setenv(duck.EXTENSION_DIR_ENV, "")
+    assert duck.extension_directory() is None
+    monkeypatch.setenv(duck.EXTENSION_DIR_ENV, "/app/duckdb_ext")
+    assert duck.extension_directory() == "/app/duckdb_ext"
+
+
+def test_azure_session_sets_extension_directory_before_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[str] = []
+
+    class Conn:
+        def execute(self, sql: str, params: object = None) -> "Conn":
+            seen.append(sql if params is None else f"{sql} <- {params}")
+            return self
+
+    monkeypatch.setenv(duck.EXTENSION_DIR_ENV, "/app/duckdb_ext")
+    monkeypatch.setattr("duckdb.connect", Conn)
+    duck.azure_session(
+        account_url="http://127.0.0.1:10000/a", managed_identity=False, connection_string="cs"
+    )
+    assert seen[0] == "SET extension_directory = ? <- ['/app/duckdb_ext']"
+    assert seen[1] == "LOAD azure"  # never INSTALL outside local
