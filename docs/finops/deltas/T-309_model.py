@@ -45,12 +45,18 @@ GRANT_VCPU_S, GRANT_GIB_S, GRANT_REQ_M = 180_000, 360_000, 2.0
 
 print("| Component | Quantity x unit price (EUR) | Active EUR/month | Parked EUR/month |")
 print("|---|---|---:|---:|")
-print(f"| App Service plan B1 Linux (tidal-api) | {HOURS} h x {B1} | {B1 * HOURS:.2f} | 0.00 (enable_app_service = false) or {B1 * HOURS:.2f} if kept |")
+print(
+    f"| App Service plan B1 Linux (tidal-api) | {HOURS} h x {B1} | {B1 * HOURS:.2f} | 0.00 (enable_app_service = false) or {B1 * HOURS:.2f} if kept |"
+)
 print("| Container Apps environment (consumption) | no base charge | 0.00 | 0.00 |")
-print("| Container Apps compute (query + 2 jobs, +1 with the tiering flag) | see usage table; MEASURED in C5 | UNPRICED (within free grant) | 0.00 |")
+print(
+    "| Container Apps compute (query + 2 jobs, +1 with the tiering flag) | see usage table; MEASURED in C5 | UNPRICED (within free grant) | 0.00 |"
+)
 print(f"| **Priced subtotal** | | **{B1 * HOURS:.2f}** | **0.00 to {B1 * HOURS:.2f}** |")
 print()
-print(f"Variant: App Service B2 instead of B1 would cost {B2 * HOURS:.2f} EUR/month (+{(B2 - B1) * HOURS:.2f}); B1 is kept (SPEC-07 section 2).")
+print(
+    f"Variant: App Service B2 instead of B1 would cost {B2 * HOURS:.2f} EUR/month (+{(B2 - B1) * HOURS:.2f}); B1 is kept (SPEC-07 section 2)."
+)
 print()
 
 # name, vCPU, GiB, seconds per execution, executions per month
@@ -84,7 +90,15 @@ for label, v, g_ in (
     ("typical + tiering event job", tv + xv, tg + xg),
     ("January + tiering event job", tv + yv + xv, tg + yg + xg),
 ):
-    over = "none" if v <= GRANT_VCPU_S and g_ <= GRANT_GIB_S else "UNPRICED (meter has no usable price, C5)"
-    print(f"| {label} | {v:,.0f} | {v / GRANT_VCPU_S:.0%} | {g_:,.0f} | {g_ / GRANT_GIB_S:.0%} | {over} |")
+    over = (
+        "none"
+        if v <= GRANT_VCPU_S and g_ <= GRANT_GIB_S
+        else "UNPRICED (meter has no usable price, C5)"
+    )
+    print(
+        f"| {label} | {v:,.0f} | {v / GRANT_VCPU_S:.0%} | {g_:,.0f} | {g_ / GRANT_GIB_S:.0%} | {over} |"
+    )
 print()
-print(f"Requests: grant {GRANT_REQ_M:.0f}M/month; above it {REQ} EUR per 1M (meter containerapps_requests_1m).")
+print(
+    f"Requests: grant {GRANT_REQ_M:.0f}M/month; above it {REQ} EUR per 1M (meter containerapps_requests_1m)."
+)
