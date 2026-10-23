@@ -12,7 +12,8 @@ Hardening: after setup every session runs ``SET autoinstall_known_extensions=fal
 ``autoload_known_extensions=false`` and ``lock_configuration=true``. Outside ``TIDAL_ENV=local``
 only ``LOAD azure`` runs (no ``INSTALL``, no network fetch): the T-305 image must bake
 ``azure.duckdb_extension`` into a fixed ``extension_directory`` (``~/.duckdb/extensions/...`` of the
-image user, or one set via the ``extension_directory`` option) at build time.
+image user, or the directory named by ``DUCKDB_EXTENSION_DIRECTORY``, which the image sets to
+``/app/duckdb_ext``) at build time.
 
 Extension install (local only): ``INSTALL azure`` downloads ``azure.duckdb_extension`` (~5 s) into
 ``~/.duckdb/extensions/<duckdb version>/<platform>/`` on first use and needs outbound HTTPS to
@@ -23,6 +24,7 @@ to the DuckDB version: tested with :data:`DUCKDB_TESTED` (``duckdb>=1.1`` is a r
 raises :class:`ColdStoreUnavailable`; callers may fall back to reading via an ``ObjectStore``.
 """
 
+import os
 import re
 import threading
 from pathlib import Path
@@ -36,6 +38,7 @@ from tidal.common.errors import DependencyUnavailable
 from tidal.storage import layout
 
 DUCKDB_TESTED = "2.0.0"
+EXTENSION_DIR_ENV = "DUCKDB_EXTENSION_DIRECTORY"  # set by the image (deploy/docker/Dockerfile)
 _ACCOUNT = re.compile(r"[a-z0-9]{3,24}")
 
 
@@ -103,6 +106,15 @@ class DuckSession:
             raise ColdStoreUnavailable("cold store unreachable") from exc
 
 
+def extension_directory() -> str | None:
+    """Directory holding the baked ``azure`` extension, or ``None`` for DuckDB's default.
+
+    Read from ``DUCKDB_EXTENSION_DIRECTORY`` (not a ``TIDAL_*`` setting: it is image plumbing, not
+    contract config). Unset (local dev, tests) keeps DuckDB's ``~/.duckdb/extensions`` behaviour.
+    """
+    return os.environ.get(EXTENSION_DIR_ENV) or None
+
+
 def _harden(conn: duckdb.DuckDBPyConnection) -> None:
     """No implicit extension downloads; freeze settings so queries cannot change them."""
     conn.execute("SET autoinstall_known_extensions = false")
@@ -136,6 +148,9 @@ def azure_session(
         raise ColdStoreUnavailable("no storage credentials: need MI or a connection string")
     conn = duckdb.connect()
     try:
+        ext_dir = extension_directory()
+        if ext_dir is not None:  # must precede INSTALL/LOAD and lock_configuration
+            conn.execute("SET extension_directory = ?", [ext_dir])
         if allow_install:
             conn.execute("INSTALL azure")
         conn.execute("LOAD azure")
