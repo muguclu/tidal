@@ -1,0 +1,16 @@
+# Dev overrides. Placeholders are replaced with Terraform outputs at deploy time
+# (helm --set or a generated values file). None of these values is a secret.
+env: dev
+image:
+  repository: acrtidaldev.azurecr.io/tidal
+  tag: sha-0000000   # replaced by CI (T-311)
+serviceAccount:
+  clientId: "00000000-0000-0000-0000-000000000000"
+  tenantId: "00000000-0000-0000-0000-000000000000"
+worker:
+  config:
+    TIDAL_STORAGE__ACCOUNT_URL: https://sttidaldev.blob.core.windows.net
+    TIDAL_SERVICEBUS__FQDN: sb-tidal-dev.servicebus.windows.net
+    TIDAL_QUERY__BASE_URL: https://tidal-query.example.westeurope.azurecontainerapps.io
+scaledJob:
+  serviceBusNamespace: sb-tidal-dev

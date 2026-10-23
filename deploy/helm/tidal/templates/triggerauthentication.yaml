@@ -1,0 +1,13 @@
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: tidal-worker-servicebus
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "tidal.labels" . | nindent 4 }}
+spec:
+  podIdentity:
+    provider: azure-workload
+    # KEDA reads queue depth as this identity (id-worker). It needs Azure Service Bus Data
+    # Receiver on the queue, which T-403 assigns and which also covers the scaler.
+    identityId: {{ required "serviceAccount.clientId is required" .Values.serviceAccount.clientId | quote }}

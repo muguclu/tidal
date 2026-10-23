@@ -1,0 +1,72 @@
+# Default values for the tidal chart. Environment overrides live in values-dev.yaml.
+# Required values are empty here and enforced with `required` in the templates.
+
+# Namespace the chart renders. Must stay "tidal": the Terraform federated credential subject is
+# system:serviceaccount:tidal:tidal-worker (infra/terraform/modules/aks).
+namespace:
+  name: tidal
+  create: true            # false if the namespace is managed elsewhere (then apply the PSA labels there)
+  podSecurity: restricted # Pod Security Admission level used for enforce/audit/warn
+
+# Required. Deployment environment, passed as TIDAL_ENV (ADR-0012: no default in the image).
+env: ""                   # dev | prod
+
+image:
+  repository: ""          # e.g. acrtidaldev.azurecr.io/tidal (required)
+  tag: ""                 # e.g. sha-1a2b3c4 or v0.1.0; "latest" is rejected
+  digest: ""              # optional sha256:...; takes precedence over tag
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  name: tidal-worker      # fixed by the federated credential subject
+  clientId: ""            # client id of id-worker (Terraform output); required
+  tenantId: ""            # Entra tenant id; required
+
+worker:
+  command: ["tidal-worker"]
+  logLevel: INFO
+  # Non-secret settings, rendered as env vars (empty values are skipped).
+  # Keys follow docs/contracts/config-contract.md. Never put secrets here.
+  config:
+    TIDAL_STORAGE__ACCOUNT_URL: ""             # required (Terraform output)
+    TIDAL_STORAGE__USE_MANAGED_IDENTITY: "true"
+    TIDAL_SERVICEBUS__FQDN: ""                 # required, <namespace>.servicebus.windows.net
+    TIDAL_QUERY__BASE_URL: ""                  # required, FQDN of tidal-query
+  resources:
+    requests: {cpu: "1", memory: 2Gi, ephemeral-storage: 1Gi}
+    limits: {cpu: "3", memory: 4Gi, ephemeral-storage: 2Gi}   # nodes are D4as_v5: 4 vCPU / 16 GiB
+  tmpSizeLimit: 1Gi       # emptyDir on /tmp (root filesystem is read-only)
+
+scaledJob:
+  queueName: backtest-jobs                 # docs/contracts/messaging-contract.md
+  serviceBusNamespace: ""                  # short namespace name (not the FQDN), required
+  messageCount: "1"                        # queue messages per job pod
+  minReplicaCount: 0                       # scale to zero
+  maxReplicaCount: 10                      # equals the spot pool maximum
+  pollingInterval: 30
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  backoffLimit: 0                          # retries are Service Bus redelivery (max delivery 3 + DLQ)
+  activeDeadlineSeconds: 3600
+  ttlSecondsAfterFinished: 600
+
+# Spot pool placement; must match the aks module output spot_pool_selector plus AKS's own spot taint.
+scheduling:
+  nodeSelector:
+    tidal.io/workload: backtest
+  tolerations:
+    - {key: tidal.io/workload, operator: Equal, value: backtest, effect: NoSchedule}
+    - {key: kubernetes.azure.com/scalesetpriority, operator: Equal, value: spot, effect: NoSchedule}
+
+networkPolicy:
+  enabled: true
+  dnsPodLabels: {k8s-app: kube-dns}        # CoreDNS pods in kube-system
+
+resourceQuota:
+  enabled: true
+  hard:
+    pods: "20"
+    requests.cpu: "12"
+    requests.memory: 24Gi
+    limits.cpu: "32"
+    limits.memory: 48Gi

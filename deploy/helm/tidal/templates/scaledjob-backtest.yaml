@@ -1,0 +1,83 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledJob
+metadata:
+  name: tidal-worker-backtest
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "tidal.workerLabels" . | nindent 4 }}
+spec:
+  pollingInterval: {{ .Values.scaledJob.pollingInterval }}
+  minReplicaCount: {{ .Values.scaledJob.minReplicaCount }}
+  maxReplicaCount: {{ .Values.scaledJob.maxReplicaCount }}
+  successfulJobsHistoryLimit: {{ .Values.scaledJob.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.scaledJob.failedJobsHistoryLimit }}
+  triggers:
+    - type: azure-servicebus
+      authenticationRef:
+        name: tidal-worker-servicebus
+      metadata:
+        queueName: {{ .Values.scaledJob.queueName | quote }}
+        namespace: {{ required "scaledJob.serviceBusNamespace is required" .Values.scaledJob.serviceBusNamespace | quote }}
+        messageCount: {{ .Values.scaledJob.messageCount | quote }}
+  jobTargetRef:
+    backoffLimit: {{ .Values.scaledJob.backoffLimit }}
+    activeDeadlineSeconds: {{ .Values.scaledJob.activeDeadlineSeconds }}
+    ttlSecondsAfterFinished: {{ .Values.scaledJob.ttlSecondsAfterFinished }}
+    template:
+      metadata:
+        labels:
+          {{- include "tidal.workerLabels" . | nindent 10 }}
+          azure.workload.identity/use: "true"
+      spec:
+        serviceAccountName: {{ .Values.serviceAccount.name }}
+        automountServiceAccountToken: false
+        restartPolicy: Never
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10001
+          runAsGroup: 10001
+          fsGroup: 10001
+          seccompProfile:
+            type: RuntimeDefault
+        nodeSelector:
+          {{- toYaml .Values.scheduling.nodeSelector | nindent 10 }}
+        tolerations:
+          {{- toYaml .Values.scheduling.tolerations | nindent 10 }}
+        containers:
+          - name: worker
+            image: {{ include "tidal.image" . | quote }}
+            imagePullPolicy: {{ .Values.image.pullPolicy }}
+            command:
+              {{- toYaml .Values.worker.command | nindent 14 }}
+            env:
+              - name: TIDAL_ENV
+                value: {{ required "env is required (dev|prod)" .Values.env | quote }}
+              - name: TIDAL_SERVICE_NAME
+                value: worker
+              - name: TIDAL_LOG_LEVEL
+                value: {{ .Values.worker.logLevel | quote }}
+              - name: TIDAL_AUTH__TENANT_ID
+                value: {{ required "serviceAccount.tenantId is required" .Values.serviceAccount.tenantId | quote }}
+              {{- range $k, $v := .Values.worker.config }}
+              {{- if $v }}
+              - name: {{ $k }}
+                value: {{ $v | quote }}
+              {{- end }}
+              {{- end }}
+            resources:
+              {{- toYaml .Values.worker.resources | nindent 14 }}
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              runAsNonRoot: true
+              capabilities:
+                drop: ["ALL"]
+              seccompProfile:
+                type: RuntimeDefault
+            volumeMounts:
+              - name: tmp
+                mountPath: /tmp
+        volumes:
+          - name: tmp
+            emptyDir:
+              sizeLimit: {{ .Values.worker.tmpSizeLimit }}
