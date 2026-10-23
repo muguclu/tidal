@@ -105,8 +105,8 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 ### Lane A — backtest (data-engineer, api-engineer)
 | ID | Title | Agent | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|---|
-| T-301 | Engine, strategies, metrics | data-engineer | T-003 | `src/tidal/backtest/**` | SPEC-05 §2–3; engine is pure over polars frames (data loading is the worker's job), so it can start in W2 | todo |
-| T-302 | Golden + look-ahead + determinism tests | test-engineer | T-301 | `tests/unit/backtest/**`, `tests/fixtures/backtest/**` | hash identical across CI matrix | todo |
+| T-301 | Engine, strategies, metrics | data-engineer | T-003 | `src/tidal/backtest/**`, `tests/unit/backtest/test_engine.py` (T-301's own; T-302 adds separate files), `benchmarks/backtest/**` | SPEC-05 §2–3; engine is pure over polars frames (data loading is the worker's job), so it can start in W2 | todo |
+| T-302 | Golden + look-ahead + determinism tests | test-engineer | T-301 | `tests/unit/backtest/**` except `test_engine.py` (owned by T-301), `tests/fixtures/backtest/**` | hash identical across CI matrix | todo |
 | T-303 | Worker consumer | data-engineer | T-301, T-208 | `src/tidal/worker/**` +tests | idempotent; SIGTERM abandon; lock renew; `tidal dlq inspect/resubmit` CLI. Also consume `tiering-jobs`: validate `tiering.job/v1` (`TieringJobMessage`) and call `tidal.storage.tiering.run_job` (T-205 provides it; a held `sp_getapplock` returns `locked=True` => complete the message) | todo |
 | T-304 | Submit endpoint + aggregator | api-engineer | T-209, T-303 | `api/routers/backtests.py`, `src/tidal/api/aggregator.py` +tests | sweep fan-out batching; parent status; aggregator idempotent on redelivery (messaging §4); messages serialised with `exclude_none=True` and checked against `MAX_MESSAGE_BYTES` | todo |
 
@@ -114,8 +114,8 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | ID | Title | Agent | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|---|
 | T-305 | Production Dockerfile | platform-engineer | T-112 | `deploy/docker/**` | size measured and ≤ 500 MB, non-root, all entrypoints; sets `TIDAL_ENV` explicitly (ADR-0012) | todo |
-| T-306 | Module: aks (spot pool, KEDA, WI) | infra-engineer | T-126 | `modules/aks/**`, `envs/dev/aks.tf`, `docs/finops/deltas/T-306.md` | SPEC-07 §2 AKS row | todo |
-| T-307 | Helm chart + ScaledJob | platform-engineer | T-305, T-306 | `deploy/helm/tidal/**` | lint/kubeconform/kube-linter clean | todo |
+| T-306 | Module: aks (spot pool, KEDA, WI) | infra-engineer | T-126 | `modules/aks/**`, `envs/dev/aks.tf`, `docs/finops/deltas/T-306.md`, `docs/finops/deltas/T-306_model.py` | SPEC-07 §2 AKS row | todo |
+| T-307 | Helm chart + ScaledJob | platform-engineer | T-305, T-306 | `deploy/helm/tidal/**` | lint/kubeconform/kube-linter clean; default-deny NetworkPolicy (egress 443 only) and PSA `restricted` label on namespace `tidal`; SA `tidal/tidal-worker` | todo |
 | T-308 | images.yml pipeline | platform-engineer | T-305, T-122 | `.github/workflows/images.yml` | trivy + sbom + push via OIDC | todo |
 
 ### Lane C — PaaS, serverless & legacy (infra-engineer, platform-engineer)
