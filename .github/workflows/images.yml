@@ -1,0 +1,192 @@
+name: images
+
+# Build, scan and push the single Tidal image (T-308, SPEC-06 5, SPEC-07 4).
+#   pull_request (path filtered): build + SBOM + trivy only. No login, no push, no token beyond contents:read.
+#   tag v* / workflow_dispatch:   same gates, then push to ACR via GitHub OIDC (no secrets).
+# The image that is pushed is the exact tarball that was scanned (no rebuild between scan and push).
+# Never `pull_request_target`. Untrusted github.* values reach `run:` only through env vars.
+#
+# Required repository variables (not secrets, none is confidential):
+#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID  OIDC app (needs AcrPush on the ACR)
+#   ACR_NAME                                                  registry name, e.g. the dev ACR (no .azurecr.io)
+# Optional: IMAGE_ATTEST=true enables build provenance attestations (needs a plan that supports them).
+# Required GitHub environment: "dev" (federated credential subject: environment:dev).
+
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+    paths:
+      - "deploy/docker/**"
+      - "src/**"
+      - "sql/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/images.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: images-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  LOCAL_IMAGE: tidal:scan
+
+jobs:
+  build:
+    name: build-scan-sbom
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Compute short sha
+        id: meta
+        run: echo "short_sha=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - name: Build (target prod)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          target: prod
+          push: false
+          load: true
+          tags: ${{ env.LOCAL_IMAGE }}
+          cache-from: type=gha,scope=tidal-image
+          cache-to: type=gha,scope=tidal-image,mode=max
+
+      - name: Report image size
+        run: |
+          docker image inspect "$LOCAL_IMAGE" --format '{{.Size}}' \
+            | awk '{printf "Image size: %.0f MB (target <= 500 MB)\n", $1/1024/1024}' | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ env.LOCAL_IMAGE }}
+          format: spdx-json
+          output-file: tidal-sbom.spdx.json
+          upload-artifact: false
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tidal-sbom-spdx
+          path: tidal-sbom.spdx.json
+          retention-days: 90
+
+      - name: Trivy vulnerability scan (HIGH, CRITICAL, fixable only)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.LOCAL_IMAGE }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+      - name: Trivy secret scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.LOCAL_IMAGE }}
+          scanners: secret
+          exit-code: "1"
+          format: table
+
+      - name: Export scanned image
+        if: github.event_name != 'pull_request'
+        run: docker save "$LOCAL_IMAGE" -o tidal-image.tar
+
+      - name: Upload scanned image
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tidal-image
+          path: tidal-image.tar
+          retention-days: 1
+          compression-level: 0
+
+  push:
+    name: push-acr
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: dev
+    permissions:
+      id-token: write # OIDC to Entra, and to sign attestations
+      contents: read
+      attestations: write # only used when IMAGE_ATTEST=true
+    steps:
+      - name: Download scanned image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tidal-image
+
+      - name: Azure login (OIDC)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+        run: az acr login --name "$ACR_NAME"
+
+      - name: Tag and push
+        id: push
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+          SHORT_SHA: ${{ needs.build.outputs.short_sha }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          repo="${ACR_NAME}.azurecr.io/tidal"
+          tags=("sha-${SHORT_SHA}")
+          if [ "$REF_TYPE" = "tag" ]; then
+            # Only a strict vX.Y.Z[-suffix] is accepted as a release tag.
+            if [[ ! "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+              echo "::error::tag does not look like vX.Y.Z" ; exit 1
+            fi
+            tags+=("$REF_NAME")
+          fi
+          docker load -i tidal-image.tar
+          for t in "${tags[@]}"; do
+            docker tag "$LOCAL_IMAGE" "${repo}:${t}"
+            docker push "${repo}:${t}"
+          done
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "${repo}:${tags[0]}" | cut -d@ -f2)"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "repo=${repo}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Image pushed"
+            echo "- repository: \`${repo}\`"
+            echo "- tags: \`${tags[*]}\`"
+            echo "- digest: \`${digest}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Attest build provenance
+        if: vars.IMAGE_ATTEST == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.push.outputs.repo }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: false
