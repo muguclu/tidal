@@ -5,8 +5,10 @@
 # system:serviceaccount:tidal:tidal-worker (infra/terraform/modules/aks).
 namespace:
   name: tidal
-  create: true            # false if the namespace is managed elsewhere (then apply the PSA labels there)
-  podSecurity: restricted # Pod Security Admission level used for enforce/audit/warn
+  create: true            # the PSA level is fixed to "restricted" in the template (not configurable)
+  # Set create=false only if the namespace is managed elsewhere WITH the three
+  # pod-security.kubernetes.io/{enforce,audit,warn}=restricted labels, and acknowledge it here.
+  externallyManagedAck: false
 
 # Required. Deployment environment, passed as TIDAL_ENV (ADR-0012: no default in the image).
 env: ""                   # dev | prod
@@ -22,16 +24,27 @@ serviceAccount:
   clientId: ""            # client id of id-worker (Terraform output); required
   tenantId: ""            # Entra tenant id; required
 
+# KEDA operator identity (T-403). The ScaledJob scaler authenticates as this identity, NOT as the
+# worker: it needs Azure Service Bus Data Owner on backtest-jobs (queue depth needs management
+# rights), via a federated credential for system:serviceaccount:kube-system:keda-operator.
+keda:
+  identityClientId: ""    # required
+
 worker:
   command: ["tidal-worker"]
   logLevel: INFO
-  # Non-secret settings, rendered as env vars (empty values are skipped).
-  # Keys follow docs/contracts/config-contract.md. Never put secrets here.
+  # Non-secret settings, rendered as env vars. Keys follow docs/contracts/config-contract.md.
+  # Keys matching CONNECTION_STRING|PASSWORD|SECRET|KEY$ are rejected by the template.
+  # Settings validation outside local requires SQL__AUTH=entra_mi and a real SQL__SERVER, even
+  # though the worker reads through tidal-query only (ADR-0016) and never opens a SQL connection.
   config:
     TIDAL_STORAGE__ACCOUNT_URL: ""             # required (Terraform output)
     TIDAL_STORAGE__USE_MANAGED_IDENTITY: "true"
+    TIDAL_SQL__AUTH: entra_mi
+    TIDAL_SQL__SERVER: ""                      # required, config validation only (see above)
     TIDAL_SERVICEBUS__FQDN: ""                 # required, <namespace>.servicebus.windows.net
-    TIDAL_QUERY__BASE_URL: ""                  # required, FQDN of tidal-query
+    TIDAL_QUERY__BASE_URL: ""                  # required, https URL of tidal-query
+    TIDAL_QUERY__AUDIENCE: api://tidal-query   # required, token audience (app role per T-402)
   resources:
     requests: {cpu: "1", memory: 2Gi, ephemeral-storage: 1Gi}
     limits: {cpu: "3", memory: 4Gi, ephemeral-storage: 2Gi}   # nodes are D4as_v5: 4 vCPU / 16 GiB

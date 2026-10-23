@@ -7,9 +7,12 @@ image:
 serviceAccount:
   clientId: "00000000-0000-0000-0000-000000000000"
   tenantId: "00000000-0000-0000-0000-000000000000"
+keda:
+  identityClientId: "00000000-0000-0000-0000-000000000001"
 worker:
   config:
     TIDAL_STORAGE__ACCOUNT_URL: https://sttidaldev.blob.core.windows.net
+    TIDAL_SQL__SERVER: sql-tidal-dev.database.windows.net
     TIDAL_SERVICEBUS__FQDN: sb-tidal-dev.servicebus.windows.net
     TIDAL_QUERY__BASE_URL: https://tidal-query.example.westeurope.azurecontainerapps.io
 scaledJob:

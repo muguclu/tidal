@@ -25,3 +25,5 @@ checks:
     # Job pods must use Never or OnFailure; Never with backoffLimit 0 is deliberate: a failed run
     # must be redelivered by Service Bus (max delivery 3 + DLQ), not restarted in place.
     - restart-policy
+    # Style-only check on key ordering in generated YAML; Helm output order is not ours to control.
+    - sorted-keys

@@ -1,11 +1,17 @@
-{{- if .Values.namespace.create }}
+{{- if not .Values.namespace.create }}
+{{- if not .Values.namespace.externallyManagedAck }}
+{{- fail "namespace.create=false requires namespace.externallyManagedAck=true (PSA restricted labels must exist)" }}
+{{- end }}
+{{- else }}
 apiVersion: v1
 kind: Namespace
 metadata:
   name: {{ .Values.namespace.name }}
+  annotations:
+    helm.sh/resource-policy: keep
   labels:
     {{- include "tidal.labels" . | nindent 4 }}
-    pod-security.kubernetes.io/enforce: {{ .Values.namespace.podSecurity }}
-    pod-security.kubernetes.io/audit: {{ .Values.namespace.podSecurity }}
-    pod-security.kubernetes.io/warn: {{ .Values.namespace.podSecurity }}
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
 {{- end }}

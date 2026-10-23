@@ -46,7 +46,7 @@ spec:
         containers:
           - name: worker
             image: {{ include "tidal.image" . | quote }}
-            imagePullPolicy: {{ .Values.image.pullPolicy }}
+            imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
             command:
               {{- toYaml .Values.worker.command | nindent 14 }}
             env:
@@ -58,11 +58,10 @@ spec:
                 value: {{ .Values.worker.logLevel | quote }}
               - name: TIDAL_AUTH__TENANT_ID
                 value: {{ required "serviceAccount.tenantId is required" .Values.serviceAccount.tenantId | quote }}
+              {{- include "tidal.validateConfig" . }}
               {{- range $k, $v := .Values.worker.config }}
-              {{- if $v }}
-              - name: {{ $k }}
+              - name: {{ $k | quote }}
                 value: {{ $v | quote }}
-              {{- end }}
               {{- end }}
             resources:
               {{- toYaml .Values.worker.resources | nindent 14 }}
@@ -80,4 +79,4 @@ spec:
         volumes:
           - name: tmp
             emptyDir:
-              sizeLimit: {{ .Values.worker.tmpSizeLimit }}
+              sizeLimit: {{ .Values.worker.tmpSizeLimit | quote }}
