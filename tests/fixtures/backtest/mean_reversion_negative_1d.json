@@ -1,0 +1,29 @@
+{
+  "name": "mean_reversion_negative_1d",
+  "strategy": "mean_reversion",
+  "interval": "1d",
+  "params": {"lookback": 3, "z_entry": 1.0, "z_exit": 0.2},
+  "costs": {"fee_bps": 10, "slippage_bps": 5},
+  "t0_ns": 1577836800000000000,
+  "step_ns": 86400000000000,
+  "bars": {"T.A.X": {
+    "open":  [10, 10, 5, 7.5, 7.5, -5, -5, -2, -2, -2],
+    "close": [10, 10, 5, 7.5, 7.5, -5, -5, -2, -2, -2]}},
+  "expected": {
+    "position": [0, 0, 0, 1, 0, 0, 1, 1, -1, -1],
+    "equity": [1000000, 1000000, 1000000, 998875, 997750, 997750, 997000, 1297000, 1296400, 1296400],
+    "drawdown": [0, 0, 0, -0.001125, -0.00225, -0.00225, -0.003, 0, -0.000462606014649, -0.000462606014649],
+    "trades": [
+      {"idx": 3, "instrument_id": "T.A.X", "qty": 100000, "price": 7.5, "fee": 750, "slippage": 375},
+      {"idx": 4, "instrument_id": "T.A.X", "qty": -100000, "price": 7.5, "fee": 750, "slippage": 375},
+      {"idx": 6, "instrument_id": "T.A.X", "qty": 100000, "price": -5, "fee": 500, "slippage": 250},
+      {"idx": 8, "instrument_id": "T.A.X", "qty": -200000, "price": -2, "fee": 400, "slippage": 200}
+    ],
+    "n_trades": 3,
+    "hit_rate": 0.5,
+    "max_drawdown": -0.003,
+    "total_abs_position_change": 5,
+    "periods_per_year": 252
+  },
+  "result_sha256": "c0c6e8c31fa8490d7c7877aedaaa6b4aa8a3d1e74123c8744cbb0721c2771957"
+}
