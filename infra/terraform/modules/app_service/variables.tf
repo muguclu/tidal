@@ -72,13 +72,17 @@ variable "registry_server" {
 }
 
 variable "image_name" {
-  description = "Repository and tag inside the registry (for example tidal:latest). The deploy workflow (T-311) moves the tag, so changes are ignored after creation."
+  description = "Repository and tag inside the registry (for example tidal:v0.1.0). The tag must not be latest. The deploy workflow (T-311) moves the tag, so changes are ignored after creation."
   type        = string
-  default     = "tidal:latest"
 
   validation {
     condition     = can(regex("^[a-z0-9._/-]+:[A-Za-z0-9._-]+$", var.image_name))
     error_message = "image_name must look like <repository>:<tag>."
+  }
+
+  validation {
+    condition     = !endswith(var.image_name, ":latest")
+    error_message = "image_name must not use the latest tag; pin a version or sha tag."
   }
 }
 
@@ -125,8 +129,19 @@ variable "app_settings" {
   default     = {}
 
   validation {
-    condition     = alltrue([for k in keys(var.app_settings) : !contains(["TIDAL_ENV", "AZURE_CLIENT_ID", "TIDAL_SERVICE_NAME", "WEBSITES_PORT"], k) && !can(regex("(PASSWORD|CONNECTION_STRING|SECRET|KEY)$", k))])
-    error_message = "app_settings must not set TIDAL_ENV, AZURE_CLIENT_ID, TIDAL_SERVICE_NAME or WEBSITES_PORT (the module sets them) and must not carry secrets (names ending in PASSWORD, CONNECTION_STRING, SECRET or KEY)."
+    condition     = alltrue([for k in keys(var.app_settings) : !contains(["TIDAL_ENV", "AZURE_CLIENT_ID", "TIDAL_SERVICE_NAME", "WEBSITES_PORT"], k) && !can(regex("(?i)(PASSWORD|CONNECTION_STRING|SECRET|KEY|TOKEN|SAS|CREDENTIAL)", k)) && !can(regex("(?i)(sig=|AccountKey=|SharedAccessKey=)", var.app_settings[k]))])
+    error_message = "app_settings must not set TIDAL_ENV, AZURE_CLIENT_ID, TIDAL_SERVICE_NAME or WEBSITES_PORT (the module sets them) and must not carry secrets (names containing PASSWORD, CONNECTION_STRING, SECRET, KEY, TOKEN, SAS or CREDENTIAL, any case) and values must not look like SAS or storage keys (sig=, AccountKey=, SharedAccessKey=)."
+  }
+}
+
+variable "log_retention_days" {
+  description = "Days of application and HTTP logs kept on the app filesystem (cheapest option: no Log Analytics ingestion, which is capped at 0.2 GB/day). 1 to 7."
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.log_retention_days >= 1 && var.log_retention_days <= 7 && floor(var.log_retention_days) == var.log_retention_days
+    error_message = "log_retention_days must be a whole number from 1 to 7."
   }
 }
 

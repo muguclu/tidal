@@ -19,7 +19,8 @@ Assumptions (stated, not measured):
   listed as UNPRICED, with the meter that would apply.
 - Usage scenarios (run time per execution is an assumption, replaced by C5 measurements):
   query app 0.5 vCPU / 1 GiB, 40 active hours per month (SPEC-07 "active month"), idle replicas = 0 so no idle meter;
-  synth-daily 1 vCPU / 2 GiB, 600 s per day, 30 days; tiering 1 vCPU / 2 GiB, 600 s, 20 runs;
+  synth-daily 1 vCPU / 2 GiB, 600 s per day, 30 days; the tiering event job (1 vCPU / 2 GiB, 600 s, 20 runs) exists only when
+  enable_tiering_event_job is true (default false) and is shown as a separate scenario;
   tiering-yearly 2 vCPU / 4 GiB at its 6 h timeout (worst case), once a year, shown for the month it runs (January).
 - Not priced (no meter in prices.yaml or API precision too low): Container Apps vCPU/GiB-seconds, the Container Apps
   environment (consumption: no base charge), outbound data transfer, requests above the 2M grant (meter exists,
@@ -46,7 +47,7 @@ print("| Component | Quantity x unit price (EUR) | Active EUR/month | Parked EUR
 print("|---|---|---:|---:|")
 print(f"| App Service plan B1 Linux (tidal-api) | {HOURS} h x {B1} | {B1 * HOURS:.2f} | 0.00 (enable_app_service = false) or {B1 * HOURS:.2f} if kept |")
 print("| Container Apps environment (consumption) | no base charge | 0.00 | 0.00 |")
-print("| Container Apps compute (query + 3 jobs) | see usage table; MEASURED in C5 | UNPRICED (within free grant) | 0.00 |")
+print("| Container Apps compute (query + 2 jobs, +1 with the tiering flag) | see usage table; MEASURED in C5 | UNPRICED (within free grant) | 0.00 |")
 print(f"| **Priced subtotal** | | **{B1 * HOURS:.2f}** | **0.00 to {B1 * HOURS:.2f}** |")
 print()
 print(f"Variant: App Service B2 instead of B1 would cost {B2 * HOURS:.2f} EUR/month (+{(B2 - B1) * HOURS:.2f}); B1 is kept (SPEC-07 section 2).")
@@ -56,8 +57,9 @@ print()
 USAGE = [
     ("tidal-query (40 active h, min replicas 0)", 0.5, 1.0, 40 * 3600, 1),
     ("synth-daily (600 s x 30)", 1.0, 2.0, 600, 30),
-    ("tiering (600 s x 20 messages)", 1.0, 2.0, 600, 20),
+    # Only with enable_tiering_event_job = true (default false, T-403); see the scenario table.
 ]
+TIERING = ("tiering event job, flag on (600 s x 20 messages)", 1.0, 2.0, 600, 20)
 YEARLY = ("tiering-yearly (6 h timeout, January only)", 2.0, 4.0, 6 * 3600, 1)
 
 print("| Workload | vCPU | GiB | vCPU-s/month | GiB-s/month |")
@@ -70,10 +72,18 @@ for name, c, g, s, n in USAGE:
 name, c, g, s, n = YEARLY
 yv, yg = c * s * n, g * s * n
 print(f"| {name} | {c} | {g} | {yv:,.0f} | {yg:,.0f} |")
+_, tc, tgb, ts, tn = TIERING
+xv, xg = tc * ts * tn, tgb * ts * tn
+print(f"| {TIERING[0]} | {tc} | {tgb} | {xv:,.0f} | {xg:,.0f} |")
 print()
 print("| Month | vCPU-s | vs grant 180,000 | GiB-s | vs grant 360,000 | Above grant |")
 print("|---|---:|---:|---:|---:|---|")
-for label, v, g_ in (("typical", tv, tg), ("January (yearly job runs)", tv + yv, tg + yg)):
+for label, v, g_ in (
+    ("typical (default flags)", tv, tg),
+    ("January (yearly job runs)", tv + yv, tg + yg),
+    ("typical + tiering event job", tv + xv, tg + xg),
+    ("January + tiering event job", tv + yv + xv, tg + yg + xg),
+):
     over = "none" if v <= GRANT_VCPU_S and g_ <= GRANT_GIB_S else "UNPRICED (meter has no usable price, C5)"
     print(f"| {label} | {v:,.0f} | {v / GRANT_VCPU_S:.0%} | {g_:,.0f} | {g_ / GRANT_GIB_S:.0%} | {over} |")
 print()

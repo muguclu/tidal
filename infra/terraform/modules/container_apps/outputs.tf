@@ -8,6 +8,11 @@ output "query_app_name" {
   value       = azurerm_container_app.query.name
 }
 
+output "query_app_id" {
+  description = "Resource ID of the tidal-query Container App (target of the ingress IP allow-list patch in envs/dev/apps.tf)."
+  value       = azurerm_container_app.query.id
+}
+
 output "query_fqdn" {
   description = "Ingress FQDN of tidal-query; maps to TIDAL_QUERY__BASE_URL as https://<fqdn>. null when the app has no ingress."
   value       = one(azurerm_container_app.query.ingress[*].fqdn)

@@ -47,7 +47,7 @@ module "container_apps" {
   component           = "compute"
 
   registry_server = "acrtidaldevexample.azurecr.io"
-  image           = "acrtidaldevexample.azurecr.io/tidal:latest"
+  image           = "acrtidaldevexample.azurecr.io/tidal:v0.1.0"
 
   common_env = {
     TIDAL_STORAGE__ACCOUNT_URL          = "https://sttidaldevexample.blob.core.windows.net"
@@ -73,7 +73,7 @@ module "container_apps" {
       identity_id        = module.identity.identities["id-tiering"].id
       identity_client_id = module.identity.identities["id-tiering"].client_id
       service_name       = "tiering"
-      command            = ["tidal-tiering", "run"]
+      command            = ["tidal-worker", "--queue", "tiering-jobs", "--max-messages", "1"]
       queue = {
         namespace  = "sb-tidal-dev-example"
         queue_name = "tiering-jobs"

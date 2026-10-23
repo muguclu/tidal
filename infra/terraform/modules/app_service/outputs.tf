@@ -17,3 +17,8 @@ output "plan_id" {
   description = "Resource ID of the App Service plan (the B1 plan is the billed resource)."
   value       = azurerm_service_plan.this.id
 }
+
+output "possible_outbound_ip_addresses" {
+  description = "Every outbound IP the web app can use (possible_outbound_ip_address_list); the allow-list for tidal-query ingress."
+  value       = azurerm_linux_web_app.this.possible_outbound_ip_address_list
+}

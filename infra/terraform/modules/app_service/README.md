@@ -42,8 +42,9 @@ Usage: see `examples/basic`.
 | <a name="input_health_check_path"></a> [health\_check\_path](#input\_health\_check\_path) | HTTP path App Service probes; the API serves /v1/health/live (deploy/docker/Dockerfile notes). | `string` | `"/v1/health/live"` | no |
 | <a name="input_identity_client_id"></a> [identity\_client\_id](#input\_identity\_client\_id) | Client ID of the same identity; set as AZURE\_CLIENT\_ID and as the registry pull identity. | `string` | n/a | yes |
 | <a name="input_identity_id"></a> [identity\_id](#input\_identity\_id) | Resource ID of the user-assigned identity (id-api) of the app. It pulls the image (needs AcrPull on the registry before this module is applied) and carries the data roles of SPEC-06 section 2. | `string` | n/a | yes |
-| <a name="input_image_name"></a> [image\_name](#input\_image\_name) | Repository and tag inside the registry (for example tidal:latest). The deploy workflow (T-311) moves the tag, so changes are ignored after creation. | `string` | `"tidal:latest"` | no |
+| <a name="input_image_name"></a> [image\_name](#input\_image\_name) | Repository and tag inside the registry (for example tidal:v0.1.0). The tag must not be latest. The deploy workflow (T-311) moves the tag, so changes are ignored after creation. | `string` | n/a | yes |
 | <a name="input_location"></a> [location](#input\_location) | Azure region. | `string` | `"westeurope"` | no |
+| <a name="input_log_retention_days"></a> [log\_retention\_days](#input\_log\_retention\_days) | Days of application and HTTP logs kept on the app filesystem (cheapest option: no Log Analytics ingestion, which is capped at 0.2 GB/day). 1 to 7. | `number` | `3` | no |
 | <a name="input_name_suffix"></a> [name\_suffix](#input\_name\_suffix) | Suffix that makes the web app host name (<name>.azurewebsites.net) globally unique. 3 to 8 lowercase letters or digits. | `string` | n/a | yes |
 | <a name="input_registry_server"></a> [registry\_server](#input\_registry\_server) | ACR login server (for example acrtidaldevabc.azurecr.io); used with the managed identity pull, no admin credentials. | `string` | n/a | yes |
 | <a name="input_resource_group_name"></a> [resource\_group\_name](#input\_resource\_group\_name) | Resource group that holds the plan and the web app. | `string` | n/a | yes |
@@ -60,4 +61,6 @@ Usage: see `examples/basic`.
 | <a name="output_id"></a> [id](#output\_id) | Resource ID of the web app. |
 | <a name="output_name"></a> [name](#output\_name) | Web app name; target of the deploy workflow (T-311) and of az webapp stop in the park script (T-313). |
 | <a name="output_plan_id"></a> [plan\_id](#output\_plan\_id) | Resource ID of the App Service plan (the B1 plan is the billed resource). |
+| <a name="output_possible_outbound_ip_addresses"></a> [possible\_outbound\_ip\_addresses](#output\_possible\_outbound\_ip\_addresses) | Every outbound IP the web app can use (possible\_outbound\_ip\_address\_list); the allow-list for tidal-query ingress. |
+
 <!-- END_TF_DOCS -->

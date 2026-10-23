@@ -67,7 +67,9 @@ variable "queues" {
       dead_lettering_on_message_expiration = true
     }
     "tiering-jobs" = {
-      max_delivery_count = 3
+      max_delivery_count                   = 3
+      default_message_ttl                  = "P1D"
+      dead_lettering_on_message_expiration = true
     }
   }
 

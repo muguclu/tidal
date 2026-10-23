@@ -41,12 +41,6 @@ resource "azurerm_linux_web_app" "this" {
   #checkov:skip=CKV_AZURE_17:Client certificates are not used; callers authenticate with Entra ID bearer tokens
   #checkov:skip=CKV_AZURE_88:No Azure Files mount; WEBSITES_ENABLE_APP_SERVICE_STORAGE is false
   #checkov:skip=CKV_AZURE_222:Public network access stays on until the private networking phase (T-404, SPEC-06 section 4); every route needs an Entra JWT
-  #checkov:skip=CKV_AZURE_63:App Service HTTP/application logs are off; the API logs structured JSON through OpenTelemetry to Application Insights (CLAUDE.md section 3) and the 0.2 GB/day Log Analytics cap rules out duplicate streams
-  #checkov:skip=CKV_AZURE_65:Same as CKV_AZURE_63: diagnostics go through OpenTelemetry, not the App Service log provider
-  #checkov:skip=CKV_AZURE_66:Failed request tracing is off for the same reason as CKV_AZURE_63
-  #checkov:skip=CKV_AZURE_16:App Service Entra registration is replaced by in-app JWT validation (see CKV_AZURE_13)
-  #checkov:skip=CKV_AZURE_71:A system-assigned identity is not used; the app has the user-assigned identity id-api (SPEC-06 section 1)
-  #checkov:skip=CKV_AZURE_214:Health check is configured through site_config.health_check_path; the check only recognises the older attribute set
   public_network_access_enabled = true
   client_certificate_enabled    = false
 
@@ -94,6 +88,24 @@ resource "azurerm_linux_web_app" "this" {
   }
 
   app_settings = local.app_settings
+
+  # Application and HTTP logs go to the app filesystem with a short retention: no extra meter, and it keeps the
+  # 0.2 GB/day Log Analytics cap for OpenTelemetry. Detailed errors and failed request tracing are filesystem-only too. The 35 MB quota makes App Service stop writing when full.
+  logs {
+    detailed_error_messages = true
+    failed_request_tracing  = true
+
+    application_logs {
+      file_system_level = "Warning"
+    }
+
+    http_logs {
+      file_system {
+        retention_in_days = var.log_retention_days
+        retention_in_mb   = 35
+      }
+    }
+  }
 
   tags = local.tags
 

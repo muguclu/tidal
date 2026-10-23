@@ -72,13 +72,13 @@ variable "common_env" {
   default     = {}
 
   validation {
-    condition     = alltrue([for k in keys(var.common_env) : !contains(["TIDAL_ENV", "AZURE_CLIENT_ID", "TIDAL_SERVICE_NAME"], k) && !can(regex("(PASSWORD|CONNECTION_STRING|SECRET|KEY)$", k))])
-    error_message = "common_env must not set TIDAL_ENV, AZURE_CLIENT_ID or TIDAL_SERVICE_NAME (the module sets them) and must not carry secrets (names ending in PASSWORD, CONNECTION_STRING, SECRET or KEY)."
+    condition     = alltrue([for k in keys(var.common_env) : !contains(["TIDAL_ENV", "AZURE_CLIENT_ID", "TIDAL_SERVICE_NAME"], k) && !can(regex("(?i)(PASSWORD|CONNECTION_STRING|SECRET|KEY|TOKEN|SAS|CREDENTIAL)", k)) && !can(regex("(?i)(sig=|AccountKey=|SharedAccessKey=)", var.common_env[k]))])
+    error_message = "common_env must not set TIDAL_ENV, AZURE_CLIENT_ID or TIDAL_SERVICE_NAME (the module sets them) and must not carry secrets (names containing PASSWORD, CONNECTION_STRING, SECRET, KEY, TOKEN, SAS or CREDENTIAL, any case) and values must not look like SAS or storage keys (sig=, AccountKey=, SharedAccessKey=)."
   }
 }
 
 variable "query" {
-  description = "The tidal-query Container App (SPEC-07 section 2): min 0 / max 5 replicas, HTTP scale rule 20 concurrent requests. identity_id is the user-assigned identity (id-query) that pulls the image and reads data; it needs AcrPull on the registry before this module is applied. external_ingress = true because the environment has no VNet yet (T-404) and the App Service API must reach it; every request still needs an Entra JWT (SPEC-06 section 1). Set false once a VNet exists."
+  description = "The tidal-query Container App (SPEC-07 section 2): min 0 / max 5 replicas, HTTP scale rule 20 concurrent requests. identity_id is the user-assigned identity (id-query) that pulls the image and reads data; it needs AcrPull on the registry before this module is applied. external_ingress = true because the environment has no VNet yet (T-404) and the App Service API must reach it; every request still needs an Entra JWT (SPEC-06 section 1). The caller IP allow-list is applied outside the module (envs/dev/apps.tf, azapi) because the web app needs this app's FQDN, which would make a module cycle. Set external_ingress false once a VNet exists."
   type = object({
     identity_id         = string
     identity_client_id  = string

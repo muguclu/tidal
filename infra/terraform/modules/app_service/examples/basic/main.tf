@@ -48,6 +48,7 @@ module "app_service" {
   component           = "compute"
 
   registry_server    = "acrtidaldevexample.azurecr.io"
+  image_name         = "tidal:v0.1.0"
   identity_id        = module.identity.identities["id-api"].id
   identity_client_id = module.identity.identities["id-api"].client_id
 

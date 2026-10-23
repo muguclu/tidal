@@ -27,6 +27,7 @@ resource "azurerm_container_app_environment" "this" {
 
   # Checkov has no policies for the container app resource types (0 resources evaluated), so there are no skips here.
   # Deferred hardening: internal load balancer and VNet (T-404, SPEC-06 section 4).
+  # Logs go to the shared workspace (0.2 GB/day cap) when log_analytics_workspace_id is set.
   log_analytics_workspace_id = var.log_analytics_workspace_id
 
   # Zone redundancy needs a VNet subnet (T-404) and costs more; single-zone dev environment (provider default).
@@ -111,7 +112,11 @@ resource "azurerm_container_app" "query" {
 
   # The deploy workflow (T-311) rolls new image tags; Terraform only seeds the first revision.
   lifecycle {
-    ignore_changes = [template[0].container[0].image]
+    ignore_changes = [
+      template[0].container[0].image,
+      # Set by azapi in envs/dev/apps.tf (caller IP allow-list); Terraform must not reset it.
+      ingress[0].ip_security_restriction,
+    ]
   }
 }
 

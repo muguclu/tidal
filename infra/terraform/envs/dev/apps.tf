@@ -9,14 +9,19 @@ variable "enable_app_service" {
 }
 
 variable "apps_image_tag" {
-  description = "Tag of the tidal image used for the first revision of every app and job. The deploy workflow (T-311) rolls later tags; Terraform ignores image changes afterwards."
+  description = "Tag of the tidal image used for the first revision of every app and job (for example v0.1.0 or sha-abc1234). Required and never latest. The deploy workflow (T-311) rolls later tags; Terraform ignores image changes afterwards."
   type        = string
-  default     = "latest"
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9._-]{1,128}$", var.apps_image_tag))
-    error_message = "apps_image_tag must be a valid image tag."
+    condition     = can(regex("^[A-Za-z0-9._-]{1,128}$", var.apps_image_tag)) && var.apps_image_tag != "latest"
+    error_message = "apps_image_tag must be a valid image tag and must not be latest."
   }
+}
+
+variable "enable_tiering_event_job" {
+  description = "Create the Service Bus triggered tiering job. Keep false until T-403 grants its KEDA scaler identity Data Owner on the tiering-jobs queue (queue counts need Manage rights) and the id-tiering Data Receiver role; without them the scaler cannot read the queue."
+  type        = bool
+  default     = false
 }
 
 locals {
@@ -74,8 +79,10 @@ module "container_apps" {
   tags                = module.resource_group.tags
   component           = "compute"
 
-  # No log shipping: the workspace cap is 0.2 GB/day (cost-model). The apps send OpenTelemetry to App Insights.
-  log_analytics_workspace_id = null
+  # Environment logs go to the shared workspace, which already has the 0.2 GB/day cap (cost-model).
+  # TIDAL_OTEL__CONNECTION_STRING is not wired: it needs a Key Vault secret that no module creates yet
+  # (secret { key_vault_secret_id, identity } on the app, planned with T-403/T-501); until then telemetry export stays off.
+  log_analytics_workspace_id = module.log_analytics.workspace_id
 
   image           = local.apps_image
   registry_server = module.acr.login_server
@@ -89,7 +96,7 @@ module "container_apps" {
     }
   }
 
-  jobs = {
+  jobs = merge({
     # Daily synthetic bars (ADR-0013; there is no vendor ingest). Idempotent: unchanged cold bars are skipped.
     synth-daily = {
       trigger_type       = "schedule"
@@ -101,25 +108,6 @@ module "container_apps" {
       cpu                = 1
       memory             = "2Gi"
       timeout_seconds    = 3600
-    }
-
-    # SQL hot -> Parquet cold migration, started by a message on tiering-jobs (KEDA, job identity, no secret).
-    # NOTE: this job runs `tidal-tiering run`; until T-303 adds the queue consumer nothing completes the message, so
-    # a message keeps re-triggering the job (one execution at a time, 30 minute cap) until its TTL or max delivery.
-    tiering = {
-      trigger_type       = "event"
-      identity_id        = module.identity.identities["id-tiering"].id
-      identity_client_id = module.identity.identities["id-tiering"].client_id
-      service_name       = "tiering"
-      command            = ["tidal-tiering", "run"]
-      cpu                = 1
-      memory             = "2Gi"
-      timeout_seconds    = 1800
-      max_executions     = 1
-      queue = {
-        namespace  = module.servicebus.name
-        queue_name = "tiering-jobs"
-      }
     }
 
     # Jan 2, 03:00 UTC: retag then compact all five datasets (SPEC-03 section 3.1, ADR-0015).
@@ -136,7 +124,27 @@ module "container_apps" {
       timeout_seconds    = 21600
       retry_limit        = 0
     }
-  }
+    },
+    # SQL hot -> Parquet cold migration, started by a message on tiering-jobs (KEDA scaler with the job identity, no
+    # secret). Off by default: the scaler reads queue counts, which needs Data Owner on the queue, a T-403 decision.
+    var.enable_tiering_event_job ? {
+      tiering = {
+        trigger_type       = "event"
+        identity_id        = module.identity.identities["id-tiering"].id
+        identity_client_id = module.identity.identities["id-tiering"].client_id
+        service_name       = "tiering"
+        command            = ["tidal-worker", "--queue", "tiering-jobs", "--max-messages", "1"]
+        cpu                = 1
+        memory             = "2Gi"
+        timeout_seconds    = 1800
+        max_executions     = 1
+        queue = {
+          namespace  = module.servicebus.name
+          queue_name = "tiering-jobs"
+        }
+      }
+    } : {}
+  )
 
   # The identities must be able to pull before the first revision is created.
   depends_on = [azurerm_role_assignment.apps_acr_pull]
@@ -167,6 +175,31 @@ module "app_service" {
   depends_on = [azurerm_role_assignment.apps_acr_pull]
 }
 
+# Only the web app's outbound IPs may call tidal-query. Patched with azapi because the web app needs the query FQDN
+# (a module-level input would be a cycle). IP filtering is not identity: T-402 must also check caller oid/azp == id-api.
+resource "azapi_update_resource" "query_ip_allow_list" {
+  count = var.enable_app_service ? 1 : 0
+
+  type        = "Microsoft.App/containerApps@2024-03-01"
+  resource_id = module.container_apps.query_app_id
+
+  body = {
+    properties = {
+      configuration = {
+        ingress = {
+          ipSecurityRestrictions = [
+            for ip in module.app_service[0].possible_outbound_ip_addresses : {
+              name           = "allow-${replace(ip, ".", "-")}"
+              action         = "Allow"
+              ipAddressRange = "${ip}/32"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
+
 output "api_hostname" {
   description = "Default host name of the tidal-api web app, or null when enable_app_service is false."
   value       = one(module.app_service[*].default_hostname)
@@ -178,6 +211,6 @@ output "query_fqdn" {
 }
 
 output "apps_job_names" {
-  description = "Container Apps Job names by short name (synth-daily, tiering, tiering-yearly); start manually with az containerapp job start."
+  description = "Container Apps Job names by short name (synth-daily, tiering-yearly, and tiering when enable_tiering_event_job is true); start manually with az containerapp job start."
   value       = module.container_apps.job_names
 }
