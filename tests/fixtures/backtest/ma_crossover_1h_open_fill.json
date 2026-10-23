@@ -1,0 +1,28 @@
+{
+  "name": "ma_crossover_1h_open_fill",
+  "strategy": "ma_crossover",
+  "interval": "1h",
+  "params": {"fast": 1, "slow": 2},
+  "costs": {"fee_bps": 0, "slippage_bps": 0},
+  "t0_ns": 1577836800000000000,
+  "step_ns": 3600000000000,
+  "bars": {"T.A.X": {
+    "open":  [100, 99, 108, 121, 112, 98, 92, 99, 111, 119],
+    "close": [100, 100, 110, 120, 110, 100, 90, 100, 110, 120]}},
+  "expected": {
+    "position": [0, 0, 0, 1, 1, -1, -1, -1, 1, 1],
+    "equity": [1000000, 1000000, 1000000, 1000000, 910000, 770000, 830000, 760000, 640000, 720000],
+    "drawdown": [0, 0, 0, 0, -0.09, -0.23, -0.17, -0.24, -0.36, -0.28],
+    "trades": [
+      {"idx": 3, "instrument_id": "T.A.X", "qty": 10000, "price": 121, "fee": 0, "slippage": 0},
+      {"idx": 5, "instrument_id": "T.A.X", "qty": -20000, "price": 98, "fee": 0, "slippage": 0},
+      {"idx": 8, "instrument_id": "T.A.X", "qty": 20000, "price": 111, "fee": 0, "slippage": 0}
+    ],
+    "n_trades": 3,
+    "hit_rate": 0.0,
+    "max_drawdown": -0.36,
+    "total_abs_position_change": 5,
+    "periods_per_year": 6048
+  },
+  "result_sha256": "ed112dc09774a6d53a1401309d64c72c9ab6a700cc0b88648e6ff65e63545d60"
+}
