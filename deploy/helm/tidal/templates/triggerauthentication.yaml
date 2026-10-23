@@ -1,0 +1,12 @@
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: tidal-worker-servicebus
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "tidal.labels" . | nindent 4 }}
+spec:
+  podIdentity:
+    provider: azure-workload
+    # KEDA operator identity (T-403), not the worker: Data Owner on backtest-jobs.
+    identityId: {{ required "keda.identityClientId is required" .Values.keda.identityClientId | quote }}

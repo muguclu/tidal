@@ -53,6 +53,10 @@ Rules: every module has `variables.tf` with descriptions + validation, `outputs.
 - Templates: `serviceaccount` (workload identity annotations), `scaledjob-backtest`,
   `triggerauthentication` (`podIdentity: azure-workload`), `secretproviderclass`, `networkpolicy`
   (deny-all + allow egress 443), `poddisruptionbudget`, `resourcequota` for namespace `tidal`.
+  T-307 ships `namespace`, `serviceaccount`, `triggerauthentication`, `scaledjob-backtest`, `networkpolicy`,
+  `resourcequota`. `secretproviderclass` is omitted (the worker uses Managed Identity only, no secrets) and
+  `poddisruptionbudget` is omitted (ScaledJob pods are Jobs, nothing to keep available); add both when an
+  API/query workload moves to AKS.
 - `values-dev.yaml`; `helm lint`, `kubeconform`, `kube-linter` in CI.
 
 ## 6. Acceptance criteria

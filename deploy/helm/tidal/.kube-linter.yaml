@@ -1,0 +1,29 @@
+# kube-linter config for the tidal chart. Run against `helm template` output; because kube-linter
+# skips unknown CRDs, CI also converts the ScaledJob jobTargetRef into a batch/v1 Job so the worker
+# pod spec is linted (see README, "Checks").
+checks:
+  addAllBuiltIn: true
+  exclude:
+    # Batch worker with no listening port; the Dockerfile has no HEALTHCHECK either. The job's
+    # activeDeadlineSeconds bounds a hung run, and KEDA/Service Bus lock expiry redelivers the message.
+    - no-readiness-probe
+    - no-liveness-probe
+    # kube-linter wants a Service/other object to select NetworkPolicy targets by app label; ours
+    # select all pods in the namespace (podSelector: {}) on purpose (default deny).
+    - dangling-networkpolicy
+    # Schema validation is done by kubeconform (strict, with the datreeio CRD catalog); kube-linter
+    # would only re-download the same schemas.
+    - schema-validation
+    # Placement uses nodeSelector + tolerations (pinned to the spot pool label/taint from the aks
+    # module); an additional affinity rule would duplicate it.
+    - no-node-affinity
+    # Cluster DNS options are the AKS defaults; no per-pod tuning needed.
+    - dnsconfig-options
+    # Portfolio repo: ownership is the repo/CODEOWNERS, not per-object email/owner metadata.
+    - required-annotation-email
+    - required-label-owner
+    # Job pods must use Never or OnFailure; Never with backoffLimit 0 is deliberate: a failed run
+    # must be redelivered by Service Bus (max delivery 3 + DLQ), not restarted in place.
+    - restart-policy
+    # Style-only check on key ordering in generated YAML; Helm output order is not ours to control.
+    - sorted-keys
