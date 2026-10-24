@@ -142,9 +142,9 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | T-405 | Supply-chain hardening | platform-engineer | W4/L3 | T-307 | Dockerfile, Helm values, CI scans | SPEC-06 §5 | done |
 | T-407 | SQL auditing + Defender/VA decision | infra-engineer | W4/L1 | T-123, T-120 | `modules/sql/auditing.tf`, `docs/finops/deltas/T-407.md` | server auditing to Log Analytics; VA/Defender for SQL decided with cost (ADR); checkov CKV_AZURE_23/24, CKV2_AZURE_2 resolved | done |
 | T-406 | Threat model & sign-off | security-reviewer | W4/review | T-402…T-405 | `docs/adr/0008-threat-model.md` | SPEC-06 §7 checklist signed | done |
-| T-408 | `sp-tidal-ci-plan` into Terraform + drift scope (ADR-0008 R-18) | infra-engineer | W4/follow-up | T-403 | `infra/terraform/bootstrap/**`, `docs/rbac/expected.json` | plan identity (Reader + state Blob Reader) created by bootstrap, listed in expected.json, covered by `rbac-drift` | todo |
-| T-409 | kube-linter + kubeconform in CI (ADR-0008 R-19) | platform-engineer | W4/follow-up | T-307 | `.github/workflows/ci.yml` (chart job), `tests/unit/deploy/**` | chart rendered with values-dev and linted on every PR touching `deploy/helm/**`; test asserts no privileged/host*; no Docker-skip in CI | todo |
-| T-410 | `/v1/admin/*` routes with HTTP role tests (ADR-0008 R-20) | api-engineer | W4/follow-up | T-402, T-205 | `src/tidal/api/routers/admin.py` +tests | `/v1/admin/tiering/run` and `/v1/admin/storage/stats` per openapi.yaml; Trader → 403, Admin → 2xx over HTTP | todo |
+| T-408 | `sp-tidal-ci-plan` into Terraform + drift scope (ADR-0008 R-18) | infra-engineer | W4/follow-up | T-403 | `infra/terraform/bootstrap/**`, `docs/rbac/expected.json` | plan identity (Reader + state Blob Reader) created by bootstrap, listed in expected.json, covered by `rbac-drift` | done |
+| T-409 | kube-linter + kubeconform in CI (ADR-0008 R-19) | platform-engineer | W4/follow-up | T-307 | `.github/workflows/ci.yml` (chart job), `tests/unit/deploy/**` | chart rendered with values-dev and linted on every PR touching `deploy/helm/**`; test asserts no privileged/host*; no Docker-skip in CI | done |
+| T-410 | `/v1/admin/*` routes with HTTP role tests (ADR-0008 R-20) | api-engineer | W4/follow-up | T-402, T-205 | `src/tidal/api/routers/admin.py` +tests | `/v1/admin/tiering/run` and `/v1/admin/storage/stats` per openapi.yaml; Trader → 403, Admin → 2xx over HTTP | done |
 
 **Gate G4**
 
