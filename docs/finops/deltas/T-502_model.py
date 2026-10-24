@@ -35,8 +35,11 @@ SCENARIOS = {"fixture rows/day": 1.0, "10x rows/day (AKS, more meters)": 10.0}
 
 
 def main() -> None:
+    """Print the T-502 delta tables from prices.yaml."""
     prices_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("docs/finops/prices.yaml")
-    prices = {p["key"]: p for p in yaml.safe_load(prices_path.read_text(encoding="utf-8"))["prices"]}
+    prices = {
+        p["key"]: p for p in yaml.safe_load(prices_path.read_text(encoding="utf-8"))["prices"]
+    }
     stored = prices["blob_hot_stored_gb_month"]["unitPrice"]
     write_10k = prices["blob_hot_write_10k"]["unitPrice"]
     read_10k = prices["blob_hot_read_10k"]["unitPrice"]
@@ -47,10 +50,16 @@ def main() -> None:
     days = len({r["Date"] for r in rows})
     bytes_per_row = len(data) / len(rows)
     rows_per_day = len(rows) / days
-    print(f"fixture (MEASURED, synthetic): {len(rows)} rows, {days} days, {bytes_per_row:.1f} B/row, {rows_per_day:.1f} rows/day")
-    print(f"prices (prices.yaml): stored {stored} /GB-month, write {write_10k} /10K, read {read_10k} /10K")
+    print(
+        f"fixture (MEASURED, synthetic): {len(rows)} rows, {days} days, {bytes_per_row:.1f} B/row, {rows_per_day:.1f} rows/day"
+    )
+    print(
+        f"prices (prices.yaml): stored {stored} /GB-month, write {write_10k} /10K, read {read_10k} /10K"
+    )
     print()
-    print("| Scenario | MB per month file | GB stored (12 months) | Stored | Writes | Reads | Total EUR/month |")
+    print(
+        "| Scenario | MB per month file | GB stored (12 months) | Stored | Writes | Reads | Total EUR/month |"
+    )
     print("|---|---|---|---|---|---|---|")
     for name, factor in SCENARIOS.items():
         month_bytes = rows_per_day * factor * bytes_per_row * DAYS_PER_MONTH
@@ -61,7 +70,9 @@ def main() -> None:
         c_writes = writes / 10_000 * write_10k
         c_reads = reads / 10_000 * read_10k
         total = c_stored + c_writes + c_reads
-        print(f"| {name} | {month_bytes / 1e6:.3f} | {gb_stored:.6f} | {c_stored:.6f} | {c_writes:.6f} | {c_reads:.6f} | {total:.6f} |")
+        print(
+            f"| {name} | {month_bytes / 1e6:.3f} | {gb_stored:.6f} | {c_stored:.6f} | {c_writes:.6f} | {c_reads:.6f} | {total:.6f} |"
+        )
 
 
 if __name__ == "__main__":
