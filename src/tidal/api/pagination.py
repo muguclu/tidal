@@ -2,11 +2,9 @@
 
 A cursor encodes the position of the first un-emitted row: ``(ts_ns, idx)`` where ``idx`` is the
 ordinal of the row among rows sharing that ``ts_ns`` (ticks can collide). The signing key is a
-per-process random key held on ``app.state``.
-
-LIMITATION (until T-402 adds a configured key): there is no key in settings yet, so cursors are
-valid only on the process that issued them (and die on restart). Multi-instance deployments need
-a shared key.
+key held on ``app.state.cursor_key``: the shared secret from Key Vault (``TIDAL_CURSOR__*``,
+resolved by ``tidal.api.auth.resolve_cursor_key``), so cursors survive restarts and work across
+replicas. Only in ``TIDAL_ENV=local`` without a configured key is a per-process random key used.
 
 Pages are read from the reader's stream starting at the cursor position (see
 ``tidal.api.streaming.page_from_stream``), so a page costs at most one reader slice.
@@ -42,7 +40,7 @@ class Position:
 
 
 def cursor_key(request: Request) -> bytes:
-    """The per-process signing key (created on first use)."""
+    """The configured signing key; local without one gets a per-process random key."""
     state = request.app.state
     if getattr(state, "cursor_key", None) is None:
         state.cursor_key = secrets.token_bytes(32)

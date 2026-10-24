@@ -1,4 +1,4 @@
-"""Settings mirroring ``docs/contracts/config-contract.md`` v1.2.
+"""Settings mirroring ``docs/contracts/config-contract.md`` v1.3.
 
 Prefix ``TIDAL_``, nested delimiter ``__``. Use :func:`get_settings` in services and
 :meth:`Settings.from_env` with an explicit mapping in tests.
@@ -94,6 +94,18 @@ class AuthSettings(_Section):
     tenant_id: UUID | None = None
     audience: str = "api://tidal"
     disabled: bool = False
+    jwks_url: str | None = None  # local only: http(s) URL or file path (.data/dev-jwks/jwks.json)
+    query_role: str = "Tidal.Query.Read"  # app role tidal-query requires from its caller
+    api_client_id: str | None = None  # id-api client id, compared with azp/appid (tidal-query)
+    api_object_id: str | None = None  # id-api object id, compared with oid (tidal-query)
+
+
+class CursorSettings(_Section):
+    """``TIDAL_CURSOR__*``: HMAC key for pagination cursors (shared by all api replicas)."""
+
+    key: SecretStr | None = None
+    keyvault_url: Url | None = None
+    secret_name: str = "cursor-hmac-key"  # noqa: S105 - a Key Vault secret name, not a secret
 
 
 class SynthSettings(_Section):
@@ -177,6 +189,7 @@ class Settings(BaseSettings):
     servicebus: ServiceBusSettings = ServiceBusSettings()
     query: QuerySettings = QuerySettings()
     auth: AuthSettings = AuthSettings()
+    cursor: CursorSettings = CursorSettings()
     synth: SynthSettings = SynthSettings()
     clock: ClockSettings = ClockSettings()
     otel: OtelSettings = OtelSettings()
@@ -228,6 +241,10 @@ class Settings(BaseSettings):
     def _startup_rules(self) -> Self:
         problems: list[str] = []
         if self.env != "local":
+            if self.auth.jwks_url is not None:
+                problems.append(f"TIDAL_AUTH__JWKS_URL must not be set when TIDAL_ENV={self.env}")
+            if self.cursor.key is not None:
+                problems.append(f"TIDAL_CURSOR__KEY must not be set when TIDAL_ENV={self.env}")
             if self.auth.disabled:
                 problems.append("TIDAL_AUTH__DISABLED=true is only allowed when TIDAL_ENV=local")
             elif self.auth.tenant_id is None:

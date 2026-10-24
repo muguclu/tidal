@@ -78,7 +78,7 @@ def _sample(key: str, typ: str) -> tuple[str, Any]:
 
 
 def test_contract_table_parsed() -> None:
-    assert len(ROWS) == 25
+    assert len(ROWS) == 32
 
 
 def test_code_keys_equal_contract_keys() -> None:
@@ -334,7 +334,7 @@ def test_invalid_values_fail_without_echoing_input(key: str, value: str) -> None
 
 def test_secrets_never_revealed() -> None:
     secrets = [key for key, typ, *_ in ROWS if typ == "secret"]
-    assert len(secrets) == 4
+    assert len(secrets) == 5
     settings = Settings.from_env(_local(**{k: f"pw-{i}-hunter2" for i, k in enumerate(secrets)}))
     rendered = [
         repr(settings),
