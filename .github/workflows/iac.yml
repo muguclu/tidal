@@ -199,11 +199,27 @@ jobs:
   # Never grant it write roles or an environment subject. See docs/runbooks/bootstrap.md.
   # NEEDS-CLOUD: inactive until the repo variable AZURE_PLAN_CLIENT_ID is set (client id of the
   # read-only sp-tidal-ci-plan app, see docs/runbooks/bootstrap.md). Plan only; never apply.
+  #
+  # Private networking (T-404): with the repo variable TIDAL_PRIVATE_NETWORKING set to "true" the dev environment runs
+  # with enable_private_networking = true. A GitHub-hosted runner cannot reach Blob, Key Vault or SQL then, so a plan from
+  # here would fail or, worse, plan against an unreadable state and propose a revert. The plan job is skipped and
+  # plan-skipped-private-networking prints why. Plan from a host inside the VNet instead.
+  plan-skipped-private-networking:
+    name: plan skipped (private networking)
+    needs: [changes]
+    if: vars.TIDAL_PRIVATE_NETWORKING == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - run: echo "::notice title=plan skipped::TIDAL_PRIVATE_NETWORKING is true - plan must run from inside the VNet (no such host exists in IaC yet, see modules/network README). Never plan a revert of the private networking flag from CI."
+
   plan:
     name: plan (envs/dev)
     needs: [changes, iac]
     if: >-
       vars.AZURE_PLAN_CLIENT_ID != '' &&
+      vars.TIDAL_PRIVATE_NETWORKING != 'true' &&
       needs.changes.outputs.infra == 'true' &&
       (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest

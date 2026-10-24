@@ -84,6 +84,11 @@ module "container_apps" {
   # (secret { key_vault_secret_id, identity } on the app, planned with T-403/T-501); until then telemetry export stays off.
   log_analytics_workspace_id = module.log_analytics.workspace_id
 
+  # Flag on (network.tf): the environment moves into snet-aca with an internal load balancer, so tidal-query is reachable
+  # from the VNet only (ingress stays https, allow_insecure_connections = false). Flag off: public environment.
+  infrastructure_subnet_id       = module.network.aca_subnet_id
+  internal_load_balancer_enabled = var.enable_private_networking
+
   image           = local.apps_image
   registry_server = module.acr.login_server
   common_env      = local.apps_common_env
@@ -167,6 +172,9 @@ module "app_service" {
   identity_id        = module.identity.identities["id-api"].id
   identity_client_id = module.identity.identities["id-api"].client_id
 
+  # snet-app when enable_private_networking is true (network.tf), null otherwise.
+  vnet_integration_subnet_id = module.network.app_subnet_id
+
   app_settings = merge(local.apps_common_env, {
     TIDAL_QUERY__BASE_URL = "https://${module.container_apps.query_fqdn}"
     TIDAL_AUTH__TENANT_ID = data.azurerm_client_config.current.tenant_id
@@ -175,8 +183,10 @@ module "app_service" {
   depends_on = [azurerm_role_assignment.apps_acr_pull]
 }
 
-# Only the web app's outbound IPs may call tidal-query. Patched with azapi because the web app needs the query FQDN
-# (a module-level input would be a cycle). IP filtering is not identity: T-402 must also check caller oid/azp == id-api.
+# Flag off: only the web app's outbound IPs may call tidal-query. Patched with azapi because the web app needs the query
+# FQDN (a module-level input would be a cycle). IP filtering is not identity: T-402 must also check caller oid/azp == id-api.
+# Flag on: the environment is internal and the web app calls it from snet-app (a private source address, not one of the
+# public outbound IPs), so the allow list is replaced by an empty list; the VNet is the boundary and the JWT check stays.
 resource "azapi_update_resource" "query_ip_allow_list" {
   count = var.enable_app_service ? 1 : 0
 
@@ -187,7 +197,7 @@ resource "azapi_update_resource" "query_ip_allow_list" {
     properties = {
       configuration = {
         ingress = {
-          ipSecurityRestrictions = [
+          ipSecurityRestrictions = var.enable_private_networking ? [] : [
             for ip in module.app_service[0].possible_outbound_ip_addresses : {
               name           = "allow-${replace(ip, ".", "-")}"
               action         = "Allow"
