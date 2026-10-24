@@ -197,6 +197,21 @@
     },
     {
       "principal": "id-api",
+      "role": "Monitoring Metrics Publisher",
+      "scope": "microsoft.insights/components/appi-tidal-dev"
+    },
+    {
+      "principal": "id-query",
+      "role": "Monitoring Metrics Publisher",
+      "scope": "microsoft.insights/components/appi-tidal-dev"
+    },
+    {
+      "principal": "id-worker",
+      "role": "Monitoring Metrics Publisher",
+      "scope": "microsoft.insights/components/appi-tidal-dev"
+    },
+    {
+      "principal": "id-api",
       "role": "Key Vault Secrets User",
       "scope": "microsoft.keyvault/vaults/*/secrets/appinsights-connection-string"
     },

@@ -523,6 +523,33 @@ METERS: tuple[MeterSpec, ...] = (
         "Basic Logs Data Ingestion",
         note="per GB ingested into Basic Logs tables; queries are billed extra, not snapshotted",
     ),
+    # --- Azure Monitor alert rules (T-506): log rules bill per rule and frequency tier, metric
+    # alerts per time series above the first 10, activity-log alerts are free. ---
+    _m(
+        "alerts_log_rule_5min_month",
+        "Azure Monitor",
+        "Azure Monitor",
+        "Alerts",
+        "Alerts Resource Monitored at 5 Minute Frequency",
+        note="per log alert rule per month at 5 min evaluation frequency",
+    ),
+    _m(
+        "alerts_log_rule_15min_month",
+        "Azure Monitor",
+        "Azure Monitor",
+        "Alerts",
+        "Alerts Resource Monitored at 15 Minute Frequency",
+        note="per log alert rule per month at 15 min (or slower) evaluation frequency",
+    ),
+    _m(
+        "alerts_metric_series_month",
+        "Azure Monitor",
+        "Azure Monitor",
+        "Alerts",
+        "Alerts Metric Monitored",
+        tier_min=10.0,
+        note="per monitored metric time series per month above the first 10 free",
+    ),
     # --- Logic Apps Consumption (4-dp rounding distorts per-action prices) ---
     _m(
         "logicapp_consumption_builtin_action_free_tier",

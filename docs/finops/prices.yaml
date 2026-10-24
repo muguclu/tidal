@@ -44,6 +44,36 @@ prices:
   tierMinimumUnits: 6000.0
   unit: 1 Second
   unitPrice: 0.0001
+- effectiveStartDate: '2021-04-01T00:00:00Z'
+  key: alerts_log_rule_15min_month
+  meterId: 194c4a41-5447-5b27-a58d-55397212125b
+  meterName: Alerts Resource Monitored at 15 Minute Frequency
+  note: per log alert rule per month at 15 min (or slower) evaluation frequency
+  productName: Azure Monitor
+  skuName: Alerts
+  tierMinimumUnits: 0.0
+  unit: 1/Month
+  unitPrice: 0.044
+- effectiveStartDate: '2021-04-01T00:00:00Z'
+  key: alerts_log_rule_5min_month
+  meterId: 25bbac3f-6637-54eb-89f2-30d9afed34a0
+  meterName: Alerts Resource Monitored at 5 Minute Frequency
+  note: per log alert rule per month at 5 min evaluation frequency
+  productName: Azure Monitor
+  skuName: Alerts
+  tierMinimumUnits: 0.0
+  unit: 1/Month
+  unitPrice: 0.132
+- effectiveStartDate: '2018-02-01T00:00:00Z'
+  key: alerts_metric_series_month
+  meterId: 6860c782-bbcc-41ed-a218-fb308dd0942e
+  meterName: Alerts Metric Monitored
+  note: per monitored metric time series per month above the first 10 free
+  productName: Azure Monitor
+  skuName: Alerts
+  tierMinimumUnits: 10.0
+  unit: 1/Month
+  unitPrice: 0.088
 - effectiveStartDate: '2019-06-01T00:00:00Z'
   key: appservice_b1_linux_hour
   meterId: e08d4be1-d8c1-49ba-a814-6369d6f14c34
