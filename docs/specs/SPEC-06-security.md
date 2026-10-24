@@ -68,9 +68,18 @@ SQL: Entra-only authentication (`azuread_authentication_only = true`), identitie
 STRIDE table in `docs/adr/0008-threat-model.md` (owned by `security-reviewer`).
 
 ## 7. Acceptance checklist (security-reviewer sign-off)
-- [ ] Zero secrets in repo, image layers, app settings (except KV references).
+Signed in T-406 for **dev** (2026-10-24, `main` at `e848c39`). Evidence per item: `docs/status/2026-W43-G4.md`; residual
+risks: `docs/adr/0008-threat-model.md`. Only items that are PASS are ticked.
+- [x] Zero secrets in repo, image layers, app settings (except KV references). **PASS**: gitleaks v8.24.3 over full history
+  (264 commits) found no leaks; app-setting validation in `modules/{app_service,container_apps}/variables.tf`; trivy secret scan.
 - [ ] Each identity has exactly the roles in §2 (`scripts/rbac-export.sh`: role assignments, Entra app role assignments and app credentials, diffed against `docs/rbac/expected.json` by the nightly, non-required `rbac-drift` job in `iac.yml`).
-- [ ] Shared key access disabled on storage; SQL Entra-only.
-- [ ] Role tests: Reader cannot POST backtests (403); Trader cannot call admin (403).
-- [ ] Trivy clean; non-root containers; no `privileged`/`hostPath` in Helm chart (kube-linter/kubeconform).
-- [ ] Threat model reviewed.
+  **NEEDS-CLOUD**: IaC matches §2; the diff needs a live tenant; `sp-tidal-ci-plan` is outside IaC and the baseline (ADR-0008 R-18).
+- [x] Shared key access disabled on storage; SQL Entra-only. **PASS**: `modules/storage/main.tf:27`, `bootstrap/main.tf:51`,
+  `modules/sql/main.tf:33`.
+- [ ] Role tests: Reader cannot POST backtests (403); Trader cannot call admin (403). **PASS (dev, with caveat)**: Reader 403
+  and Trader 403 on `POST /v1/backtests` pass (`tests/unit/api/test_auth.py`, 43 passed); `/v1/admin/*` is not implemented,
+  so the admin half is only proven by `has_role` unit tests (ADR-0008 R-20).
+- [x] Trivy clean; non-root containers; no `privileged`/`hostPath` in Helm chart (kube-linter/kubeconform). **PASS**: trivy vuln
+  and secret scans passed on the tree of `e848c39` (`images` run 40118624869); `USER 10001`; kubeconform 7/7 valid and kube-linter clean on the rendered chart (run by hand, not in
+  CI: ADR-0008 R-19).
+- [x] Threat model reviewed. **PASS**: `docs/adr/0008-threat-model.md`.
