@@ -57,7 +57,7 @@ Storage benchmark (T-204, same synthetic ticks, SQL formats on a 3-month slice):
 [`storage-benchmark-2026-10-22.md`](docs/finops/results/storage-benchmark-2026-10-22.md). Timing ratios are indicative
 only (timing reproducibility FAILED the 15 % check; size reproducibility passed).
 
-### Monthly totals (re-summed by script, `docs/finops/cost-model.md`)
+### Monthly totals (re-summed by `docs/finops/cost_optimization_report.py`, table in `docs/finops/cost-optimization.md`)
 
 | | Active low | Active high | Parked |
 |---|---:|---:|---:|
@@ -77,7 +77,7 @@ flowchart LR
   end
 
   subgraph STORE["Storage"]
-    BLOB[("ADLS Gen2 Blob<br/>epoch Parquet<br/>Hot / Cool / Cold by age")]
+    BLOB[("Blob Storage, flat namespace<br/>epoch Parquet<br/>Hot / Cool / Cold by age")]
     SQL[("Azure SQL serverless<br/>hot window, 90 d<br/>auto-pause")]
     TIER["tidal-tiering<br/>Container Apps job<br/>SQL to Parquet, compaction"]
   end
@@ -205,10 +205,10 @@ Checked by the orchestrator against `main` with no Azure access. Notes are in [`
 | Gate | Scope | Status | Note |
 |---|---|---|---|
 | G0 | Foundation | PASS (bootstrap apply NEEDS-CLOUD) | CI green, contracts tagged `contracts-v1`, branch protection verified |
-| G1 | Data core, infra base, API on fakes | PASS locally; Terraform plan/apply NEEDS-CLOUD | S-scale synthetic data (73.9M rows incl. bars) generated in 188 s; 20 years of daily history ingested locally |
+| G1 | Data core, infra base, API on fakes | PASS locally; Terraform plan/apply NEEDS-CLOUD | S-scale synthetic data (73.9M rows incl. bars) generated in 188 s; 20+ years of daily history ingested locally |
 | G2 | Storage and query | PASS (local) / NEEDS-CLOUD | Benchmark done; migration idempotent under kill tests; hot+cold equals pure SQL. Scale M not run |
 | G3 | Backtests on AKS | NEEDS-CLOUD | Code complete; the 100-job 0 to N to 0 run needs Azure |
-| G4 | Security | PASS (dev, with conditions) | Gitleaks clean on full history; admin routes not implemented; RBAC drift check NEEDS-CLOUD |
+| G4 | Security | PASS (dev, with conditions) | Gitleaks clean on full history; admin routes added later in T-410 (#84); RBAC drift check NEEDS-CLOUD |
 | G5 | FinOps and observability | PARTIAL | C1 to C10 each have a number and label; only C1 and C2 (local) are MEASURED; budget and anomaly alerts PASS in Terraform |
 | G6 | Portfolio-ready | In progress | Wave 6: README, diagram, runbooks, demo |
 
@@ -221,7 +221,7 @@ infra/terraform/ modules/* and envs/dev (never applied from automation)
 deploy/          docker/, helm/tidal (KEDA ScaledJob), local/ (compose support)
 docs/            PLANNING, specs, contracts, adr, finops, runbooks, status
 tests/           unit, contract, integration, load
-scripts/         park.sh, unpark.sh, rbac-export.sh, protect-main.sh
+scripts/         park.sh, unpark.sh, rbac-export.sh, protect-main.sh, dev-token.py, export_openapi.py
 ```
 
 CLI entrypoints: `tidal`, `tidal-api`, `tidal-query`, `tidal-worker`, `tidal-tiering`.
@@ -241,7 +241,7 @@ CLI entrypoints: `tidal`, `tidal-api`, `tidal-query`, `tidal-worker`, `tidal-tie
 * Nothing is deployed. Every cloud figure is MODELLED or NEEDS-CLOUD until a dev window turns them into MEASURED
   (checklist at the end of the cost report).
 * Local request latency (median 91 ms, 89 requests) is a warm-laptop reference, not a cloud result.
-* `/v1/admin/*` is in the OpenAPI contract but not implemented; `/v1/admin/storage/stats` has no stats source.
+* `/v1/admin/storage/stats` has no stats source yet and returns 503; `/v1/admin/tiering/run` enqueues on `tiering-jobs`.
 * Ingest does not emit telemetry yet, so the ingest-freshness alert is off.
 * Dev has public data-plane endpoints, Defender for SQL off, and no private networking (all priced in the cost report).
 * Synthetic data only. No vendor feed is connected.

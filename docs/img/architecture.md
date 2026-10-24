@@ -10,7 +10,7 @@ flowchart LR
   end
 
   subgraph STORE["Storage"]
-    BLOB[("ADLS Gen2 Blob<br/>epoch Parquet<br/>Hot / Cool / Cold by age")]
+    BLOB[("Blob Storage, flat namespace<br/>epoch Parquet<br/>Hot / Cool / Cold by age")]
     SQL[("Azure SQL serverless<br/>hot window, 90 d<br/>auto-pause")]
     TIER["tidal-tiering<br/>Container Apps job<br/>SQL to Parquet, compaction"]
   end
