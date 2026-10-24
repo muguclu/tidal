@@ -13,24 +13,54 @@ with direct SQL + Blob access.
 import argparse
 import signal
 import sys
+import time
 from collections.abc import Sequence
 from contextlib import ExitStack
 from types import FrameType
 
 from tidal.common.config import Settings, get_settings
 from tidal.common.logging import configure_logging, get_logger
-from tidal.common.timeutil import clock_from_settings
+from tidal.common.telemetry import (
+    configure_telemetry,
+    message_span,
+    record_backtest_duration,
+    record_cold_start,
+    record_queue_lag,
+)
+from tidal.common.timeutil import SystemClock, clock_from_settings
 from tidal.contracts.messages import (
     QUEUE_BACKTEST_JOBS,
     QUEUE_BACKTEST_RESULTS,
     QUEUE_TIERING_JOBS,
 )
-from tidal.worker.consumer import Handler, Worker
+from tidal.worker.consumer import Handler, ReceivedMessage, Verdict, Worker
 from tidal.worker.dlq import BusClient, client_from_settings
 from tidal.worker.handlers import BacktestHandler, TieringHandler
 
 _log = get_logger(__name__)
 MAX_DELIVERY = {QUEUE_BACKTEST_JOBS: 3, QUEUE_TIERING_JOBS: 3}
+
+
+class TracedWorker(Worker):
+    """``Worker`` with a CONSUMER span per message (linked to the producer's ``traceparent``)."""
+
+    queue = ""
+
+    def process(self, msg: ReceivedMessage) -> Verdict:
+        """Trace, time and measure queue lag for one message, then delegate."""
+        props = getattr(msg, "application_properties", None)
+        enqueued = getattr(msg, "enqueued_time_utc", None)
+        record_cold_start("worker")
+        if enqueued is not None:
+            record_queue_lag((SystemClock().now() - enqueued).total_seconds() * 1000, self.queue)
+        started = time.monotonic()
+        with message_span(
+            f"{self.queue} process", props, **{"messaging.destination.name": self.queue}
+        ):
+            verdict = super().process(msg)
+        if self.queue == QUEUE_BACKTEST_JOBS:
+            record_backtest_duration((time.monotonic() - started) * 1000, verdict.value)
+        return verdict
 
 
 def build_handler(queue: str, settings: Settings) -> Handler:
@@ -76,7 +106,8 @@ def run_worker(
             senders[QUEUE_BACKTEST_RESULTS] = stack.enter_context(
                 client.get_queue_sender(QUEUE_BACKTEST_RESULTS)
             )
-        worker = Worker(receiver, handler, senders, max_delivery=MAX_DELIVERY.get(queue, 3))
+        worker = TracedWorker(receiver, handler, senders, max_delivery=MAX_DELIVERY.get(queue, 3))
+        worker.queue = queue
 
         def on_term(_signum: int, _frame: FrameType | None) -> None:
             worker.request_stop()
@@ -95,6 +126,7 @@ def run(argv: Sequence[str] | None = None) -> None:
     queue = args.queue or QUEUE_BACKTEST_JOBS
     settings = get_settings()
     configure_logging(settings)
+    configure_telemetry(settings, "worker")
     code = run_worker(
         client_from_settings(settings),
         build_handler(queue, settings),
