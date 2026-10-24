@@ -1,0 +1,65 @@
+name: chart
+
+# T-409 (ADR-0008 R-19): offline checks of deploy/helm/tidal. NOT a required check.
+# Separate workflow rather than a ci.yml job: ci.yml has no path filters and its jobs run on every PR,
+# while this one is path filtered to the chart (same pattern as images.yml). Tools run as images pinned
+# by tag AND digest, so no third-party action and no install step. No cluster, no credentials.
+
+on:
+  pull_request:
+    paths:
+      - "deploy/helm/**"
+      - ".github/workflows/chart.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: chart-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  chart-lint:
+    name: chart-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      HELM_IMAGE: alpine/helm:4.3.1@sha256:e3f8d5c462d75470fbb1fce79ad5c20063657096d1f98c0fcea869e2600e2e5e
+      KUBECONFORM_IMAGE: ghcr.io/yannh/kubeconform:v0.8.0@sha256:faffaf43f95aa6425306e1ab8d6fcad72acb9049158f38e574c085ea1ec0f64e
+      KUBE_LINTER_IMAGE: stackrox/kube-linter:v0.8.3@sha256:f2bfce7879206d32f69ab6572c376f916643f54ca291ac38cf7d01ef591ff3f9
+      # datreeio/CRDs-catalog commit (KEDA CRD schemas). Bump deliberately, like any other pin.
+      CRD_CATALOG_SHA: 501527ab9c40c827144c8f45945b25a023e344ce
+      PLACEHOLDER_DIGEST: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: helm lint
+        run: |
+          docker run --rm -v "$PWD/deploy/helm/tidal:/c" "$HELM_IMAGE" lint /c -f /c/values-dev.yaml \
+            --set-string "image.digest=$PLACEHOLDER_DIGEST"
+
+      # values-dev.yaml carries the required values (ids, endpoints) as placeholders; the digest is set
+      # explicitly the way deploy.yml does it.
+      - name: helm template (values-dev, placeholder digest)
+        run: |
+          docker run --rm -v "$PWD/deploy/helm/tidal:/c" "$HELM_IMAGE" template tidal /c -f /c/values-dev.yaml \
+            --set-string "image.digest=$PLACEHOLDER_DIGEST" > "$RUNNER_TEMP/rendered.yaml"
+
+      - name: kubeconform (strict, KEDA CRD schemas from the pinned catalog commit)
+        run: |
+          docker run --rm -v "$RUNNER_TEMP:/s:ro" "$KUBECONFORM_IMAGE" -strict -summary \
+            -schema-location default \
+            -schema-location "https://raw.githubusercontent.com/datreeio/CRDs-catalog/${CRD_CATALOG_SHA}/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json" \
+            /s/rendered.yaml
+
+      # kube-linter skips CRDs, so the ScaledJob jobTargetRef is lifted into a batch/v1 Job first.
+      - name: kube-linter (repo config, ScaledJob converted to Job)
+        run: |
+          python3 deploy/helm/tidal/ci/scaledjob_to_job.py "$RUNNER_TEMP/rendered.yaml" > "$RUNNER_TEMP/lint.yaml"
+          docker run --rm -v "$PWD/deploy/helm/tidal/.kube-linter.yaml:/cfg.yaml:ro" -v "$RUNNER_TEMP:/s:ro" \
+            "$KUBE_LINTER_IMAGE" lint --config /cfg.yaml /s/lint.yaml
