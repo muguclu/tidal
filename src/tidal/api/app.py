@@ -2,7 +2,7 @@
 
 import re
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
 
 import uvicorn
@@ -116,10 +116,11 @@ def create_app(
         try:
             yield
         finally:
-            for client in (reader, bus):
-                aclose = getattr(client, "aclose", None)
-                if aclose is not None:  # RemoteReader / ServiceBusBus own connections; fakes none
-                    await aclose()
+            async with AsyncExitStack() as stack:  # each closes even if the other raises
+                for client in (reader, bus):
+                    aclose = getattr(client, "aclose", None)
+                    if aclose is not None:  # RemoteReader / ServiceBusBus own connections
+                        stack.push_async_callback(aclose)
             logger.info("api_stopped")
 
     app = FastAPI(

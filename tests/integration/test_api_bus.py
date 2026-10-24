@@ -68,8 +68,13 @@ async def test_send_ping_and_receive() -> None:
     ):
         got = await rx.receive_messages(max_message_count=10, max_wait_time=10)
         ours = [m for m in got if m.message_id == "tr_it_api_bus:md.bar_hot"]
-        for m in got:
-            await rx.complete_message(m)
+        for m in got:  # touch only our own message; leave everything else on the queue
+            if m.message_id == "tr_it_api_bus:md.bar_hot":
+                await rx.complete_message(m)
+            else:
+                await rx.abandon_message(m)
     assert ours
     assert ours[0].correlation_id == "corr-it"
     assert ours[0].content_type == "application/json"
+    assert ours[0].application_properties is not None
+    assert ours[0].application_properties[b"schema"] == b"tiering.job/v1"

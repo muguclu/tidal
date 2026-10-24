@@ -1,13 +1,23 @@
 """``ServiceBusBus`` against a fake async client: grouping, batching, lifecycle, settings."""
 
+import asyncio
 from typing import Any
 
 import pytest
 from azure.servicebus import ServiceBusMessage
 from azure.servicebus.exceptions import MessageSizeExceededError
+from pydantic import SecretStr
 
-from tidal.api.bus import ServiceBusBus, bus_from_settings
-from tidal.common.config import Settings
+from tidal.api.app import create_app
+from tidal.api.bus import (
+    BusSendError,
+    ServiceBusBus,
+    bus_from_settings,
+    queue_for,
+    to_service_bus_message,
+)
+from tidal.common.config import ServiceBusSettings, Settings
+from tidal.common.errors import ConfigError
 from tidal.contracts.messages import (
     QUEUE_BACKTEST_JOBS,
     QUEUE_TIERING_JOBS,
@@ -15,6 +25,7 @@ from tidal.contracts.messages import (
     TieringJobMessage,
 )
 from tidal.query.protocols import Bus, OutboundMessage
+from tidal.worker.handlers import BacktestHandler, TieringHandler
 
 pytestmark = pytest.mark.anyio
 
@@ -46,17 +57,27 @@ class FakeSender:
         self.capacity = capacity
         self.sent: list[FakeBatch] = []
         self.opened = 0
+        self.exited = 0
+        self.active = 0
+        self.max_active = 0
         self.closed = False
 
     async def __aenter__(self) -> "FakeSender":
         self.opened += 1
         return self
 
+    async def __aexit__(self, *exc: object) -> None:
+        self.exited += 1
+
     async def create_message_batch(self) -> FakeBatch:
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        await asyncio.sleep(0.01)  # yield: an unlocked second caller would interleave here
         return FakeBatch(self.capacity)
 
     async def send_messages(self, batch: FakeBatch) -> None:
         self.sent.append(batch)
+        self.active -= 1
 
     async def close(self) -> None:
         self.closed = True
@@ -146,8 +167,10 @@ async def test_new_batch_when_full_and_count_returned() -> None:
 
 async def test_single_oversized_message_raises() -> None:
     bus = ServiceBusBus(FakeClient(capacity=0))
-    with pytest.raises(MessageSizeExceededError):
+    with pytest.raises(BusSendError) as err:
         await bus.send_batch([tiering(1)])
+    assert isinstance(err.value.__cause__, MessageSizeExceededError)
+    assert err.value.sent == 0
 
 
 async def test_empty_send_is_zero() -> None:
@@ -164,7 +187,8 @@ async def test_sender_cached_ping_sends_nothing_and_aclose() -> None:
     await bus.send_batch([backtest()])
     sender = client.senders[QUEUE_BACKTEST_JOBS]
     assert len(client.senders) == 1
-    assert sender.opened == 1
+    assert sender.opened == 1  # ping's own short-lived link, closed again
+    assert sender.exited == 1
     assert len(sender.sent) == 2
     await bus.aclose()
     assert sender.closed
@@ -173,6 +197,20 @@ async def test_sender_cached_ping_sends_nothing_and_aclose() -> None:
 
 def settings(**env: str) -> Settings:
     return Settings.from_env({"TIDAL_ENV": "local", "TIDAL_AUTH__DISABLED": "true", **env})
+
+
+def dev_settings(**env: str) -> Settings:
+    return Settings.from_env(
+        {
+            "TIDAL_ENV": "dev",
+            "TIDAL_AUTH__TENANT_ID": "11111111-1111-1111-1111-111111111111",
+            "TIDAL_SQL__AUTH": "entra_mi",
+            "TIDAL_SQL__SERVER": "x.database.windows.net",
+            "TIDAL_CURSOR__KEYVAULT_URL": "https://kv-test.vault.azure.net",
+            "TIDAL_STORAGE__USE_MANAGED_IDENTITY": "true",
+            **env,
+        }
+    )
 
 
 async def test_settings_local_connection_string() -> None:
@@ -195,16 +233,126 @@ def test_settings_fqdn_uses_managed_identity(monkeypatch: pytest.MonkeyPatch) ->
     cred = object()
     monkeypatch.setattr("azure.servicebus.aio.ServiceBusClient", Stub)
     monkeypatch.setattr("tidal.api.auth.build_credential", lambda **kw: cred)
-    s = Settings.from_env(
-        {
-            "TIDAL_ENV": "dev",
-            "TIDAL_SQL__AUTH": "entra_mi",
-            "TIDAL_SQL__SERVER": "x.database.windows.net",
-            "TIDAL_CURSOR__KEYVAULT_URL": "https://kv-test.vault.azure.net",
-            "TIDAL_STORAGE__USE_MANAGED_IDENTITY": "true",
-            "TIDAL_AUTH__TENANT_ID": "11111111-1111-1111-1111-111111111111",
-            "TIDAL_SERVICEBUS__FQDN": "sb-tidal.servicebus.windows.net",
+    bus = bus_from_settings(dev_settings(TIDAL_SERVICEBUS__FQDN="sb-tidal.servicebus.windows.net"))
+    assert isinstance(bus, ServiceBusBus)
+    assert seen == {"fqdn": "sb-tidal.servicebus.windows.net", "credential": cred}
+    assert bus._credential is cred
+
+
+def test_connection_string_off_local_is_config_error() -> None:
+    # Settings validation already forbids this; the factory re-checks (defence in depth).
+    s = dev_settings(TIDAL_SERVICEBUS__FQDN="sb-tidal.servicebus.windows.net")
+    s = s.model_copy(
+        update={
+            "servicebus": ServiceBusSettings(
+                connection_string=SecretStr(CONN), fqdn=s.servicebus.fqdn
+            )
         }
     )
-    assert isinstance(bus_from_settings(s), ServiceBusBus)
-    assert seen == {"fqdn": "sb-tidal.servicebus.windows.net", "credential": cred}
+    with pytest.raises(ConfigError):
+        bus_from_settings(s)
+
+
+@pytest.mark.parametrize("fqdn", ["localhost", "", "example.com"])
+def test_non_namespace_fqdn_off_local_is_config_error(fqdn: str) -> None:
+    with pytest.raises(ConfigError):
+        bus_from_settings(dev_settings(TIDAL_SERVICEBUS__FQDN=fqdn))
+
+
+async def test_concurrent_send_batches_do_not_overlap() -> None:
+    client = FakeClient()
+    bus = ServiceBusBus(client)
+    results = await asyncio.gather(bus.send_batch([tiering(1)]), bus.send_batch([tiering(2)]))
+    assert results == [1, 1]
+    assert client.senders[QUEUE_TIERING_JOBS].max_active == 1
+
+
+async def test_ping_concurrent_with_send_is_serialised() -> None:
+    client = FakeClient()
+    bus = ServiceBusBus(client)
+    await asyncio.gather(bus.ping(), bus.send_batch([backtest()]), bus.ping())
+    assert client.senders[QUEUE_BACKTEST_JOBS].max_active == 1
+
+
+async def test_failure_raises_typed_error_with_sent_count() -> None:
+    class Failing(FakeSender):
+        async def send_messages(self, batch: FakeBatch) -> None:
+            if self.sent:
+                raise ConnectionError("down")
+            await super().send_messages(batch)
+
+    client = FakeClient(capacity=2)
+    client.senders[QUEUE_TIERING_JOBS] = Failing(2)
+    with pytest.raises(BusSendError) as err:
+        await ServiceBusBus(client).send_batch([tiering(i) for i in range(5)])
+    assert err.value.sent == 2
+    assert err.value.status == 503
+
+
+async def test_aclose_closes_everything_even_if_a_sender_fails() -> None:
+    class Cred:
+        closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class Boom(FakeSender):
+        async def close(self) -> None:
+            raise RuntimeError("boom")
+
+    client, cred = FakeClient(), Cred()
+    client.senders[QUEUE_TIERING_JOBS] = Boom(1)
+    bus = ServiceBusBus(client, cred)
+    await bus.send_batch([tiering(1)])
+    with pytest.raises(RuntimeError):
+        await bus.aclose()
+    assert client.closed
+    assert cred.closed
+
+
+def test_queue_for_unknown_type_raises() -> None:
+    with pytest.raises(AssertionError):
+        queue_for(object())  # type: ignore[arg-type]  # deliberately wrong type
+
+
+def test_traceparent_present_when_span_active() -> None:
+    from opentelemetry.sdk.trace import TracerProvider  # noqa: PLC0415
+
+    tracer = TracerProvider().get_tracer("test")
+    with tracer.start_as_current_span("producer"):
+        msg = to_service_bus_message(tiering(1))
+    assert msg.application_properties is not None
+    assert str(msg.application_properties["traceparent"]).startswith("00-")
+
+
+def test_round_trip_parses_in_worker_handlers() -> None:
+    backtest_body = b"".join(bytes(p) for p in to_service_bus_message(backtest()).body)
+    tiering_body = b"".join(bytes(p) for p in to_service_bus_message(tiering(1)).body)
+    assert BacktestHandler.parse(None, backtest_body) == backtest()  # type: ignore[arg-type]
+    assert TieringHandler.parse(None, tiering_body) == tiering(1)  # type: ignore[arg-type]
+    for msg, handler in ((backtest(), BacktestHandler), (tiering(1), TieringHandler)):
+        props = to_service_bus_message(msg).application_properties or {}
+        assert props["schema"] == handler.schema
+
+
+async def test_lifespan_closes_bus_and_reader_independently() -> None:
+    closed: list[str] = []
+
+    class Closer:
+        def __init__(self, name: str, *, fail: bool = False) -> None:
+            self.name, self.fail = name, fail
+
+        async def aclose(self) -> None:
+            closed.append(self.name)
+            if self.fail:
+                raise RuntimeError(self.name)
+
+    app = create_app(
+        settings(),
+        reader=Closer("reader", fail=True),  # type: ignore[arg-type]
+        bus=Closer("bus"),  # type: ignore[arg-type]
+    )
+    with pytest.raises(RuntimeError):
+        async with app.router.lifespan_context(app):
+            pass
+    assert sorted(closed) == ["bus", "reader"]
