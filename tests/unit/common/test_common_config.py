@@ -62,6 +62,7 @@ def _sample(key: str, typ: str) -> tuple[str, Any]:
     guid_keys = {
         "TIDAL_AUTH__API_APP_CLIENT_ID",
         "TIDAL_QUERY__APP_CLIENT_ID",
+        "TIDAL_AUTH__ALLOWED_CLIENT_IDS",
         "TIDAL_AUTH__QUERY_CALLER_CLIENT_IDS",
         "TIDAL_AUTH__QUERY_CALLER_OBJECT_IDS",
     }
@@ -86,7 +87,7 @@ def _sample(key: str, typ: str) -> tuple[str, Any]:
 
 
 def test_contract_table_parsed() -> None:
-    assert len(ROWS) == 34
+    assert len(ROWS) == 35
 
 
 def test_code_keys_equal_contract_keys() -> None:

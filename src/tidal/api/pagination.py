@@ -39,6 +39,18 @@ class Position:
     anchor_ns: int | None = None  # ffill: last real bar before this position (read start)
 
 
+class CursorKey(bytes):
+    """Signing key; ``previous`` keys (rotation overlap) verify cursors but never sign."""
+
+    previous: tuple[bytes, ...]
+
+    def __new__(cls, current: bytes, previous: tuple[bytes, ...] = ()) -> "CursorKey":
+        """Current key bytes plus optional previous keys."""
+        obj = super().__new__(cls, current)
+        obj.previous = previous
+        return obj
+
+
 def cursor_key(request: Request) -> bytes:
     """The configured signing key; local without one gets a per-process random key."""
     state = request.app.state
@@ -76,7 +88,9 @@ def decode_cursor(key: bytes, bound: str, token: str) -> Position:
     if not _TOKEN.fullmatch(token):  # before any crypto; also guarantees ASCII for the compare
         raise ValidationFailed(_BAD)
     payload, _, sig = token.partition(".")
-    if not hmac.compare_digest(sig.encode(), _sign(key, payload).encode()):
+    candidates = [bytes(key), *getattr(key, "previous", ())]
+    valid = [hmac.compare_digest(sig.encode(), _sign(k, payload).encode()) for k in candidates]
+    if not any(valid):  # every candidate is checked: no early exit on which key matched
         raise ValidationFailed(_BAD)
     try:
         ts_ns, idx, got, as_of, anchor = json.loads(

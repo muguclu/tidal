@@ -47,7 +47,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from tidal.api.app import CorrelationMiddleware
-from tidal.api.auth import query_validator_from_settings
+from tidal.api.auth import build_credential, query_validator_from_settings
 from tidal.api.deps import assert_auth_allowed
 from tidal.api.errors import CORRELATION_HEADER, register_exception_handlers
 from tidal.api.streaming import TIER_HEADER
@@ -142,9 +142,15 @@ class FailClosedValidator:
 
 
 def token_provider_for(settings: Settings) -> TokenProvider:
-    """Managed Identity everywhere except local with auth disabled."""
+    """Managed Identity everywhere except local with auth disabled.
+
+    Outside local the credential is pinned (workload identity, then the user-assigned identity
+    named by ``AZURE_CLIENT_ID``); a missing ``AZURE_CLIENT_ID`` is a startup ``ConfigError``.
+    """
     if settings.env == "local" and settings.auth.disabled:
         return AnonymousTokenProvider()
+    if settings.env != "local":
+        return ManagedIdentityTokenProvider(build_credential(aio=True))
     return ManagedIdentityTokenProvider()
 
 

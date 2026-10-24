@@ -124,6 +124,7 @@ class AuthSettings(_Section):
     jwks_url: str | None = None  # local only: http(s) URL or file path (.data/dev-jwks/jwks.json)
     query_role: str = "Tidal.Query.Read"  # app role tidal-query requires from its caller
     api_app_client_id: str | None = None  # tidal-api app client id: v2 tokens carry it as aud
+    allowed_client_ids: str | None = None  # comma-separated GUIDs: client apps (azp) for the api
     query_caller_client_ids: str | None = None  # comma-separated GUIDs allowed as azp/appid
     query_caller_object_ids: str | None = None  # comma-separated GUIDs allowed as oid
 
@@ -132,10 +133,14 @@ class AuthSettings(_Section):
     def _guid(cls, value: str | None) -> str | None:
         return _check_guids(value, single=True)
 
-    @field_validator("query_caller_client_ids", "query_caller_object_ids")
+    @field_validator("allowed_client_ids", "query_caller_client_ids", "query_caller_object_ids")
     @classmethod
     def _guid_list(cls, value: str | None) -> str | None:
         return _check_guids(value, single=False)
+
+    def allowed_clients(self) -> frozenset[str]:
+        """Client apps (``azp``) whose user tokens ``tidal-api`` accepts (lower case)."""
+        return _guid_set(self.allowed_client_ids)
 
     def caller_client_ids(self) -> frozenset[str]:
         """Allowed ``azp``/``appid`` values for ``tidal-query`` callers (lower case)."""

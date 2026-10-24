@@ -449,7 +449,7 @@ async def test_docs_only_in_local(make_client: MakeClient) -> None:
 
     class _Secrets:
         def get(self, name: str) -> str:
-            return "k" * 32
+            return "a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s="
 
     async with make_client(create_app(dev, secret_source=_Secrets())) as c:
         assert (await c.get("/docs")).status_code == 404

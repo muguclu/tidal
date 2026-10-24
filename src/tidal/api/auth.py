@@ -12,9 +12,14 @@ logged; every rejection is a generic ``Unauthenticated``.
 """
 
 import asyncio
+import base64
+import binascii
+import contextlib
+import importlib
 import json
+import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Final, Protocol  # Any: JWT claims are arbitrary JSON
 
@@ -23,6 +28,7 @@ import jwt
 from jwt.algorithms import RSAAlgorithm
 
 from tidal.api.deps import ALL_ROLES, Principal
+from tidal.api.pagination import CursorKey
 from tidal.common.config import Settings
 from tidal.common.errors import ConfigError, DependencyUnavailable, Forbidden, Unauthenticated
 from tidal.common.logging import get_logger
@@ -30,7 +36,10 @@ from tidal.common.logging import get_logger
 LEEWAY_SECONDS: Final = 30
 JWKS_TTL_SECONDS: Final = 3600.0
 JWKS_MIN_REFRESH_SECONDS: Final = 30.0
+JWKS_REFRESH_TIMEOUT_SECONDS: Final = 5.0
+JWKS_MAX_KEYS: Final = 64
 _DENIED: Final = "The bearer token is invalid."
+USER_SCOPE: Final = "access_as_user"
 _NOT_ALLOWED: Final = "The caller is not allowed to use this service."
 
 logger = get_logger(__name__)
@@ -47,7 +56,12 @@ def default_jwks_url(tenant_id: str) -> str:
 
 
 class JwksCache:
-    """Async JWKS fetcher with a TTL and rate-limited refresh on unknown ``kid``."""
+    """Async JWKS fetcher: lock-free lookups when fresh, single-flight refreshes.
+
+    A fresh cache answers known ``kid`` lookups without waiting for anything. Refreshes (TTL
+    expiry or unknown ``kid``, at most every 30 s) run as one shared task that callers await with
+    a timeout, so a slow identity provider cannot stall requests that already have their key.
+    """
 
     def __init__(
         self,
@@ -64,7 +78,7 @@ class JwksCache:
         self._keys: dict[str, Any] = {}  # Any: cryptography public key objects
         self._fetched_at: float | None = None
         self._last_attempt: float | None = None
-        self._lock = asyncio.Lock()
+        self._inflight: asyncio.Task[None] | None = None
 
     async def _fetch(self) -> list[dict[str, Any]]:
         if self._url.startswith(("http://", "https://")):
@@ -78,38 +92,54 @@ class JwksCache:
         keys = document["keys"]
         if not isinstance(keys, list):
             raise ValueError("malformed JWKS")
-        return [k for k in keys if isinstance(k, dict)]
+        return [k for k in keys if isinstance(k, dict)][:JWKS_MAX_KEYS]
 
     async def _refresh(self) -> None:
-        self._last_attempt = self._monotonic()
         try:
             jwks = await self._fetch()
-            keys: dict[str, Any] = {}
-            for jwk in jwks:
-                kid = jwk.get("kid")
-                if jwk.get("kty") == "RSA" and isinstance(kid, str):
-                    keys[kid] = RSAAlgorithm.from_jwk(json.dumps(jwk))
-        except (httpx.HTTPError, OSError, ValueError, KeyError, TypeError, jwt.PyJWTError):
+        except (httpx.HTTPError, OSError, ValueError, KeyError, TypeError):
             logger.warning("jwks_refresh_failed")
             return  # keep serving the stale keys
+        keys: dict[str, Any] = {}
+        for jwk in jwks:
+            kid = jwk.get("kid")
+            if jwk.get("kty") != "RSA" or not isinstance(kid, str):
+                continue  # only RSA signing keys are usable (RS256 only)
+            try:
+                keys[kid] = RSAAlgorithm.from_jwk(json.dumps(jwk))
+            except (ValueError, TypeError, KeyError, jwt.PyJWTError):
+                logger.warning("jwks_key_skipped")
         self._keys = keys
         self._fetched_at = self._monotonic()
 
+    def _fresh(self, now: float) -> bool:
+        return self._fetched_at is not None and now - self._fetched_at < JWKS_TTL_SECONDS
+
     async def key(self, kid: str) -> Any:  # Any: cryptography public key
         """The public key for ``kid``; refreshes when stale or unknown (at most every 30 s)."""
-        async with self._lock:
-            now = self._monotonic()
-            stale = self._fetched_at is None or now - self._fetched_at >= JWKS_TTL_SECONDS
-            can_retry = (
-                self._last_attempt is None or now - self._last_attempt >= JWKS_MIN_REFRESH_SECONDS
-            )
-            if (stale or kid not in self._keys) and can_retry:
-                await self._refresh()
-            if self._fetched_at is None:
-                raise DependencyUnavailable("Signing keys are unavailable.")
-            if kid not in self._keys:
-                raise Unauthenticated(_DENIED)
+        now = self._monotonic()
+        if self._fresh(now) and kid in self._keys:
+            return self._keys[kid]  # hot path: no lock, no await
+        task = self._inflight
+        if task is None and (
+            self._last_attempt is None or now - self._last_attempt >= JWKS_MIN_REFRESH_SECONDS
+        ):
+            self._last_attempt = now
+            task = self._inflight = asyncio.create_task(self._refresh())
+            task.add_done_callback(self._clear)
+        if task is not None:
+            try:
+                await asyncio.wait_for(asyncio.shield(task), JWKS_REFRESH_TIMEOUT_SECONDS)
+            except TimeoutError:
+                logger.warning("jwks_refresh_timeout")
+        if kid in self._keys:  # a stale key beats an outage of the identity provider
             return self._keys[kid]
+        if self._fetched_at is None:
+            raise DependencyUnavailable("Signing keys are unavailable.")
+        raise Unauthenticated(_DENIED)
+
+    def _clear(self, _task: "asyncio.Task[None]") -> None:
+        self._inflight = None
 
     async def aclose(self) -> None:
         """Close the HTTP client when this cache created it."""
@@ -141,7 +171,7 @@ class JwtVerifier:
                 audience=self._audience,
                 issuer=issuer_for(self._tenant),
                 leeway=LEEWAY_SECONDS,
-                options={"require": ["exp", "nbf", "iss", "aud"]},
+                options={"require": ["exp", "nbf", "iss", "aud", "tid", "oid"]},
             )
         except jwt.PyJWTError:
             raise Unauthenticated(_DENIED) from None
@@ -177,13 +207,26 @@ class RejectingValidator:
 class EntraApiValidator:
     """Validator for end-user / client tokens sent to ``tidal-api``."""
 
-    def __init__(self, verifier: JwtVerifier) -> None:
-        """Wrap ``verifier`` (audience ``TIDAL_AUTH__AUDIENCE``)."""
+    def __init__(
+        self,
+        verifier: JwtVerifier,
+        *,
+        allowed_client_ids: frozenset[str] = frozenset(),
+        required_scope: str = USER_SCOPE,
+    ) -> None:
+        """Wrap ``verifier``; user tokens need ``required_scope`` and an allowlisted ``azp``."""
         self._verifier = verifier
+        self._clients = frozenset(c.lower() for c in allowed_client_ids)
+        self._scope = required_scope
 
     async def validate(self, token: str) -> Principal:
         """Verified principal; only the four Tidal roles are kept from the ``roles`` claim."""
         claims = await self._verifier.verify(token)
+        scp = claims.get("scp")
+        scopes = scp.split() if isinstance(scp, str) else []
+        azp = claims.get("azp", claims.get("appid"))
+        if self._scope not in scopes or not (isinstance(azp, str) and azp.lower() in self._clients):
+            raise Unauthenticated(_DENIED)  # app tokens / foreign clients are not user tokens
         oid = claims.get("oid")
         if not isinstance(oid, str) or not oid:
             raise Unauthenticated(_DENIED)
@@ -219,6 +262,8 @@ class EntraTokenValidator:
     async def validate(self, token: str) -> None:
         """Raise ``Unauthenticated`` / ``Forbidden`` unless the caller is allowlisted."""
         claims = await self._verifier.verify(token)
+        if "scp" in claims or claims.get("idtyp") != "app":
+            raise Unauthenticated(_DENIED)  # delegated user tokens are never valid here
         if self._role not in _roles(claims):
             raise Forbidden(_NOT_ALLOWED)
         azp = claims.get("azp", claims.get("appid"))
@@ -253,7 +298,8 @@ def api_validator_from_settings(
     return EntraApiValidator(
         _verifier(
             settings, _audiences(settings.auth.audience, settings.auth.api_app_client_id), client
-        )
+        ),
+        allowed_client_ids=settings.auth.allowed_clients(),
     )
 
 
@@ -283,43 +329,73 @@ class SecretSource(Protocol):
         ...
 
 
+def azure_client_id(environ: Mapping[str, str] | None = None) -> str:
+    """``AZURE_CLIENT_ID`` (the user-assigned identity); a startup ``ConfigError`` when unset."""
+    value = (os.environ if environ is None else environ).get("AZURE_CLIENT_ID", "").strip()
+    if not value:
+        raise ConfigError("AZURE_CLIENT_ID is required outside TIDAL_ENV=local")
+    return value
+
+
+def build_credential(
+    *, aio: bool = False, environ: Mapping[str, str] | None = None
+) -> Any:  # Any: azure credential
+    """Workload identity (AKS) then the pinned user-assigned Managed Identity.
+
+    Never ``DefaultAzureCredential``: no developer-tool or environment credential can be picked
+    up in Azure. ``WorkloadIdentityCredential`` is skipped when the pod has no federated token
+    (App Service / Container Apps).
+    """
+    client_id = azure_client_id(environ)
+    identity = importlib.import_module("azure.identity.aio" if aio else "azure.identity")
+
+    chain: list[Any] = []  # Any: azure credential objects
+    with contextlib.suppress(ValueError):  # no projected service-account token (not on AKS)
+        chain.append(identity.WorkloadIdentityCredential())
+    chain.append(identity.ManagedIdentityCredential(client_id=client_id))
+    return identity.ChainedTokenCredential(*chain)
+
+
 class KeyVaultSecretSource:
-    """Key Vault through ``azure-keyvault-secrets`` with the workload's Managed Identity."""
+    """Key Vault through ``azure-keyvault-secrets`` with the workload's pinned identity."""
 
     def __init__(self, vault_url: str, credential: Any = None) -> None:  # Any: azure credential
-        """``credential`` defaults to ``DefaultAzureCredential`` (honours ``AZURE_CLIENT_ID``)."""
+        """``credential`` defaults to :func:`build_credential` (fails without AZURE_CLIENT_ID)."""
         self._vault_url = vault_url
-        self._credential = credential
+        self._credential = credential if credential is not None else build_credential()
 
     def get(self, name: str) -> str:
         """Fetch the latest secret version."""
-        from azure.identity import DefaultAzureCredential  # noqa: PLC0415
         from azure.keyvault.secrets import SecretClient  # noqa: PLC0415
 
-        credential = self._credential or DefaultAzureCredential()
-        client = SecretClient(vault_url=self._vault_url, credential=credential)
+        client = SecretClient(vault_url=self._vault_url, credential=self._credential)
         value = client.get_secret(name).value
         if value is None:
             raise ConfigError("the cursor key secret has no value")
         return str(value)
 
 
-def _checked(value: str) -> bytes:
-    raw = value.encode()
+def _decode_key(value: str) -> bytes:
+    """Base64 (standard or URL-safe) of at least 32 random bytes."""
+    try:
+        raw = base64.b64decode(value.strip() + "=" * (-len(value.strip()) % 4), altchars=b"-_")
+    except (ValueError, binascii.Error):
+        raise ConfigError("the cursor key must be base64") from None
     if len(raw) < MIN_CURSOR_KEY_BYTES:
-        raise ConfigError(f"the cursor key must be at least {MIN_CURSOR_KEY_BYTES} bytes")
+        raise ConfigError(f"the cursor key must decode to at least {MIN_CURSOR_KEY_BYTES} bytes")
     return raw
 
 
-def resolve_cursor_key(settings: Settings, source: SecretSource | None = None) -> bytes | None:
+def resolve_cursor_key(settings: Settings, source: SecretSource | None = None) -> CursorKey | None:
     """The shared cursor HMAC key, or ``None`` for a per-process random key (local only).
 
     Local: ``TIDAL_CURSOR__KEY`` if set, else ``None``. Elsewhere the key must come from Key
     Vault (``TIDAL_CURSOR__KEYVAULT_URL``); no key or a short key is a startup ``ConfigError``.
+    The optional ``<secret_name>-previous`` secret is accepted for verification only.
     """
     cursor = settings.cursor
     if cursor.key is not None:
-        return _checked(cursor.key.get_secret_value())
+        return CursorKey(_decode_key(cursor.key.get_secret_value()))
     if cursor.keyvault_url is None:
         if settings.env == "local":
             return None
@@ -331,4 +407,11 @@ def resolve_cursor_key(settings: Settings, source: SecretSource | None = None) -
         raise
     except Exception:
         raise ConfigError("the cursor key could not be read from Key Vault") from None
-    return _checked(value)
+    previous: tuple[bytes, ...] = ()
+    try:
+        old = source.get(f"{cursor.secret_name}-previous")
+    except Exception:
+        old = ""
+    if old:
+        previous = (_decode_key(old),)
+    return CursorKey(_decode_key(value), previous)
