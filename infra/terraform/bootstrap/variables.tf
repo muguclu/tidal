@@ -122,3 +122,14 @@ variable "grant_plan_graph_permission" {
   type        = bool
   default     = true
 }
+
+variable "rbac_drift_environment" {
+  description = "GitHub environment bound to the sp-tidal-rbac-drift credential. It must exist and be restricted to the main branch."
+  type        = string
+  default     = "rbac-drift"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9._-]+$", var.rbac_drift_environment))
+    error_message = "rbac_drift_environment may only contain letters, digits, '.', '_' and '-'."
+  }
+}

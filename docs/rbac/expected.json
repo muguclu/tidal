@@ -4,6 +4,7 @@
       "sp-tidal-ci": [],
       "sp-tidal-ci-plan": [],
       "sp-tidal-deploy": [],
+      "sp-tidal-rbac-drift": [],
       "tidal-api": [],
       "tidal-cli": [],
       "tidal-query": [
@@ -52,6 +53,16 @@
         "keyCredentials": [],
         "passwordCredentials": []
       },
+      "sp-tidal-rbac-drift": {
+        "federatedCredentials": [
+          {
+            "name": "github-env-rbac-drift",
+            "subject": "repo:<repo>:environment:rbac-drift"
+          }
+        ],
+        "keyCredentials": [],
+        "passwordCredentials": []
+      },
       "tidal-api": {
         "federatedCredentials": [],
         "keyCredentials": [],
@@ -89,6 +100,11 @@
     ]
   },
   "roleAssignments": [
+    {
+      "principal": "sp-tidal-rbac-drift",
+      "role": "tidal-rbac-drift-reader",
+      "scope": "/subscriptions/*"
+    },
     {
       "principal": "sp-tidal-ci-plan",
       "role": "Storage Blob Data Reader",

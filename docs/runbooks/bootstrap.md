@@ -5,7 +5,8 @@ Create, once, the pieces every other piece of infrastructure depends on:
 - resource group `rg-tidal-tfstate`, state storage account (shared key off, TLS 1.2, no public blob, versioning, 7 d soft delete) and container `tfstate`
 - Entra application and service principal `sp-tidal-ci` with one GitHub OIDC federated credential, subject `repo:muguclu/tidal:environment:dev` (no client secret)
 - no role assignment for `sp-tidal-ci` (it never touches state)
-- Entra application and service principal `sp-tidal-ci-plan` (T-408, ADR-0008 R-18), read-only, for PR plans and the nightly `rbac-drift`: federated credentials `repo:muguclu/tidal:pull_request` and `repo:muguclu/tidal:ref:refs/heads/main`; roles Reader on `rg-tidal-dev`, Storage Blob Data Reader on the `tfstate` container, Graph `Application.Read.All`; no write role
+- Entra application and service principal `sp-tidal-ci-plan` (T-408, ADR-0008 R-18) for PR plans: federated credentials `repo:muguclu/tidal:pull_request` and `repo:muguclu/tidal:ref:refs/heads/main`; Reader on `rg-tidal-dev`, Storage Blob Data Reader on the `tfstate` container, Graph `Application.Read.All` (the PR plan refreshes the azuread resources of envs/dev); no write role; read exposure accepted per ADR-0008 R-27
+- Entra application and service principal `sp-tidal-rbac-drift` for the nightly `rbac-drift` job: one credential, subject `repo:muguclu/tidal:environment:rbac-drift`; custom role `tidal-rbac-drift-reader` (role assignment, role definition, identity, federated credential, AKS and resource group reads only) at subscription scope, Graph `Application.Read.All`; **no state role**
 - a `CanNotDelete` lock and `prevent_destroy` on the state account, and a lifecycle rule deleting noncurrent blob versions after 30 days
 
 This is **human-only**. Bootstrap uses **local state** (it creates the remote state account, so it cannot use it).
@@ -72,10 +73,17 @@ The plan identity uses a repository variable (no environment, so it works for PR
 ```bash
 gh variable set AZURE_PLAN_CLIENT_ID --repo muguclu/tidal --body "$(terraform output -raw ci_plan_client_id)"
 ```
-`iac.yml` job `plan` runs on `pull_request` (subject `repo:muguclu/tidal:pull_request`) and on `push` to main; `rbac-drift` runs on `schedule`
-and `workflow_dispatch`, which present `repo:muguclu/tidal:ref:refs/heads/main` when run from main. That is why the app has two
-credentials. A `workflow_dispatch` from another branch is rejected on purpose. The identity holds no write role, which is what makes the
-`pull_request` subject acceptable (contrast `sp-tidal-ci`, deliberately without one).
+`iac.yml` job `plan` runs on `pull_request` (subject `repo:muguclu/tidal:pull_request`) and on `push` to main (subject
+`repo:muguclu/tidal:ref:refs/heads/main`), hence two credentials. The identity holds no write role, which is what makes the `pull_request`
+subject acceptable (contrast `sp-tidal-ci`, deliberately without one), but any same-repo PR author can read the dev state and make
+tenant-wide Graph app reads with its token (ADR-0008 R-27; forks get no OIDC token).
+
+The nightly drift job uses the separate app `sp-tidal-rbac-drift`, so it needs neither the state role nor a PR-reachable subject. Create the
+GitHub environment `rbac-drift` first and restrict it to `main` (same calls as for `dev` above, without a reviewer: the job is read-only and
+scheduled), then:
+```bash
+gh variable set AZURE_RBAC_DRIFT_CLIENT_ID --repo muguclu/tidal --env rbac-drift --body "$(terraform output -raw rbac_drift_client_id)"
+```
 
 ### Import the hand-made `sp-tidal-ci-plan` (before the first apply that includes T-408)
 The app was created by hand, so applying blindly would create a second `sp-tidal-ci-plan`. Import it first, with the same
@@ -101,18 +109,23 @@ terraform import azurerm_role_assignment.ci_plan_state_blob_reader "<id of the S
 
 # Graph consent, if it was granted by hand
 az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP_OID/appRoleAssignments" --query 'value[].{id:id,role:appRoleId,res:resourceDisplayName}' -o table
-terraform import 'azuread_app_role_assignment.ci_plan_graph_application_read_all[0]' "$SP_OID/appRoleAssignment/<id of the Application.Read.All row>"
+# The import ID is the RESOURCE service principal (Microsoft Graph) plus the assignment id (azuread 3.x documented format).
+GRAPH_SP_OID=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query id -o tsv)
+terraform import 'azuread_app_role_assignment.ci_plan_graph_application_read_all[0]' "/servicePrincipals/$GRAPH_SP_OID/appRoleAssignedTo/<id of the Application.Read.All row>"
 
+# A hand-made federated credential whose display_name differs from github-pull-request / github-ref-main is imported fine but then shows as a
+# REPLACE (display_name forces a new credential): that is expected and harmless (same subject), review it in the plan.
 terraform plan   # must show only the missing pieces (for example the main credential) and no create of the application or service principal
 ```
 Terraform does not remove extras on the hand-made app (other role assignments or credentials): delete them by hand
 (`az role assignment delete`, `az ad app federated-credential delete`) and let `rbac-drift` confirm. The `AZURE_PLAN_CLIENT_ID` variable
-already holds the right value after an import (same client id).
+already holds the right value after an import (same client id). `sp-tidal-rbac-drift` is new: nothing to import, but create it only after
+the `rbac-drift` environment exists.
 
 If the applier cannot grant admin consent (not Privileged Role Administrator or Global Administrator) apply with
 `-var grant_plan_graph_permission=false` and have an admin grant `Application.Read.All` (application permission, Microsoft Graph) to
-`sp-tidal-ci-plan` in the portal (Entra ID, App registrations, API permissions, Grant admin consent). Without it `rbac-drift` fails at the
-Graph calls; `plan` is unaffected.
+`sp-tidal-ci-plan` and `sp-tidal-rbac-drift` in the portal (Entra ID, App registrations, API permissions, Grant admin consent). Without it
+`rbac-drift` fails at its Graph calls and the PR plan cannot refresh the azuread resources of envs/dev.
 
 ## Verification
 1. `az storage account show -n <name> --query "{key:allowSharedKeyAccess,tls:minimumTlsVersion,blob:allowBlobPublicAccess}"` returns `false`, `TLS1_2`, `false`.
@@ -136,7 +149,7 @@ The state account is protected by `prevent_destroy` and a `CanNotDelete` lock, s
 - [ ] State account hardening verified (steps 1-2)
 - [ ] `dev` environment has required reviewer and `main`-only branch policy (verification calls above)
 - [ ] GitHub variables `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` set; environment `dev` exists
-- [ ] T-408: hand-made `sp-tidal-ci-plan` imported, `terraform plan` clean, `AZURE_PLAN_CLIENT_ID` set, `rbac-drift` run via `workflow_dispatch` is green
+- [ ] T-408: hand-made `sp-tidal-ci-plan` imported, `terraform plan` clean, `AZURE_PLAN_CLIENT_ID` set; environment `rbac-drift` (main only) created, `AZURE_RBAC_DRIFT_CLIENT_ID` set, `rbac-drift` run via `workflow_dispatch` is green
 - [ ] `oidc-smoke` workflow green (`az account show` succeeds)
 - [ ] `backend_config` output handed to the T-12x env task
 - [ ] Orchestrator marks T-008 done in `docs/tasks/TASKS.md`

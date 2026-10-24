@@ -57,3 +57,13 @@ output "ci_plan_service_principal_object_id" {
   description = "Object ID of the sp-tidal-ci-plan service principal."
   value       = azuread_service_principal.ci_plan.object_id
 }
+
+output "rbac_drift_client_id" {
+  description = "Application (client) ID of sp-tidal-rbac-drift (GitHub variable AZURE_RBAC_DRIFT_CLIENT_ID). Not a secret."
+  value       = azuread_application.rbac_drift.client_id
+}
+
+output "rbac_drift_service_principal_object_id" {
+  description = "Object ID of the sp-tidal-rbac-drift service principal."
+  value       = azuread_service_principal.rbac_drift.object_id
+}
