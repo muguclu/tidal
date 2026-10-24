@@ -77,8 +77,25 @@ variable "common_env" {
   }
 }
 
+variable "infrastructure_subnet_id" {
+  description = "Subnet for the environment (snet-aca from the network module, T-404): at least a /23 for a Consumption-only environment, not delegated. null (default) keeps the platform-managed public environment. Changing it on an existing environment forces a new environment."
+  type        = string
+  default     = null
+}
+
+variable "internal_load_balancer_enabled" {
+  description = "Make the environment internal: ingress is reachable only from the VNet (needs infrastructure_subnet_id). Apps with external_ingress = true are then reachable from the whole VNet, not from the internet."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.internal_load_balancer_enabled || var.infrastructure_subnet_id != null
+    error_message = "internal_load_balancer_enabled needs infrastructure_subnet_id."
+  }
+}
+
 variable "query" {
-  description = "The tidal-query Container App (SPEC-07 section 2): min 0 / max 5 replicas, HTTP scale rule 20 concurrent requests. identity_id is the user-assigned identity (id-query) that pulls the image and reads data; it needs AcrPull on the registry before this module is applied. external_ingress = true because the environment has no VNet yet (T-404) and the App Service API must reach it; every request still needs an Entra JWT (SPEC-06 section 1). The caller IP allow-list is applied outside the module (envs/dev/apps.tf, azapi) because the web app needs this app's FQDN, which would make a module cycle. Set external_ingress false once a VNet exists."
+  description = "The tidal-query Container App (SPEC-07 section 2): min 0 / max 5 replicas, HTTP scale rule 20 concurrent requests. identity_id is the user-assigned identity (id-query) that pulls the image and reads data; it needs AcrPull on the registry before this module is applied. external_ingress = true because the environment has no VNet yet (T-404) and the App Service API must reach it; every request still needs an Entra JWT (SPEC-06 section 1). The caller IP allow-list is applied outside the module (envs/dev/apps.tf, azapi) because the web app needs this app's FQDN, which would make a module cycle. With enable_private_networking the environment is internal (internal_load_balancer_enabled): external_ingress = true then means reachable from the VNet only, which is what App Service needs; external_ingress = false would limit it to the environment itself and block the API."
   type = object({
     identity_id         = string
     identity_client_id  = string

@@ -39,6 +39,10 @@ module "aks" {
   tags                = module.resource_group.tags
   component           = "compute"
 
+  # snet-aks when enable_private_networking is true (network.tf), null otherwise. Changing it on an existing cluster
+  # replaces the node pools, so decide the flag before the first apply (docs/finops/deltas/T-404.md).
+  vnet_subnet_id = module.network.aks_subnet_id
+
   spot_pool_max_count             = var.aks_spot_max_count
   api_server_authorized_ip_ranges = var.aks_api_server_authorized_ip_ranges
 

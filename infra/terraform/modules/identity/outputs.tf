@@ -8,3 +8,13 @@ output "identities" {
     }
   }
 }
+
+output "role_assignment_ids" {
+  description = "Map of logical key to role assignment resource ID for every assignment created from var.role_assignments."
+  value       = { for k, r in azurerm_role_assignment.this : k => r.id }
+}
+
+output "federated_credential_ids" {
+  description = "Map of credential name to federated identity credential ID."
+  value       = { for k, c in azurerm_federated_identity_credential.this : k => c.id }
+}

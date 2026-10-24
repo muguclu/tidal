@@ -46,7 +46,7 @@ variable "park" {
 }
 
 variable "enable_private_networking" {
-  description = "Private endpoints and closed public access (SPEC-06 section 4). Needs the network module (T-404); keep false until then."
+  description = "Private networking (SPEC-06 section 4, T-404): VNet, private endpoints for Blob, SQL and Key Vault, closed public access on those three, internal tidal-query, App Service VNet integration, snet-vm with explicit outbound. false (default) creates none of it and costs nothing. Changing it on a live environment replaces the AKS node pools and the Container Apps environment, and Terraform itself then needs a network path to Blob and Key Vault (see the module README)."
   type        = bool
   default     = false
 }

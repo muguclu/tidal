@@ -4,14 +4,13 @@
 Create, once, the pieces every other piece of infrastructure depends on:
 - resource group `rg-tidal-tfstate`, state storage account (shared key off, TLS 1.2, no public blob, versioning, 7 d soft delete) and container `tfstate`
 - Entra application and service principal `sp-tidal-ci` with one GitHub OIDC federated credential, subject `repo:muguclu/tidal:environment:dev` (no client secret)
-- role: Storage Blob Data Contributor for `sp-tidal-ci` on the `tfstate` container only
+- no role assignment for `sp-tidal-ci` (it never touches state)
 - a `CanNotDelete` lock and `prevent_destroy` on the state account, and a lifecycle rule deleting noncurrent blob versions after 30 days
 
 This is **human-only**. Bootstrap uses **local state** (it creates the remote state account, so it cannot use it).
 Agents and CI never run `terraform apply`.
 
-Roles granted later (not part of T-008): AcrPush, and Contributor on `rg-tidal-dev` (SPEC-06 section 2) are added by the
-env/identity tasks. There is deliberately **no `pull_request` credential**: a PR token would carry every role of `sp-tidal-ci` and bypass the `environment: dev` protection. T-127 will add a separate app `sp-tidal-ci-plan` with only Reader + Storage Blob Data Reader for PR plans. `terraform apply` for envs
+Roles granted later (not part of T-008): AcrPush on the registry only, assigned by `envs/dev/rbac.tf` (T-403). The RG-wide Contributor of the first SPEC draft was dropped; deploys use the separate app `sp-tidal-deploy` with its own GitHub environment. There is deliberately **no `pull_request` credential**: a PR token would carry every role of `sp-tidal-ci` and bypass the `environment: dev` protection. T-127 will add a separate app `sp-tidal-ci-plan` with only Reader + Storage Blob Data Reader for PR plans. `terraform apply` for envs
 needs role-assignment and Graph rights and is not delegated to CI.
 
 ## Prerequisites
@@ -31,7 +30,7 @@ cd infra/terraform/bootstrap
 cp examples/dev.tfvars.example dev.auto.tfvars   # edit: subscription_id, state_account_name, owner
 terraform init
 terraform plan -out bootstrap.tfplan
-# review: expect 9 resources to add (RG, storage account, lock, lifecycle policy, container, app, SP, 1 federated credential, role assignment) plus the data sources, 0 to change/destroy
+# review: expect 8 resources to add (RG, storage account, lock, lifecycle policy, container, app, SP, 1 federated credential) plus the data sources, 0 to change/destroy
 terraform apply bootstrap.tfplan                 # HUMAN ONLY
 terraform output backend_config                  # paste into infra/terraform/envs/dev/backend.tf
 ```
@@ -71,7 +70,7 @@ The OIDC subject for the main credential is `repo:muguclu/tidal:environment:dev`
 1. `az storage account show -n <name> --query "{key:allowSharedKeyAccess,tls:minimumTlsVersion,blob:allowBlobPublicAccess}"` returns `false`, `TLS1_2`, `false`.
 2. `az storage account blob-service-properties show --account-name <name> -g rg-tidal-tfstate --query "{v:isVersioningEnabled,d:deleteRetentionPolicy}"` shows versioning on and 7 days.
 3. `az ad app federated-credential list --id <client id>` shows exactly one credential (subject `repo:muguclu/tidal:environment:dev`).
-4. Run the smoke workflow: `gh workflow run oidc-smoke.yml --repo muguclu/tidal`, then `gh run watch`. It must pass. The workflow logs in with `allow-no-subscriptions: true` because `sp-tidal-ci` has no subscription or resource-group role until a later task grants AcrPush / Contributor on `rg-tidal-dev`; until then `az account show` may print only the tenant, or the subscription may not be listed. That still proves OIDC works.
+4. Run the smoke workflow: `gh workflow run oidc-smoke.yml --repo muguclu/tidal`, then `gh run watch`. It must pass. The workflow logs in with `allow-no-subscriptions: true` because `sp-tidal-ci` has no subscription or resource-group role until `envs/dev` is applied (T-403 grants AcrPush on the registry only); until then `az account show` may print only the tenant, or the subscription may not be listed. That still proves OIDC works.
 5. Re-run `terraform plan` in `bootstrap/`: no changes.
 
 ## Rollback
@@ -80,7 +79,7 @@ The state account is protected by `prevent_destroy` and a `CanNotDelete` lock, s
 2. Remove the lock first: `terraform apply -target=azurerm_management_lock.tfstate_account -destroy` (or `az lock delete --name lock-tfstate-cannotdelete --resource-group rg-tidal-tfstate --resource-name <name> --resource-type Microsoft.Storage/storageAccounts`, then `terraform state rm azurerm_management_lock.tfstate_account`).
 3. Temporarily remove the `lifecycle { prevent_destroy = true }` blocks from the account and container in `main.tf` (do not commit this).
 4. `terraform destroy` in `bootstrap/` (same local state). Soft-deleted blobs expire after 7 days.
-- To retire only the CI identity: `terraform destroy -target=azurerm_role_assignment.ci_state_blob -target=azuread_application.ci` (also removes the service principal and credential); no lock change needed.
+- To retire only the CI identity: `terraform destroy -target=azuread_application.ci` (also removes the service principal and credential); no lock change needed.
 - If the state file is lost, import resources (`terraform import`) rather than recreating; the storage account name is globally unique.
 
 ## NEEDS-CLOUD checklist (T-008)

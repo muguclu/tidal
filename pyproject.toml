@@ -68,7 +68,7 @@ load = ["locust>=2.32"]
 default-groups = ["dev", "bench"]  # bench: report charts are unit-tested (T-201)
 
 [build-system]
-requires = ["uv_build>=0.11,<0.12"]
+requires = ["uv_build>=0.11,<0.14"]
 build-backend = "uv_build"
 
 [tool.pytest.ini_options]

@@ -17,6 +17,21 @@ planned, time-boxed **cloud window** to collect real evidence (deployments, scal
 | Terraform | `terraform validate`, `tflint`, `checkov`, `terraform plan` needs a subscription | Write and lint all modules locally |
 | Prices for FinOps | **Azure Retail Prices API** (public, no account) | All MODELLED cost numbers can be produced without Azure |
 
+### Local auth against the real validator
+
+`TIDAL_AUTH__DISABLED=true` is the default in `.env.example`. To test the real JWT path set it to
+`false`, point `TIDAL_AUTH__JWKS_URL` at `.data/dev-jwks/jwks.json` (local only) and set
+`TIDAL_AUTH__TENANT_ID` to the minter's tenant (`11111111-2222-3333-4444-555555555555`); the
+commented block in `.env.example` has the values.
+- User token for `tidal-api`: `scripts/dev-token.py --role Tidal.Reader` emits `scp=access_as_user`
+  and `azp=dddddddd-0000-4000-8000-0000000000c1` (the dev CLI), which is the value of
+  `TIDAL_AUTH__ALLOWED_CLIENT_IDS`.
+- App token for a local `tidal-query`: `scripts/dev-token.py --app --audience api://tidal-query`
+  emits `idtyp=app`, no `scp`, role `Tidal.Query.Read`, `azp=dddddddd-0000-4000-8000-0000000000a1`
+  and `oid=dddddddd-0000-4000-8000-0000000000a2`, matching `TIDAL_AUTH__QUERY_CALLER_CLIENT_IDS` /
+  `..._OBJECT_IDS`.
+- `iss`/`tid` use the dev tenant and `aud` defaults to `api://tidal`.
+
 ## 2. The cloud window (≈ 30 days, Phases 3-end → 5)
 
 Azure free account (new customers): **USD 200 credit valid 30 days**, plus 12-month free amounts and

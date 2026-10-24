@@ -60,15 +60,6 @@ def assert_auth_allowed(settings: Settings) -> None:
         raise ConfigError("TIDAL_AUTH__DISABLED=true is only allowed when TIDAL_ENV=local")
 
 
-async def validate_bearer_token(_token: str, _settings: Settings) -> Principal:
-    """SEAM (T-402): validate an Entra ID JWT and return its principal.
-
-    Until T-402 replaces this with issuer/audience/signature/exp/nbf checks over cached JWKS,
-    every token is rejected (fail closed). The token is never logged.
-    """
-    raise Unauthenticated("Token validation is not available.")
-
-
 async def get_principal(
     request: Request, settings: Annotated[Settings, Depends(get_settings)]
 ) -> Principal:
@@ -78,4 +69,6 @@ async def get_principal(
     scheme, _, token = request.headers.get("Authorization", "").partition(" ")
     if scheme.lower() != "bearer" or not token.strip():
         raise Unauthenticated("A bearer token is required.")
-    return await validate_bearer_token(token.strip(), settings)
+    # api/auth.py's PrincipalValidator (T-402), built by create_app and injectable in tests
+    principal: Principal = await request.app.state.token_validator.validate(token.strip())
+    return principal
