@@ -49,7 +49,7 @@ resource "azuread_application" "api" {
     oauth2_permission_scope {
       id                         = local.scope_id
       value                      = local.scope_value
-      type                       = "User"
+      type                       = "Admin" # admin consent only; tidal-cli is pre-authorised below, so users see no prompt
       enabled                    = true
       admin_consent_display_name = "Access Tidal as the signed-in user"
       admin_consent_description  = "Allows the application to call the Tidal API on behalf of the signed-in user. The user's Tidal app roles still apply."
@@ -131,6 +131,13 @@ resource "azuread_application" "query" {
 
   api {
     requested_access_token_version = 2
+  }
+
+  # idtyp=app lets tidal-query tell service tokens from user tokens (T-402).
+  optional_claims {
+    access_token {
+      name = "idtyp"
+    }
   }
 
   app_role {

@@ -64,7 +64,7 @@ variable "role_group_object_ids" {
 }
 
 variable "query_read_principal_object_ids" {
-  description = "Service principal object IDs (managed identity principal_id) granted the Tidal.Query.Read app role on tidal-query, keyed by a static label such as id-api. SPEC-06 and T-402: only id-api by default; add id-worker only when ADR-0016 worker reads go live. Keys must be known at plan time, values may be computed."
+  description = "Service principal object IDs (managed identity principal_id) granted the Tidal.Query.Read app role on tidal-query, keyed by a static label such as id-api. SPEC-06 and T-402: dev passes id-api, plus id-worker when entra_query_read_include_worker (ADR-0016 worker reads). Keys must be known at plan time, values may be computed."
   type        = map(string)
   default     = {}
 

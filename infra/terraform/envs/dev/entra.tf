@@ -9,7 +9,7 @@ variable "entra_role_group_object_ids" {
 }
 
 variable "entra_owner_object_ids" {
-  description = "Object IDs that own the Tidal app registrations (add yourself, or an owners group)."
+  description = "Object IDs that own the Tidal app registrations. Keep it empty, or use one named admin or a PIM-eligible group; never sp-tidal-ci. Owners can add app role assignments or credentials outside Terraform; the T-403 drift export covers appRoleAssignedTo and the credentials, so such changes show up there."
   type        = set(string)
   default     = []
 }
@@ -52,6 +52,7 @@ output "entra" {
     config = {
       TIDAL_AUTH__AUDIENCE                = module.entra_app.api.identifier_uri
       TIDAL_AUTH__API_APP_CLIENT_ID       = module.entra_app.api.client_id
+      TIDAL_AUTH__ALLOWED_CLIENT_IDS      = module.entra_app.cli.client_id
       TIDAL_QUERY__AUDIENCE               = module.entra_app.query.identifier_uri
       TIDAL_QUERY__APP_CLIENT_ID          = module.entra_app.query.client_id
       TIDAL_AUTH__QUERY_CALLER_CLIENT_IDS = join(",", [for name in sort(keys(local.query_callers)) : local.query_callers[name].client_id])
