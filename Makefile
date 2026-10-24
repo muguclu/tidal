@@ -71,12 +71,12 @@ tf-plan: ## terraform plan for ENV (stub)
 	$(call stub,T-126)
 
 .PHONY: park
-park: ## scale everything to zero / stop (stub)
-	$(call stub,T-313)
+park: ## quick park: stop AKS/App Service/jobs/VM (PARK_ARGS=--dry-run to preview; docs/runbooks/park.md)
+	bash scripts/park.sh $(PARK_ARGS)
 
 .PHONY: unpark
-unpark: ## reverse of park (stub)
-	$(call stub,T-313)
+unpark: ## reverse of park (PARK_ARGS=--dry-run to preview)
+	bash scripts/unpark.sh $(PARK_ARGS)
 
 ## ---- finops --------------------------------------------------------------------------------
 .PHONY: cost-report
