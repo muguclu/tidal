@@ -20,11 +20,13 @@ Rows marked with a delta are MODELLED from `docs/finops/prices.yaml` (captured 2
 | Service Bus | Basic | ≈ 0.001 (30 × 100-job sweeps) | 0 | SKU (T-124 delta); Standard (topic flag) not yet priced → T-502b |
 | ACR | Basic | 4.40 (0.1466/day) + 0.088/GB over 10 GB | 4.40 | weekly purge (T-122 delta) |
 | Key Vault | Standard | 0.03–0.26 (10k–100k ops) | < 0.03 | — (T-121 delta) |
-| Log Analytics + App Insights | PerGB2018, 0.2 GB/day cap (≈ 6 GB/month), 30 d | ≤ cap × price (first 5 GB/month free) | ≈ 0 | cap, SDK sampling 20 % (T-120 delta) |
+| Log Analytics + App Insights | PerGB2018, 0.2 GB/day cap (≈ 6 GB/month), 30 d | ≤ cap × price (first 5 GB/month free) | ≈ 0 | cap, SDK sampling 20 % (T-120 delta); alerts and workbook add ≈ 0.26, plus up to 1.89 blob-audit ingestion inside the cap (T-506 delta) |
 | VM legacy | B1s + E4 StandardSSD | 2.16 (5 h compute + 2.11 disk) | 2.11 (disk) or 0 with `enable_legacy_vm=false` | daily start, self-deallocate (T-310 delta) |
 | Logic App (VM start) | Consumption | 0 (≈ 30 built-in actions/month, free tier) | 0 | `start_enabled` (T-310 delta) |
 | Budget + action group + TF state | — / email / LRS few KB | 0 / 0 / < 0.01 | same | free (T-125, T-008 deltas) |
-| **Total** | | **≈ 61–114** | **≈ 47** (≈ 35 with `enable_app_service=false`) | |
+<!-- total-row:start -->
+| **Total** | | **≈ 68–127** (SQL at list; ≈ 54–83 on the free offer) | **≈ 47** (≈ 43 on the free offer; ≈ 35 with `enable_app_service=false`) | re-summed by `cost_optimization_report.py` (T-507) |
+<!-- total-row:end -->
 
 ### Composed so far: `envs/dev` (T-126)
 
@@ -48,6 +50,10 @@ Observations to act on (before Phase 3):
 - App Service B1 and ACR Basic dominate the parked cost → `enable_app_service` flag to delete when parked;
   consider keeping images in GHCR during development and pushing to ACR only for demos (document trade-off).
 - Target ≤ €60 active is realistic only with disciplined parking; budget alerts enforce it.
+
+Wave 5 fold (T-506, T-507): alert rules add 0.26 EUR/month (blob audit ingestion stays inside the 0.2 GB/day cap, so the Log
+Analytics ceiling does not move). The Total row was re-summed by `docs/finops/cost_optimization_report.py` from `prices.yaml` and
+the model scripts; the old 61–114 / 47 could not be reproduced (see the re-sum table in `cost-optimization.md`).
 
 Wave 4 fold (T-401–T-407): no change to the totals with default flags (Entra apps free, RBAC and auditing about
 0). Optional levers, from the T-404/T-407 model scripts: `enable_private_networking` +24.95 EUR/month active
