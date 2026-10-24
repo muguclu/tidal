@@ -76,9 +76,9 @@ variable "role_assignments" {
   validation {
     condition = alltrue([
       for k, v in var.role_assignments :
-      !can(regex("^(Storage Blob Data|Azure Service Bus Data|Key Vault Secrets|Key Vault Crypto)", v.role_definition_name)) || can(regex("/providers/", v.scope))
+      !can(regex("^(Storage Blob Data|Azure Service Bus Data|Key Vault Secrets|Key Vault Crypto)", v.role_definition_name)) || can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/[^/]+/[^/]+/[^/]+/.+", v.scope))
     ])
-    error_message = "Data-plane roles must be scoped to a resource below /providers/ (container, queue or secret), not to a resource group or subscription."
+    error_message = "Data-plane roles must be scoped to a child resource (container, queue or secret): /subscriptions/<id>/resourceGroups/<rg>/providers/<ns>/<type>/<name>/<child...>, not to a resource group, subscription or a whole account/namespace/vault."
   }
 
   validation {

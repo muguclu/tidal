@@ -12,9 +12,8 @@ and the GitHub OIDC CI identity. See `docs/runbooks/bootstrap.md` for the proced
 | Federated credential | `repo:<owner>/<repo>:environment:<env>` only. No `pull_request` credential (it would bypass environment protection); T-127 adds a separate app `sp-tidal-ci-plan` with Reader + Storage Blob Data Reader for PR plans |
 | Management lock + `prevent_destroy` | `CanNotDelete` on the state account (see runbook Rollback) |
 | Lifecycle rule | Delete noncurrent blob versions after 30 days |
-| Role assignment | Storage Blob Data Contributor on the `tfstate` container only |
 
-Later tasks add AcrPush and Contributor on `rg-tidal-dev` (SPEC-06 section 2). `terraform apply` for envs stays human-only.
+`sp-tidal-ci` holds no role here. Its only role, AcrPush on the registry, is assigned by `envs/dev/rbac.tf` (T-403). Deploys use a separate app, `sp-tidal-deploy` (T-403). `terraform apply` for envs stays human-only.
 
 Provider requirements: Terraform >= 1.9, azurerm ~> 4.0, azuread ~> 3.0.
 

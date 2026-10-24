@@ -32,13 +32,18 @@ variable "github_repo_path" {
 }
 
 variable "deploy_github_environment" {
-  description = "GitHub environment whose jobs may use sp-tidal-deploy (federated subject repo:<owner/repo>:environment:<name>)."
+  description = "GitHub environment whose jobs may use sp-tidal-deploy (federated subject repo:<owner/repo>:environment:<name>). Must differ from the environment of sp-tidal-ci (dev) so each app has exactly one subject and the deploy rights are unreachable from image-build jobs; protect it as described in docs/runbooks/deploy.md (main only, required reviewer)."
   type        = string
-  default     = "dev"
+  default     = "dev-deploy"
 
   validation {
     condition     = can(regex("^[A-Za-z0-9._-]+$", var.deploy_github_environment))
     error_message = "deploy_github_environment may contain letters, digits, '.', '_' and '-'."
+  }
+
+  validation {
+    condition     = var.deploy_github_environment != "dev"
+    error_message = "deploy_github_environment must not be dev: that subject belongs to sp-tidal-ci (identity isolation)."
   }
 }
 
@@ -54,33 +59,69 @@ variable "k8s_namespace" {
 }
 
 # --- Secrets in Key Vault ----------------------------------------------------------------------
-# The applier needs a data-plane role on the vault to create them (Owner has no data actions). Grant Key Vault
-# Secrets Officer to yourself out of band, like the state-container grant in docs/runbooks/bootstrap.md.
+# Both secrets are created through the Azure Resource Manager API (azapi, Microsoft.KeyVault/vaults/secrets), not the
+# data plane, for two reasons:
+#   - Reader-only plan: refreshing an azurerm_key_vault_secret calls GetSecret on the data plane, which the Reader-only
+#     sp-tidal-ci-plan cannot do; an ARM GET never returns the value, so the PR plan job keeps working with Reader.
+#   - No secret in state: `sensitive_body` is write-only (never stored in state or plan). The cursor key comes from an
+#     ephemeral random_bytes, so it exists only in memory during the apply that writes it.
+# The applier needs Microsoft.KeyVault/vaults/secrets/write (Contributor has it); no data-plane role is required.
+# Consumers read through the data-plane roles on the individual secrets (Secrets User, below).
 
-# 32 random bytes for signing pagination cursors (T-402). The value is stored in Terraform state, which sits in the
-# private tfstate container (Entra-only, no shared key). Rotate with: terraform apply -replace=random_bytes.cursor_hmac
-resource "random_bytes" "cursor_hmac" {
+variable "cursor_hmac_version" {
+  description = "Version of the cursor-hmac-key value. The key is generated and written only when this number changes (write-only values leave no trace in state to diff against). Increase it to rotate; running API instances must restart to pick up the new version."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.cursor_hmac_version >= 1 && floor(var.cursor_hmac_version) == var.cursor_hmac_version
+    error_message = "cursor_hmac_version must be a whole number of at least 1."
+  }
+}
+
+# 32 random bytes for signing pagination cursors (T-402), base64. Ephemeral: never persisted.
+ephemeral "random_bytes" "cursor_hmac" {
   length = 32
 }
 
-resource "azurerm_key_vault_secret" "cursor_hmac" {
-  # checkov:skip=CKV_AZURE_41: no expiry on purpose; an expiring signing key would silently break paging. Rotation is explicit (see random_bytes.cursor_hmac).
-  name         = "cursor-hmac-key"
-  value        = random_bytes.cursor_hmac.base64
-  key_vault_id = module.key_vault.id
-  content_type = "text/plain; base64 HMAC key for API cursors"
-  tags         = merge(module.resource_group.tags, { component = "secrets" })
+resource "azapi_resource" "cursor_hmac" {
+  type      = "Microsoft.KeyVault/vaults/secrets@2023-07-01"
+  name      = "cursor-hmac-key"
+  parent_id = module.key_vault.id
+
+  body = {
+    properties = {
+      contentType = "text/plain; base64 HMAC key for API cursors"
+      # No expiry on purpose: an expiring signing key would silently break paging. Rotation is explicit (cursor_hmac_version).
+      attributes = { enabled = true }
+    }
+  }
+
+  sensitive_body         = { properties = { value = ephemeral.random_bytes.cursor_hmac.base64 } }
+  sensitive_body_version = { "properties.value" = tostring(var.cursor_hmac_version) }
+
+  tags = merge(module.resource_group.tags, { component = "secrets" })
 }
 
 # SPEC-06 section 3: the Key Vault holds the App Insights connection string. The apps do not reference it yet
 # (apps.tf still leaves TIDAL_OTEL__CONNECTION_STRING unwired); the secret and the reader roles are ready for that.
-resource "azurerm_key_vault_secret" "appinsights_connection_string" {
-  # checkov:skip=CKV_AZURE_41: connection strings do not expire; the Application Insights resource is the lifecycle owner.
-  name         = "appinsights-connection-string"
-  value        = module.log_analytics.app_insights_connection_string
-  key_vault_id = module.key_vault.id
-  content_type = "text/plain; Application Insights connection string"
-  tags         = merge(module.resource_group.tags, { component = "secrets" })
+# The version is a hash of the value, so a changed connection string is rewritten without the value being kept in state.
+resource "azapi_resource" "appinsights_connection_string" {
+  type      = "Microsoft.KeyVault/vaults/secrets@2023-07-01"
+  name      = "appinsights-connection-string"
+  parent_id = module.key_vault.id
+
+  body = {
+    properties = {
+      contentType = "text/plain; Application Insights connection string"
+      attributes  = { enabled = true }
+    }
+  }
+
+  sensitive_body         = { properties = { value = module.log_analytics.app_insights_connection_string } }
+  sensitive_body_version = { "properties.value" = substr(sha256(module.log_analytics.app_insights_connection_string), 0, 16) }
+
+  tags = merge(module.resource_group.tags, { component = "secrets" })
 }
 
 # --- Deploy-only OIDC app (separate from sp-tidal-ci, which only pushes images) ---------------------
@@ -159,8 +200,8 @@ locals {
     { for n, id in module.storage.container_ids : "container:${n}" => id },
     { for n, id in module.servicebus.queue_ids : "queue:${n}" => id },
     {
-      "secret:cursor-hmac-key"               = "${module.key_vault.id}/secrets/${azurerm_key_vault_secret.cursor_hmac.name}"
-      "secret:appinsights-connection-string" = "${module.key_vault.id}/secrets/${azurerm_key_vault_secret.appinsights_connection_string.name}"
+      "secret:cursor-hmac-key"               = "${module.key_vault.id}/secrets/${azapi_resource.cursor_hmac.name}"
+      "secret:appinsights-connection-string" = "${module.key_vault.id}/secrets/${azapi_resource.appinsights_connection_string.name}"
       "acr"                                  = module.acr.id
       "aks"                                  = module.aks.id
       "aks-namespace"                        = "${module.aks.id}/namespaces/${var.k8s_namespace}"

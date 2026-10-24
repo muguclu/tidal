@@ -13,7 +13,9 @@
 #   RBAC_APPS             space separated app display names to export (default: the five Tidal apps)
 #   GITHUB_REPOSITORY     owner/repo; replaced by <repo> in federated subjects so expected.json is repo independent
 #
-# Normalization: scopes are lower-cased, the subscription and resource group are dropped, and the globally unique
+# Scope: every assignment inside the resource group, plus every assignment of a known Tidal principal at any scope.
+# Normalization: scopes are lower-cased, the subscription and resource group are dropped (outside the group the
+# subscription becomes /subscriptions/*), and the globally unique
 # top-level names (storage account, Service Bus namespace, Key Vault, registry, AKS cluster, web app) become "*".
 # Users and groups become <user> and <group>. Secret values never leave Azure: only credential metadata counts.
 set -euo pipefail
@@ -45,12 +47,23 @@ az role assignment list --all --subscription "$sub" \
   --query '[].{principalId:principalId, principalType:principalType, role:roleDefinitionName, scope:scope}' \
   -o json >"$work/ra.json"
 
+# Known Tidal principals: the identities of the resource group, the AKS kubelet identity and the service principals of
+# the Tidal apps. Their assignments are exported at ANY scope (a grant outside the resource group, for example on the
+# state account or the subscription, is drift too); other principals only count inside the resource group.
+{
+  az identity list -g "$rg" --query '[].principalId' -o tsv
+  az aks list -g "$rg" --query '[].identityProfile.kubeletidentity.objectId' -o tsv
+  for app in $apps; do
+    az ad sp list --filter "displayName eq '$app'" --query '[].id' -o tsv
+  done
+} | sed '/^$/d' | sort -u | jq -R . | jq -s . >"$work/known.json"
+
+jq --arg rg "$rg_scope" --slurpfile known "$work/known.json"   '[.[] | select((.scope | ascii_downcase | startswith($rg)) or (.principalId as $p | $known[0] | index($p) != null))]'   "$work/ra.json" >"$work/ra-selected.json"
+
 # Resolve every distinct non-human principal to its display name (managed identities, the kubelet identity, the
 # Logic App identity and the CI/deploy service principals are all service principals in Entra).
 : >"$work/names.jsonl"
-jq -r --arg rg "$rg_scope" \
-  '.[] | select((.scope | ascii_downcase | startswith($rg)) and .principalType != "User" and .principalType != "Group") | .principalId' \
-  "$work/ra.json" | sort -u | while IFS= read -r pid; do
+jq -r '.[] | select(.principalType != "User" and .principalType != "Group") | .principalId'   "$work/ra-selected.json" | sort -u | while IFS= read -r pid; do
   name="$(az ad sp show --id "$pid" --query displayName -o tsv 2>/dev/null || true)"
   jq -nc --arg id "$pid" --arg name "${name:-unresolved:$pid}" '{key: $id, value: $name}' >>"$work/names.jsonl"
 done
@@ -68,15 +81,14 @@ jq -S --arg rg "$rg_scope" --slurpfile names "$work/names.json" '
         | ($p[0] + "/" + $p[1]) as $type
         | if (wild | index($type)) != null then ([$p[0], $p[1], "*"] + $p[3:]) else $p end
         | join("/")
-      else . end;
+      else (sub("^/subscriptions/[^/]+"; "/subscriptions/*")) end;
   [ .[]
-    | select(.scope | ascii_downcase | startswith($rg))
     | { principal: (if .principalType == "User" then "<user>"
                     elif .principalType == "Group" then "<group>"
                     else ($names[0][.principalId] // "unresolved:" + .principalId) end),
         role: .role,
         scope: (.scope | norm_scope) } ]
-  | unique | sort_by(.scope, .role, .principal)' "$work/ra.json" >"$work/assignments.json"
+  | unique | sort_by(.scope, .role, .principal)' "$work/ra-selected.json" >"$work/assignments.json"
 
 # --- Managed identity federated credentials (AKS workload identity, KEDA) ---------------------------------
 az identity list -g "$rg" --query '[].name' -o tsv | sort | while IFS= read -r idn; do

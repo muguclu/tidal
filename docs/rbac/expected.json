@@ -30,8 +30,8 @@
       "sp-tidal-deploy": {
         "federatedCredentials": [
           {
-            "name": "github-env-dev",
-            "subject": "repo:<repo>:environment:dev"
+            "name": "github-env-dev-deploy",
+            "subject": "repo:<repo>:environment:dev-deploy"
           }
         ],
         "keyCredentials": [],
