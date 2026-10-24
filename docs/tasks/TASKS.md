@@ -162,6 +162,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | T-505 | OTel + custom metrics | platform-engineer | W5/L2 | T-209 | `src/tidal/common/telemetry.py` | end-to-end trace | done |
 | T-506 | Workbook + alerts | infra-engineer | W5/L2 | T-505 | `modules/monitoring/**` | SPEC-10 §2–3 | done |
 | T-507 | Final cost-optimisation report | finops-analyst + docs-writer | W5/end | T-503, T-504 | `docs/finops/cost-optimization.md` | SPEC-09 §6 | done |
+
 **Gate G5**
 
 ---
