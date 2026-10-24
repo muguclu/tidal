@@ -141,10 +141,89 @@ resource "azuread_application_federated_identity_credential" "github_environment
   subject        = "repo:${local.github_repo_path}:environment:${var.env}"
 }
 
-# No pull_request credential on purpose: a PR token would carry every role of sp-tidal-ci and bypass the
-# `environment: dev` protection. T-127 adds a separate app sp-tidal-ci-plan (Reader + Storage Blob Data Reader only).
-
 # ---------------------------------------------------------------------------
 # RBAC: none here, on purpose. sp-tidal-ci holds no role on the state account (CI never touches state; plans use the
 # read-only sp-tidal-ci-plan). Its only role, AcrPush on the registry, is assigned by envs/dev/rbac.tf (T-403, SPEC-06 section 2).
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Plan identity: Entra app + service principal sp-tidal-ci-plan (T-408, ADR-0008 R-18). READ-ONLY by construction.
+# Used by the iac.yml jobs `plan` (pull_request, and push to main) and `rbac-drift` (schedule, workflow_dispatch). It has
+# no GitHub environment, so the OIDC subject depends on the trigger. It holds NO write role, so a PR token cannot change
+# anything; that is why it may be trusted for pull_request while sp-tidal-ci may not.
+# ---------------------------------------------------------------------------
+resource "azuread_application" "ci_plan" {
+  display_name     = "sp-tidal-ci-plan"
+  owners           = [data.azuread_client_config.current.object_id]
+  sign_in_audience = "AzureADMyOrg"
+
+  notes = "Tidal CI plan and drift identity (T-408). Read-only: Reader on the dev RG, Blob Reader on the tfstate container, Graph Application.Read.All. GitHub OIDC only; no secrets. Managed by infra/terraform/bootstrap."
+}
+
+resource "azuread_service_principal" "ci_plan" {
+  client_id                    = azuread_application.ci_plan.client_id
+  app_role_assignment_required = false
+  owners                       = [data.azuread_client_config.current.object_id]
+  tags                         = ["tidal", var.env]
+}
+
+# PR plans (iac.yml `plan` on pull_request, same-repo PRs only).
+resource "azuread_application_federated_identity_credential" "ci_plan_pull_request" {
+  application_id = azuread_application.ci_plan.id
+  display_name   = "github-pull-request"
+  description    = "GitHub Actions pull_request runs of this repository (read-only plan)"
+  issuer         = local.github_issuer
+  audiences      = local.github_audiences
+  subject        = "repo:${local.github_repo_path}:pull_request"
+}
+
+# `plan` on push to main and `rbac-drift` on schedule (the cron always runs on the default branch) and on
+# workflow_dispatch from main. No environment is declared on those jobs, so the subject is the branch ref.
+resource "azuread_application_federated_identity_credential" "ci_plan_main" {
+  application_id = azuread_application.ci_plan.id
+  display_name   = "github-ref-main"
+  description    = "GitHub Actions runs on refs/heads/main (push plan, nightly rbac-drift)"
+  issuer         = local.github_issuer
+  audiences      = local.github_audiences
+  subject        = "repo:${local.github_repo_path}:ref:refs/heads/main"
+}
+
+# Reader on the dev resource group (lets `terraform plan` refresh and rbac-drift list role assignments in it).
+# The group is created by envs/dev, so on a first-ever bootstrap set assign_plan_dev_rg_reader = false and apply again
+# after envs/dev exists (docs/runbooks/bootstrap.md).
+data "azurerm_resource_group" "dev" {
+  count = var.assign_plan_dev_rg_reader ? 1 : 0
+  name  = var.dev_resource_group_name
+}
+
+resource "azurerm_role_assignment" "ci_plan_dev_rg_reader" {
+  count                = var.assign_plan_dev_rg_reader ? 1 : 0
+  scope                = data.azurerm_resource_group.dev[0].id
+  role_definition_name = "Reader"
+  principal_id         = azuread_service_principal.ci_plan.object_id
+  description          = "T-408: read-only plan and drift export on the dev resource group"
+}
+
+# Reads state for `terraform plan` (backend with use_azuread_auth). Scoped to the container, not the account.
+resource "azurerm_role_assignment" "ci_plan_state_blob_reader" {
+  scope                = azurerm_storage_container.tfstate.id
+  role_definition_name = "Storage Blob Data Reader"
+  principal_id         = azuread_service_principal.ci_plan.object_id
+  description          = "T-408: read Terraform state for PR plans"
+}
+
+# Microsoft Graph Application.Read.All (application permission, read-only) for the rbac-drift job. Granting it needs
+# admin consent rights in the applier (Privileged Role Administrator or Global Administrator). If the applier lacks
+# them set grant_plan_graph_permission = false and grant consent by hand (docs/runbooks/bootstrap.md); drift then stays
+# invisible for the Graph part until consent is given.
+data "azuread_service_principal" "msgraph" {
+  count     = var.grant_plan_graph_permission ? 1 : 0
+  client_id = "00000003-0000-0000-c000-000000000000" # Microsoft Graph
+}
+
+resource "azuread_app_role_assignment" "ci_plan_graph_application_read_all" {
+  count               = var.grant_plan_graph_permission ? 1 : 0
+  app_role_id         = data.azuread_service_principal.msgraph[0].app_role_ids["Application.Read.All"]
+  principal_object_id = azuread_service_principal.ci_plan.object_id
+  resource_object_id  = data.azuread_service_principal.msgraph[0].object_id
+}

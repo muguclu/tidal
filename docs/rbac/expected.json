@@ -2,6 +2,7 @@
   "entra": {
     "appRoleAssignedTo": {
       "sp-tidal-ci": [],
+      "sp-tidal-ci-plan": [],
       "sp-tidal-deploy": [],
       "tidal-api": [],
       "tidal-cli": [],
@@ -22,6 +23,20 @@
           {
             "name": "github-env-dev",
             "subject": "repo:<repo>:environment:dev"
+          }
+        ],
+        "keyCredentials": [],
+        "passwordCredentials": []
+      },
+      "sp-tidal-ci-plan": {
+        "federatedCredentials": [
+          {
+            "name": "github-pull-request",
+            "subject": "repo:<repo>:pull_request"
+          },
+          {
+            "name": "github-ref-main",
+            "subject": "repo:<repo>:ref:refs/heads/main"
           }
         ],
         "keyCredentials": [],
@@ -74,6 +89,11 @@
     ]
   },
   "roleAssignments": [
+    {
+      "principal": "sp-tidal-ci-plan",
+      "role": "Storage Blob Data Reader",
+      "scope": "/subscriptions/*/resourcegroups/rg-tidal-tfstate/providers/microsoft.storage/storageaccounts/*/blobservices/default/containers/tfstate"
+    },
     {
       "principal": "sp-tidal-deploy",
       "role": "Contributor",
@@ -303,6 +323,11 @@
       "principal": "sp-tidal-deploy",
       "role": "Website Contributor",
       "scope": "microsoft.web/sites/*"
+    },
+    {
+      "principal": "sp-tidal-ci-plan",
+      "role": "Reader",
+      "scope": "resourcegroup"
     }
   ],
   "schema": 1

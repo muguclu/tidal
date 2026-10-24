@@ -47,3 +47,13 @@ output "backend_config" {
     }
   EOT
 }
+
+output "ci_plan_client_id" {
+  description = "Application (client) ID of sp-tidal-ci-plan (GitHub repository variable AZURE_PLAN_CLIENT_ID). Not a secret."
+  value       = azuread_application.ci_plan.client_id
+}
+
+output "ci_plan_service_principal_object_id" {
+  description = "Object ID of the sp-tidal-ci-plan service principal."
+  value       = azuread_service_principal.ci_plan.object_id
+}

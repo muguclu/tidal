@@ -10,7 +10,7 @@
 #
 # Environment (all optional):
 #   TIDAL_RESOURCE_GROUP  resource group to export                    (default rg-tidal-dev)
-#   RBAC_APPS             space separated app display names to export (default: the five Tidal apps)
+#   RBAC_APPS             space separated app display names to export (default: the six Tidal apps)
 #   GITHUB_REPOSITORY     owner/repo; replaced by <repo> in federated subjects so expected.json is repo independent
 #
 # Scope: every assignment inside the resource group, plus every assignment of a known Tidal principal at any scope.
@@ -29,7 +29,7 @@ elif [ $# -gt 0 ]; then
 fi
 
 rg="${TIDAL_RESOURCE_GROUP:-rg-tidal-dev}"
-apps="${RBAC_APPS:-tidal-api tidal-cli tidal-query sp-tidal-ci sp-tidal-deploy}"
+apps="${RBAC_APPS:-tidal-api tidal-cli tidal-query sp-tidal-ci sp-tidal-ci-plan sp-tidal-deploy}"
 repo="${GITHUB_REPOSITORY:-}"
 
 for tool in az jq; do
@@ -81,7 +81,7 @@ jq -S --arg rg "$rg_scope" --slurpfile names "$work/names.json" '
         | ($p[0] + "/" + $p[1]) as $type
         | if (wild | index($type)) != null then ([$p[0], $p[1], "*"] + $p[3:]) else $p end
         | join("/")
-      else (sub("^/subscriptions/[^/]+"; "/subscriptions/*")) end;
+      else (sub("^/subscriptions/[^/]+"; "/subscriptions/*") | sub("/storageaccounts/[^/]+"; "/storageaccounts/*")) end;
   [ .[]
     | { principal: (if .principalType == "User" then "<user>"
                     elif .principalType == "Group" then "<group>"

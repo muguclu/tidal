@@ -99,3 +99,26 @@ variable "state_soft_delete_days" {
     error_message = "state_soft_delete_days must be between 1 and 365."
   }
 }
+
+variable "dev_resource_group_name" {
+  description = "Name of the dev resource group created by envs/dev, on which sp-tidal-ci-plan gets Reader."
+  type        = string
+  default     = "rg-tidal-dev"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9._()-]{1,90}$", var.dev_resource_group_name))
+    error_message = "dev_resource_group_name must be a valid resource group name (1-90 characters)."
+  }
+}
+
+variable "assign_plan_dev_rg_reader" {
+  description = "Assign Reader on the dev resource group to sp-tidal-ci-plan. Set false on a first-ever bootstrap, before envs/dev has created the group."
+  type        = bool
+  default     = true
+}
+
+variable "grant_plan_graph_permission" {
+  description = "Grant Microsoft Graph Application.Read.All (admin consent) to sp-tidal-ci-plan. Needs Privileged Role Administrator or Global Administrator; set false to consent by hand."
+  type        = bool
+  default     = true
+}

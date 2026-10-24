@@ -15,6 +15,7 @@ nightly and manual, not a required check).
 | KEDA operator (`id-keda-operator`, federated credential, Data Owner on `backtest-jobs`) | `envs/dev/rbac.tf` + `module.rbac` |
 | Tiering scaler: `id-tiering` Data Owner on `tiering-jobs` | `envs/dev/rbac.tf` (`tiering_queue_role`) |
 | sp-tidal-ci (AcrPush) | `envs/dev/rbac.tf` (principal looked up with `ci_client_id`) |
+| sp-tidal-ci-plan (read-only app, credentials, Reader, state Blob Reader, Graph Application.Read.All; T-408) | `infra/terraform/bootstrap/main.tf` (human-applied, local state) |
 | sp-tidal-deploy (deploy-only app and roles) | `envs/dev/rbac.tf` (needs `github_repo_path`) |
 | Entra app roles (`Tidal.Query.Read`) | `envs/dev/entra.tf` (T-401) |
 | SQL roles | `docs/rbac/sql-grants.sql` (T-SQL, not ARM) |
@@ -50,7 +51,7 @@ nightly and manual, not a required check).
 az login   # Reader on the subscription + Graph Application.Read.All
 GITHUB_REPOSITORY=<owner>/<repo> scripts/rbac-export.sh --check docs/rbac/expected.json
 ```
-CI uses the read-only `sp-tidal-ci-plan` app (repo variable `AZURE_PLAN_CLIENT_ID`); it needs Graph `Application.Read.All` in
-addition to Reader. The export also lists assignments of known Tidal principals at any scope (not only inside the resource group). Humans (`<user>`) and groups (`<group>`) are normalized; secrets never appear. Update
+CI uses the read-only `sp-tidal-ci-plan` app (repo variable `AZURE_PLAN_CLIENT_ID`, created by `bootstrap` since T-408, so it is in `expected.json` and covered by this check); it needs Graph `Application.Read.All` in
+addition to Reader (granted by `bootstrap`; that grant sits on the Microsoft Graph service principal and is not part of the export). The export also lists assignments of known Tidal principals at any scope (not only inside the resource group). Humans (`<user>`) and groups (`<group>`) are normalized; secrets never appear. Update
 `expected.json` in the same PR as any intentional change (regenerate with `scripts/rbac-export.sh` and review the diff).
 Known limit: the SQL roles and Kubernetes RBAC inside the cluster are not exported.
