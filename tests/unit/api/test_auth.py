@@ -367,8 +367,12 @@ async def test_api_needs_user_scope_and_allowed_client(
 async def test_api_rejects_app_tokens_without_scp_or_azp(
     client: httpx.AsyncClient, jwks: JwksFake
 ) -> None:
-    app_token = jwks.mint_token(roles=[READER])  # no scp, no azp: an application token
-    assert (await client.get("/v1/instruments", headers=bearer(app_token))).status_code == 401
+    ok = jwks.mint_token(roles=[READER], azp=CLI)  # user token: scp + allowed client
+    assert (await client.get("/v1/instruments", headers=bearer(ok))).status_code == 200
+    no_scp = jwks.mint_token(roles=[READER], scp="", azp=CLI)  # allowed azp, no scope
+    assert (await client.get("/v1/instruments", headers=bearer(no_scp))).status_code == 401
+    no_azp = jwks.mint_token(roles=[READER], azp="")  # scope present, but no client id
+    assert (await client.get("/v1/instruments", headers=bearer(no_azp))).status_code == 401
 
 
 @pytest.mark.parametrize("missing", ["exp", "nbf", "oid", "tid"])
