@@ -24,6 +24,7 @@ from testcontainers.community.mssql import SqlServerContainer
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import ExecWaitStrategy, LogMessageWaitStrategy
 
+from integration.images import AZURITE_IMAGE, SQL_SERVER_IMAGE
 from tidal.contracts.schemas import BAR_V1, TICK_V1, Interval
 from tidal.storage import layout
 from tidal.storage import parquet_writer as pw
@@ -111,7 +112,7 @@ def engine() -> Iterator[Engine]:
                 conn.execute(text(f"DROP DATABASE [{db}]"))
             admin.dispose()
         return
-    with _SlowStartSqlServer("mcr.microsoft.com/mssql/server:2022-latest", password=PASSWORD) as c:
+    with _SlowStartSqlServer(SQL_SERVER_IMAGE, password=PASSWORD) as c:
         eng = _engine_for(
             f"{c.get_container_host_ip()},{c.get_exposed_port(1433)}", "sa", PASSWORD, "master"
         )
@@ -223,7 +224,7 @@ def test_ticks_real_column_and_watermark(repo: sr.SqlRepository) -> None:
 @pytest.fixture(scope="module")
 def azurite_url() -> Iterator[str]:
     with (
-        DockerContainer("mcr.microsoft.com/azure-storage/azurite:3.37.0")
+        DockerContainer(AZURITE_IMAGE)
         .with_exposed_ports(10000)
         .with_command("azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck")
         .waiting_for(LogMessageWaitStrategy("successfully listens").with_startup_timeout(120)) as c

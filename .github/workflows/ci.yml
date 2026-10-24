@@ -125,6 +125,43 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }} # built-in job token, not a repository secret
 
+  dependency-audit:
+    # Non-required (T-405). Pinned uvx tool, no new runtime dependency; audits the exact uv.lock set.
+    name: dependency-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+      - name: pip-audit on uv.lock (fails on any known vuln or unauditable dep)
+        run: |
+          uv export --frozen --no-hashes --no-emit-project --all-groups -o "$RUNNER_TEMP/requirements.txt"
+          uvx --from pip-audit==2.9.0 pip-audit --requirement "$RUNNER_TEMP/requirements.txt" --no-deps --disable-pip --strict
+
+  trivy-config:
+    # Non-required (T-405). Misconfiguration scan of the Dockerfile and Helm chart, HIGH/CRITICAL.
+    name: trivy-config
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Trivy config scan (Dockerfile + Helm chart)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: deploy
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          hide-progress: true
+
   contracts:
     name: contracts
     if: github.event_name == 'pull_request' || github.event_name == 'push'
