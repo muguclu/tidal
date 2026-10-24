@@ -24,7 +24,7 @@ from tidal.api.errors import (
 )
 from tidal.api.openapi_contract import normalize
 from tidal.api.ratelimit import TokenBucketLimiter
-from tidal.api.routers import backtests, bars, health, instruments, latest, spreads, ticks
+from tidal.api.routers import admin, backtests, bars, health, instruments, latest, spreads, ticks
 from tidal.common.config import Settings, get_settings
 from tidal.common.logging import (
     bind_correlation_id,
@@ -139,7 +139,7 @@ def create_app(
     app.add_middleware(CorrelationMiddleware)
     register_exception_handlers(app)
     instrument_fastapi(app)
-    for module in (health, instruments, bars, ticks, latest, spreads, backtests):
+    for module in (health, instruments, bars, ticks, latest, spreads, backtests, admin):
         app.include_router(module.router)
     default_openapi = app.openapi
 
