@@ -1,0 +1,263 @@
+{"table": "md.bar_hot", "rows_moved": 1218173, "rows_deduped": 0, "rows_swept": 0, "rows_deleted": 1218173, "bytes_written": 35708631, "parts_written": 36, "sql_kb_before": 65672, "sql_kb_after": 32776, "watermark": 1782864000000000000, "dry_run": false, "errors": 0, "event": "tiering_table_done", "level": "info", "ts": "2026-10-24T22:18:36.626982Z", "service": "api", "version": "0.1.0", "correlation_id": "01M5QZTQKM8E42JHHPT7V0DVFK"}
+{"resource": "tiering:md.tick_hot", "event": "applock_release_failed", "level": "warning", "ts": "2026-10-24T22:19:28.815480Z", "service": "api", "version": "0.1.0", "correlation_id": "01M5QZTQKM8E42JHHPT7V0DVFK"}
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /app/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1153 in    │
+│ _rollback_impl                                                               │
+│                                                                              │
+│   1150 │   │   │   │   else:                                                 │
+│   1151 │   │   │   │   │   self._log_info("ROLLBACK")                        │
+│   1152 │   │   │   try:                                                      │
+│ ❱ 1153 │   │   │   │   self.engine.dialect.do_rollback(self.connection)      │
+│   1154 │   │   │   except BaseException as e:                                │
+│   1155 │   │   │   │   self._handle_dbapi_exception(e, None, None, None,     │
+│        None)                                                                 │
+│   1156                                                                       │
+│                                                                              │
+│ /app/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/mssql/base.py:32 │
+│ 50 in do_rollback                                                            │
+│                                                                              │
+│   3247 │                                                                     │
+│   3248 │   def do_rollback(self, dbapi_connection):                          │
+│   3249 │   │   try:                                                          │
+│ ❱ 3250 │   │   │   super().do_rollback(dbapi_connection)                     │
+│   3251 │   │   except self.dbapi.ProgrammingError as e:                      │
+│   3252 │   │   │   if self.ignore_no_transaction_on_rollback and re.match(   │
+│   3253 │   │   │   │   r".*\b111214\b", str(e)                               │
+│                                                                              │
+│ /app/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py:951 in  │
+│ do_rollback                                                                  │
+│                                                                              │
+│    948 │   │   │   dbapi_connection                                          │
+│    949 │   │   ):                                                            │
+│    950 │   │   │   return                                                    │
+│ ❱  951 │   │   dbapi_connection.rollback()                                   │
+│    952 │                                                                     │
+│    953 │   def do_commit(self, dbapi_connection):                            │
+│    954 │   │   dbapi_connection.commit()                                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+OperationalError: ('08S01', '[08S01] [Microsoft][ODBC Driver 18 for SQL 
+Server]Communication link failure (-2147467259) (SQLEndTran)')
+
+The above exception was the direct cause of the following exception:
+
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /app/src/tidal/storage/tiering_cli.py:99 in run_cmd                          │
+│                                                                              │
+│    96 │   │   │   cfg = TieringConfig(                                       │
+│    97 │   │   │   │   hot_window_days or settings.hot_window_days,           │
+│       batch_rows, delete_chunk_rows, dry_run                                 │
+│    98 │   │   │   )                                                          │
+│ ❱  99 │   │   │   results = run_tiering(engine, store, tagger, clock, cfg,   │
+│       names)                                                                 │
+│   100 │   │   except TidalError as exc:                                      │
+│   101 │   │   │   raise _fail(exc) from exc                                  │
+│   102 │   for r in results:                                                  │
+│                                                                              │
+│ /app/src/tidal/storage/tiering.py:977 in run_tiering                         │
+│                                                                              │
+│   974 │   tables: Sequence[str] = ("bar_hot", "tick_hot"),                   │
+│   975 ) -> list[TableResult]:                                                │
+│   976 │   """Run the migration for ``tables`` (``bar_hot`` or ``md.bar_hot`` │
+│       style) and return results."""                                          │
+│ ❱ 977 │   return [run_table(engine, store, tagger, clock, cfg,               │
+│       spec_for_table(t)) for t in tables]                                    │
+│   978                                                                        │
+│   979                                                                        │
+│   980 def run_job(                                                           │
+│                                                                              │
+│ /app/src/tidal/storage/tiering.py:945 in run_table                           │
+│                                                                              │
+│   942 │   │   for key, code in list_series(engine, spec, target):            │
+│   943 │   │   │   series = (key, code, ids[key], _BY_CODE[code] if spec.bars │
+│       else None)                                                             │
+│   944 │   │   │   try:                                                       │
+│ ❱ 945 │   │   │   │   _drain_series(run, series, target)                     │
+│   946 │   │   │   except LockLost:                                           │
+│   947 │   │   │   │   raise                                                  │
+│   948 │   │   │   except TidalError as exc:                                  │
+│                                                                              │
+│ /app/src/tidal/storage/tiering.py:910 in _drain_series                       │
+│                                                                              │
+│   907 │   │   moment = from_ts_ns(lo)                                        │
+│   908 │   │   window = (lo, min(month_bounds(moment.year, moment.month)[1],  │
+│       target))                                                               │
+│   909 │   │   r.lock.check()                                                 │
+│ ❱ 910 │   │   _migrate_month(r, series, window)                              │
+│   911 │   │   if r.cfg.dry_run:                                              │
+│   912 │   │   │   floor, prev = window[1], None                              │
+│   913                                                                        │
+│                                                                              │
+│ /app/src/tidal/storage/tiering.py:864 in _migrate_month                      │
+│                                                                              │
+│   861 │   source = hashlib.sha256(                                           │
+│   862 │   │   f"tiering:{spec.name}:{iid}:{window[0]}:{window[1]}".encode()  │
+│   863 │   ).hexdigest()                                                      │
+│ ❱ 864 │   paths = write_partition(  # 3                                      │
+│   865 │   │   store, dataset=dataset, instrument_id=iid, year=year,          │
+│       month=month,                                                           │
+│   866 │   │   batches=_plan_month(r, series, window, cold),                  │
+│       source_hash=source,                                                    │
+│   867 │   )  # fmt: skip                                                     │
+│                                                                              │
+│ /app/src/tidal/storage/parquet_writer.py:381 in write_partition              │
+│                                                                              │
+│   378 │   pending_rows = 0                                                   │
+│   379 │   last_ts = lo                                                       │
+│   380 │   try:                                                               │
+│ ❱ 381 │   │   for batch in batches:                                          │
+│   382 │   │   │   table = _as_table(batch, name)                             │
+│   383 │   │   │   if table.num_rows == 0:                                    │
+│   384 │   │   │   │   continue                                               │
+│                                                                              │
+│ /app/src/tidal/storage/tiering.py:827 in _plan_month                         │
+│                                                                              │
+│   824 │   """Pages of the month -> planned contract tables; fills the stats  │
+│       on the way."""                                                         │
+│   825 │   key, code, iid, interval = series                                  │
+│   826 │   st = r.stats                                                       │
+│ ❱ 827 │   for page in pages(r.engine, r.spec, key, code, window,             │
+│       r.cfg.batch_rows):                                                     │
+│   828 │   │   r.lock.check()                                                 │
+│   829 │   │   st.total += page.height                                        │
+│   830 │   │   ts = page["ts_ns"].to_numpy()                                  │
+│                                                                              │
+│ /app/src/tidal/storage/tiering.py:733 in pages                               │
+│                                                                              │
+│   730 │   │   │   .order_by(*order)                                          │
+│   731 │   │   │   .limit(page_rows)                                          │
+│   732 │   │   )                                                              │
+│ ❱ 733 │   │   with engine.connect() as conn:                                 │
+│   734 │   │   │   df = _fetch(conn, q, spec)                                 │
+│   735 │   │   │   if df.height == 0:                                         │
+│   736 │   │   │   │   return                                                 │
+│                                                                              │
+│ /app/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:238 in     │
+│ __exit__                                                                     │
+│                                                                              │
+│    235 │   │   return self                                                   │
+│    236 │                                                                     │
+│    237 │   def __exit__(self, type_: Any, value: Any, traceback: Any) ->     │
+│        None:                                                                 │
+│ ❱  238 │   │   self.close()                                                  │
+│    239 │                                                                     │
+│    240 │   @overload                                                         │
+│    241 │   def execution_options(                                            │
+│                                                                              │
+│ /app/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1273 in    │
+│ close                                                                        │
+│                                                                              │
+│   1270 │   │   skip_reset = False                                            │
+│   1271 │   │   try:                                                          │
+│   1272 │   │   │   if self._transaction:                                     │
+│ ❱ 1273 │   │   │   │   self._transaction.close()                             │
+│   1274 │   │   │   │   skip_reset = True                                     │
+│   1275 │   │   finally:                                                      │
+│   1276 │   │   │   try:                                                      │
+│                                                                              │
+│ /app/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:2581 in    │
+│ close                                                                        │
+│                                                                              │
+│   2578 │   │                                                                 │
+│   2579 │   │   """                                                           │
+│   2580 │   │   try:                                                          │
+│ ❱ 2581 │   │   │   self._do_close()                                          │
+│   2582 │   │   finally:                                                      │
+│   2583 │   │   │   assert not self.is_active                                 │
+│   2584                                                                       │
+│                                                                              │
+│ /app/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:2719 in    │
+│ _do_close                                                                    │
+│                                                                              │
+│   2716 │   │   assert self.connection._transaction is not self               │
+│   2717 │                                                                     │
+│   2718 │   def _do_close(self) -> None:                                      │
+│ ❱ 2719 │   │   self._close_impl()                                            │
+│   2720 │                                                                     │
+│   2721 │   def _do_rollback(self) -> None:                                   │
+│   2722 │   │   self._close_impl(try_deactivate=True)                         │
+│                                                                              │
+│ /app/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:2705 in    │
+│ _close_impl                                                                  │
+│                                                                              │
+│   2702 │   def _close_impl(self, try_deactivate: bool = False) -> None:      │
+│   2703 │   │   try:                                                          │
+│   2704 │   │   │   if self.is_active:                                        │
+│ ❱ 2705 │   │   │   │   self._connection_rollback_impl()                      │
+│   2706 │   │   │                                                             │
+│   2707 │   │   │   if self.connection._nested_transaction:                   │
+│   2708 │   │   │   │   self.connection._nested_transaction._cancel()         │
+│                                                                              │
+│ /app/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:2697 in    │
+│ _connection_rollback_impl                                                    │
+│                                                                              │
+│   2694 │   │   self.connection._begin_impl(self)                             │
+│   2695 │                                                                     │
+│   2696 │   def _connection_rollback_impl(self) -> None:                      │
+│ ❱ 2697 │   │   self.connection._rollback_impl()                              │
+│   2698 │                                                                     │
+│   2699 │   def _connection_commit_impl(self) -> None:                        │
+│   2700 │   │   self.connection._commit_impl()                                │
+│                                                                              │
+│ /app/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1155 in    │
+│ _rollback_impl                                                               │
+│                                                                              │
+│   1152 │   │   │   try:                                                      │
+│   1153 │   │   │   │   self.engine.dialect.do_rollback(self.connection)      │
+│   1154 │   │   │   except BaseException as e:                                │
+│ ❱ 1155 │   │   │   │   self._handle_dbapi_exception(e, None, None, None,     │
+│        None)                                                                 │
+│   1156 │                                                                     │
+│   1157 │   def _commit_impl(self) -> None:                                   │
+│   1158 │   │   if self._has_events or self.engine._has_events:               │
+│                                                                              │
+│ /app/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:2347 in    │
+│ _handle_dbapi_exception                                                      │
+│                                                                              │
+│   2344 │   │   │   │   raise newraise.with_traceback(exc_info[2]) from e     │
+│   2345 │   │   │   elif should_wrap:                                         │
+│   2346 │   │   │   │   assert sqlalchemy_exception is not None               │
+│ ❱ 2347 │   │   │   │   raise                                                 │
+│        sqlalchemy_exception.with_traceback(exc_info[2]) from e               │
+│   2348 │   │   │   else:                                                     │
+│   2349 │   │   │   │   assert exc_info[1] is not None                        │
+│   2350 │   │   │   │   raise exc_info[1].with_traceback(exc_info[2])         │
+│                                                                              │
+│ /app/.venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py:1153 in    │
+│ _rollback_impl                                                               │
+│                                                                              │
+│   1150 │   │   │   │   else:                                                 │
+│   1151 │   │   │   │   │   self._log_info("ROLLBACK")                        │
+│   1152 │   │   │   try:                                                      │
+│ ❱ 1153 │   │   │   │   self.engine.dialect.do_rollback(self.connection)      │
+│   1154 │   │   │   except BaseException as e:                                │
+│   1155 │   │   │   │   self._handle_dbapi_exception(e, None, None, None,     │
+│        None)                                                                 │
+│   1156                                                                       │
+│                                                                              │
+│ /app/.venv/lib/python3.12/site-packages/sqlalchemy/dialects/mssql/base.py:32 │
+│ 50 in do_rollback                                                            │
+│                                                                              │
+│   3247 │                                                                     │
+│   3248 │   def do_rollback(self, dbapi_connection):                          │
+│   3249 │   │   try:                                                          │
+│ ❱ 3250 │   │   │   super().do_rollback(dbapi_connection)                     │
+│   3251 │   │   except self.dbapi.ProgrammingError as e:                      │
+│   3252 │   │   │   if self.ignore_no_transaction_on_rollback and re.match(   │
+│   3253 │   │   │   │   r".*\b111214\b", str(e)                               │
+│                                                                              │
+│ /app/.venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py:951 in  │
+│ do_rollback                                                                  │
+│                                                                              │
+│    948 │   │   │   dbapi_connection                                          │
+│    949 │   │   ):                                                            │
+│    950 │   │   │   return                                                    │
+│ ❱  951 │   │   dbapi_connection.rollback()                                   │
+│    952 │                                                                     │
+│    953 │   def do_commit(self, dbapi_connection):                            │
+│    954 │   │   dbapi_connection.commit()                                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+OperationalError: (pyodbc.OperationalError) ('08S01', '[08S01] [Microsoft][ODBC 
+Driver 18 for SQL Server]Communication link failure (-2147467259) (SQLEndTran)')
+(Background on this error at: https://sqlalche.me/e/21/e3q8)
+
+exit=1
