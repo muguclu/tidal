@@ -15,9 +15,17 @@ variable "entra_owner_object_ids" {
 }
 
 variable "entra_query_read_include_worker" {
-  description = "Also grant id-worker the Tidal.Query.Read role. SPEC-06 section 2 and ADR-0016 have the worker read through tidal-query, but T-401 grants only id-api; flip this when the worker path goes live."
+  description = "Also grant id-worker the Tidal.Query.Read role (ADR-0016: the worker reads market data through tidal-query, never SQL). id-api always gets it. Set false only to run without the worker read path."
   type        = bool
-  default     = false
+  default     = true
+}
+
+locals {
+  # Managed identities allowed to call tidal-query (same set the role assignments use).
+  query_callers = merge(
+    { "id-api" = module.identity.identities["id-api"] },
+    var.entra_query_read_include_worker ? { "id-worker" = module.identity.identities["id-worker"] } : {}
+  )
 }
 
 module "entra_app" {
@@ -29,10 +37,7 @@ module "entra_app" {
 
   role_group_object_ids = var.entra_role_group_object_ids
 
-  query_read_principal_object_ids = merge(
-    { "id-api" = module.identity.identities["id-api"].principal_id },
-    var.entra_query_read_include_worker ? { "id-worker" = module.identity.identities["id-worker"].principal_id } : {}
-  )
+  query_read_principal_object_ids = { for name, i in local.query_callers : name => i.principal_id }
 }
 
 output "entra" {
@@ -45,8 +50,12 @@ output "entra" {
     cli       = module.entra_app.cli
     query     = module.entra_app.query
     config = {
-      TIDAL_AUTH__AUDIENCE  = module.entra_app.api.identifier_uri
-      TIDAL_QUERY__AUDIENCE = module.entra_app.query.identifier_uri
+      TIDAL_AUTH__AUDIENCE                = module.entra_app.api.identifier_uri
+      TIDAL_AUTH__API_APP_CLIENT_ID       = module.entra_app.api.client_id
+      TIDAL_QUERY__AUDIENCE               = module.entra_app.query.identifier_uri
+      TIDAL_QUERY__APP_CLIENT_ID          = module.entra_app.query.client_id
+      TIDAL_AUTH__QUERY_CALLER_CLIENT_IDS = join(",", [for name in sort(keys(local.query_callers)) : local.query_callers[name].client_id])
+      TIDAL_AUTH__QUERY_CALLER_OBJECT_IDS = join(",", [for name in sort(keys(local.query_callers)) : local.query_callers[name].principal_id])
     }
   }
 }
