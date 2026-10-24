@@ -1,0 +1,25 @@
+{
+ "since_utc": "2026-10-24T22:17",
+ "datasets": {
+  "bars_1d": {
+   "blobs": 9,
+   "bytes": 43172
+  },
+  "bars_1h": {
+   "blobs": 9,
+   "bytes": 170027
+  },
+  "bars_1m": {
+   "blobs": 9,
+   "bytes": 6828109
+  },
+  "bars_1s": {
+   "blobs": 9,
+   "bytes": 28667323
+  },
+  "ticks": {
+   "blobs": 9,
+   "bytes": 36843887
+  }
+ }
+}
