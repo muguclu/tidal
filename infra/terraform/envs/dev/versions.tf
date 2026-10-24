@@ -6,6 +6,11 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 4.0"
     }
+    # Entra app registrations and role assignments (entra.tf, T-401).
+    azuread = {
+      source  = "hashicorp/azuread"
+      version = "~> 3.0"
+    }
     # The sql module creates the free-offer database through azapi (ADR-0011).
     azapi = {
       source  = "Azure/azapi"
