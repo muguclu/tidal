@@ -40,7 +40,7 @@ resource "azurerm_virtual_network" "this" {
 # --- Subnets -------------------------------------------------------------------------------------------------------
 
 resource "azurerm_subnet" "aks" {
-  # checkov:skip=CKV2_AZURE_31: AKS creates and manages its own NSG in the node resource group and rewrites its rules for load balancer services; a second subnet NSG would fight it.
+  # checkov:skip=CKV2_AZURE_31: deferred; NIC-level NSG managed by AKS; no public node IPs (a subnet NSG would fight the rules AKS rewrites).
   count = local.on ? 1 : 0
 
   name                 = "snet-aks"
@@ -96,11 +96,10 @@ resource "azurerm_subnet" "vm" {
   virtual_network_name = azurerm_virtual_network.this[0].name
   address_prefixes     = [local.subnets.vm]
 
-  # Explicit outbound (public IP on the NIC or the NAT gateway below) replaces the platform default outbound IP. The
-  # Blob service endpoint is free; with the Blob private endpoint it is redundant for the exporter (traffic uses
-  # snet-pe) and cannot serve a storage account whose public access is disabled.
+  # Explicit outbound (public IP on the NIC or the NAT gateway below) replaces the platform default outbound IP. No
+  # Blob service endpoint: the Blob private endpoint serves the exporter, and a service endpoint cannot reach a storage
+  # account whose public access is disabled.
   default_outbound_access_enabled = false
-  service_endpoints               = ["Microsoft.Storage"]
 }
 
 # --- NSGs (inbound closed; the VM module owns the NIC NSG with the outbound allow list) ------------------------------
@@ -120,9 +119,22 @@ resource "azurerm_network_security_group" "pe" {
     access                     = "Allow"
     protocol                   = "Tcp"
     source_port_range          = "*"
-    destination_port_ranges    = ["443", "1433"]
+    destination_port_ranges    = ["443"]
     source_address_prefix      = "VirtualNetwork"
     destination_address_prefix = "VirtualNetwork"
+  }
+
+  # SQL (TDS 1433) only from the workloads that talk to it; the VM and anything else in the VNet cannot.
+  security_rule {
+    name                       = "AllowSqlFromWorkloads"
+    priority                   = 110
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "1433"
+    source_address_prefixes    = [local.subnets.aks, local.subnets.aca, local.subnets.app]
+    destination_address_prefix = local.subnets.pe
   }
 
   security_rule {

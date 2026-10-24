@@ -147,6 +147,17 @@ variable "use_external_subnet" {
   default     = false
 }
 
+variable "private_endpoint_subnet_cidr" {
+  description = "CIDR of snet-pe (network module output pe_subnet_cidr). When set, the NIC NSG allows outbound TCP 443 to that prefix only, so the VM reaches the Blob private endpoint and nothing else inside the VNet. null (default): no such rule."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.private_endpoint_subnet_cidr == null || can(cidrhost(var.private_endpoint_subnet_cidr, 0))
+    error_message = "private_endpoint_subnet_cidr must be null or a valid CIDR block."
+  }
+}
+
 variable "public_ip_id" {
   description = "Optional Standard static public IP to attach to the NIC for outbound-only internet access once the subnet has default outbound access off (network module, T-404, vm_outbound = public_ip). null (default): no public address on the VM. The NIC NSG still denies all inbound."
   type        = string

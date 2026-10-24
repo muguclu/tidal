@@ -7,7 +7,9 @@ locals {
 }
 
 # --- Network: private only ----------------------------------------------------------------------
-# No public IP and no inbound rule. When T-404 provides snet-vm, pass subnet_id and the VNet below is not created.
+# No inbound rule anywhere (NIC NSG and, with the network module, the subnet NSG both deny all inbound). By default no
+# public IP either. With enable_private_networking the network module supplies snet-vm and an outbound-only Standard
+# public IP (public_ip_id; ADR-0018 records this dev deviation from "no public IP"); the VNet below is then not created.
 
 resource "azurerm_virtual_network" "this" {
   count = local.create_net ? 1 : 0
@@ -65,16 +67,20 @@ resource "azurerm_network_security_group" "this" {
   }
 
   # Private endpoints (Blob in snet-pe, T-404) sit inside the VNet, so they are not covered by the Internet tag above.
-  security_rule {
-    name                       = "AllowVnetHttpsOutbound"
-    priority                   = 110
-    direction                  = "Outbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "443"
-    source_address_prefix      = "*"
-    destination_address_prefix = "VirtualNetwork"
+  # Limited to the snet-pe prefix (var.private_endpoint_subnet_cidr), not the whole VNet.
+  dynamic "security_rule" {
+    for_each = var.private_endpoint_subnet_cidr == null ? [] : [var.private_endpoint_subnet_cidr]
+    content {
+      name                       = "AllowPrivateEndpointHttpsOutbound"
+      priority                   = 110
+      direction                  = "Outbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_range     = "443"
+      source_address_prefix      = "*"
+      destination_address_prefix = security_rule.value
+    }
   }
 
   security_rule {

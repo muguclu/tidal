@@ -38,13 +38,16 @@ SQL: Entra-only authentication (`azuread_authentication_only = true`), identitie
 - `gitleaks` in pre-commit and CI; `TIDAL_SQL__PASSWORD` only exists in git-ignored `.env`/`.env.local`; the sole exception is an ephemeral, per-run, masked SA password generated inside the CI integration job (T-128).
 
 ## 4. Network (Phase 4, toggled by `enable_private_networking`)
-- VNet with subnets: `snet-aks`, `snet-aca` (Container Apps env, workload profiles), `snet-app`
+- VNet with subnets: `snet-aks`, `snet-aca` (Container Apps env, Consumption-only, `/23`, no workload profiles), `snet-app`
   (App Service VNet integration), `snet-pe` (private endpoints), `snet-vm`.
 - Private endpoints + private DNS zones for Blob, SQL, Key Vault, Service Bus (**Premium only** for SB PE →
   documented: we keep SB public with RBAC + `minimum_tls_version 1.2` to avoid Premium cost; ADR-0006).
 - Storage: `public_network_access_enabled = false` when flag on; `allow_nested_items_to_be_public = false`;
   shared key access **disabled** (`shared_access_key_enabled = false`) → forces Entra auth everywhere.
-- VM: no public IP and no inbound path; no interactive access by design; logs via boot diagnostics / serial console.
+- VM: no inbound path (both NSGs deny all inbound, no listener, no extensions); no interactive access by design; logs via
+  boot diagnostics / serial console. Dev deviation (ADR-0018): with the flag on the NIC carries one outbound-only Standard
+  public IP instead of a NAT gateway (`network_vm_outbound = "nat_gateway"` restores a VM without a public address).
+  Production uses NAT or a firewall.
 
 ## 5. Supply chain
 - Images: multi-stage, non-root user, read-only root FS, pinned base digest.

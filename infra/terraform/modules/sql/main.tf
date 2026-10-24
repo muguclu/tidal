@@ -22,6 +22,10 @@ resource "azurerm_mssql_server" "this" {
   minimum_tls_version           = "1.2"
   public_network_access_enabled = local.public_network_access_enabled
 
+  # Proxy routes every client through the gateway on 1433. Redirect (the default for clients inside Azure) needs ports
+  # 11000-11999 to the node, which the private endpoint NSG (443/1433 only) and a private-link path do not carry.
+  connection_policy = "Proxy"
+
   azuread_administrator {
     login_username              = var.entra_admin_login
     object_id                   = var.entra_admin_object_id

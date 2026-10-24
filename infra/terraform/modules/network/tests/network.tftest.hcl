@@ -71,8 +71,18 @@ run "flag_on_public_ip" {
   }
 
   assert {
-    condition     = azurerm_subnet.vm[0].default_outbound_access_enabled == false && contains(azurerm_subnet.vm[0].service_endpoints, "Microsoft.Storage")
-    error_message = "snet-vm: default outbound off, Blob service endpoint on"
+    condition     = azurerm_subnet.vm[0].default_outbound_access_enabled == false && azurerm_subnet.vm[0].service_endpoints == null
+    error_message = "snet-vm: default outbound off, no service endpoint"
+  }
+
+  assert {
+    condition     = length([for n in [azurerm_network_security_group.pe[0], azurerm_network_security_group.app[0], azurerm_network_security_group.vm[0]] : n if length([for r in n.security_rule : r if r.direction == "Inbound" && r.access == "Allow" && r.source_address_prefix == "*"]) > 0]) == 0
+    error_message = "no NSG may allow inbound from any source"
+  }
+
+  assert {
+    condition     = length(azurerm_network_security_group.vm[0].security_rule) == 1 && output.pe_subnet_cidr == "10.40.4.32/27"
+    error_message = "subnet NSG for snet-vm only denies inbound; pe prefix output known"
   }
 
   assert {

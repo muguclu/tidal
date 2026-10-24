@@ -39,6 +39,11 @@ output "vm_subnet_id" {
   value       = one(azurerm_subnet.vm[*].id)
 }
 
+output "pe_subnet_cidr" {
+  description = "Address prefix of snet-pe (known at plan time), or null when disabled. Used to scope the VM NIC NSG outbound rule."
+  value       = local.on ? local.subnets.pe : null
+}
+
 output "vm_public_ip_id" {
   description = "Public IP ID to attach to the VM NIC when vm_outbound is public_ip; null when disabled or when the NAT gateway owns the address."
   value       = local.on && var.vm_outbound == "public_ip" ? azurerm_public_ip.vm_outbound[0].id : null

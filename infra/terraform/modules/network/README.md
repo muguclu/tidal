@@ -31,19 +31,42 @@ about 25 EUR/month (`docs/finops/deltas/T-404.md`).
 ## Operational consequences (document, not hidden)
 
 - **Terraform and CI reach.** With Blob and Key Vault closed, `terraform apply`, GitHub-hosted runners and an operator laptop
-  cannot reach those data planes. Apply from a host inside the VNet (or switch the flag off for the apply). The deploy
+  cannot reach those data planes. The apply host must be inside the VNet, or in a peered VNet that is linked to
+  all 4 private DNS zones (blob, database, vaultcore, Container Apps). **No such host exists in IaC yet**; a jump host or a
+  self-hosted runner is a follow-up. Do not switch the flag off just to apply: that would plan a revert (re-open public access
+  and destroy the endpoints). CI therefore skips the plan job when the repo variable `TIDAL_PRIVATE_NETWORKING` is `"true"`
+  (`iac.yml`, job `plan-skipped-private-networking`). `features { storage { data_plane_available = false } }` is set in
+  `envs/dev/providers.tf` (supported by azurerm 4.81): the provider stops reading blob/queue service properties from the data
+  plane, so refresh does not time out against a closed storage account; containers and the account stay on ARM. The deploy
   workflow (T-311) only pushes images to ACR (public, Basic SKU has no private link) and rolls app revisions through ARM, which
   is unaffected. The **deploy smoke tests (T-308/T-311 runbooks)**: the API (App Service) remains public so
   `/v1/health/live` from a runner still works, but any smoke test that calls tidal-query directly, reads Blob or queries SQL
-  from a runner fails in private mode; run those from inside the VNet or skip them with the flag on.
+  from a runner fails in private mode; run those from inside the VNet.
 - Switching the flag on an existing environment forces new AKS node pools and a new Container Apps environment.
+- Egress rules: the VM NIC NSG allows `VirtualNetwork` outbound only to the snet-pe prefix on 443 (the Blob endpoint); the
+  pe NSG allows 443 from the VNet and SQL 1433 only from snet-aks, snet-aca and snet-app. SQL uses `connection_policy = "Proxy"`
+  so clients need only 1433 through the endpoint. snet-vm has no `Microsoft.Storage` service endpoint (redundant with the
+  Blob private endpoint, and unusable with public access off).
 - DNS: all private zones are linked to the one VNet; hosts outside it keep resolving public addresses (which are closed).
 - App Service itself stays public (Entra JWT) by design; a private endpoint on the web app is a follow-up.
+
+## For T-406 threat model
+
+Residual risks with the flag on (T-406 folds this section into the threat model):
+
+- **Open egress.** The VM NIC NSG allows TCP 80/443 to the whole Internet tag and the VM has an outbound public IP (ADR-0018);
+  AKS nodes, Container Apps and App Service keep default internet egress. A compromised workload can exfiltrate to any HTTPS
+  host. Mitigation in production: NAT or firewall with FQDN allow lists.
+- **Service Bus token replay.** Service Bus stays public (ADR-0006, a private endpoint needs Premium). A stolen Entra token
+  with a data role is usable from anywhere until it expires; only RBAC and TLS 1.2 protect the namespace.
+- **ACR push.** ACR stays public (Basic has no private link). Anyone holding a credential with AcrPush (the CI identity) can
+  push an image that AKS, Container Apps or App Service then pulls; image signing or digest pinning is not enforced here.
 
 ## Inputs and tests
 
 `terraform test` (mock provider, no credentials) in `tests/network.tftest.hcl` checks flag off (0 resources, null outputs),
-flag on with `public_ip` (26 resources) and with `nat_gateway`. Example: `examples/basic`.
+flag on with `public_ip` (26 resources) and with `nat_gateway`, and that no NSG allows inbound from any source.
+`modules/vm_legacy/tests/nsg.tftest.hcl` asserts the VM NIC NSG has no Inbound/Allow rule. Example: `examples/basic`.
 
 <!-- BEGIN_TF_DOCS -->
 ## Requirements

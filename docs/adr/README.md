@@ -22,3 +22,4 @@ New ADRs use [0000-template.md](0000-template.md). Breaking contract changes nee
 | [0015](0015-minimal-index-tags.md) | Minimal blob index tags: `age_band` + `compacted`, tick parts only | Accepted |
 | [0016](0016-worker-reads-via-query.md) | The AKS backtest worker reads market data through `tidal-query` (no SQL access) | Accepted |
 | [0017](0017-sql-defender-va.md) | Defender for SQL and VA off by default; server auditing to Log Analytics | Accepted |
+| [0018](0018-vm-outbound-public-ip.md) | Legacy VM outbound in private mode: one Standard public IP (dev), NAT or firewall in production | Accepted |
