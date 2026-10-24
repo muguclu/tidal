@@ -35,4 +35,4 @@ policy resource exists. CKV_AZURE_24 asks for 90 days or more of storage retenti
 The dev environment has an audit trail at 0 EUR but no threat detection or vulnerability scanning; this is a conscious
 portfolio-cost trade, written down here. Revisit if real data enters the system or the environment goes beyond dev.
 Audit retention is 30 days; longer retention would need a storage sink or a workspace change. The auto-pause behaviour with
-auditing on is not verified until the first dev apply. The Defender meter should be added to `fetch_prices.py` (T-501).
+auditing on is not verified until the first dev apply.
