@@ -27,3 +27,13 @@ output "job_ids" {
   description = "Map of job short name to resource ID."
   value       = { for k, j in azurerm_container_app_job.this : k => j.id }
 }
+
+output "default_domain" {
+  description = "Default domain of the environment (for the private DNS zone of an internal environment, network module)."
+  value       = azurerm_container_app_environment.this.default_domain
+}
+
+output "static_ip_address" {
+  description = "Static IP of the environment (internal load balancer address when internal_load_balancer_enabled is true)."
+  value       = azurerm_container_app_environment.this.static_ip_address
+}
