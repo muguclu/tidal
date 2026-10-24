@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.9.0"
+  required_version = ">= 1.11.0"
 
   required_providers {
     azurerm = {
@@ -15,6 +15,11 @@ terraform {
     azapi = {
       source  = "Azure/azapi"
       version = "~> 2.0"
+    }
+    # Generates the cursor HMAC key in rbac.tf (T-403); the value lands in Terraform state.
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
     }
   }
 }
