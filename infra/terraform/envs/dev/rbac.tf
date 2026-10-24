@@ -202,6 +202,7 @@ locals {
     {
       "secret:cursor-hmac-key"               = "${module.key_vault.id}/secrets/${azapi_resource.cursor_hmac.name}"
       "secret:appinsights-connection-string" = "${module.key_vault.id}/secrets/${azapi_resource.appinsights_connection_string.name}"
+      "appinsights"                          = module.log_analytics.app_insights_id
       "acr"                                  = module.acr.id
       "aks"                                  = module.aks.id
       "aks-namespace"                        = "${module.aks.id}/namespaces/${var.k8s_namespace}"
@@ -219,6 +220,7 @@ locals {
   sb_receiver      = "Azure Service Bus Data Receiver"
   sb_owner         = "Azure Service Bus Data Owner"
   kv_secrets_user  = "Key Vault Secrets User"
+  metrics_pub      = "Monitoring Metrics Publisher"
 
   # id-tiering also drives the KEDA scaler of the event job (Container Apps authenticates the scale rule with the job
   # identity, modules/container_apps). Queue length needs Manage rights, so while the job exists the Receiver role on
@@ -259,6 +261,14 @@ locals {
       # tags/write role was not adopted (cannot be verified without Azure, see docs/rbac/README.md).
       { who = "id-tiering", role = local.blob_owner, on = "container:marketdata", why = "SPEC-06 s2: tiering compacts and retags cold Parquet (blob tags/write)" },
       { who = "id-tiering", role = local.tiering_queue_role, on = "queue:tiering-jobs", why = "SPEC-06 s2: tiering consumes jobs; Owner while it is also the KEDA scaler identity of the event job" },
+
+      # T-506: Application Insights accepts Entra tokens only (local authentication is off). Each telemetry-emitting
+      # identity may publish to the one App Insights resource and nothing else.
+      { who = "id-api", role = local.metrics_pub, on = "appinsights", why = "T-506: API publishes telemetry to Application Insights (Entra auth only)" },
+      { who = "id-query", role = local.metrics_pub, on = "appinsights", why = "T-506: query service publishes telemetry to Application Insights (Entra auth only)" },
+      { who = "id-worker", role = local.metrics_pub, on = "appinsights", why = "T-506: worker publishes telemetry to Application Insights (Entra auth only)" },
+      { who = "id-ingest", role = local.metrics_pub, on = "appinsights", why = "T-506: ingest publishes telemetry to Application Insights (Entra auth only)" },
+      { who = "id-tiering", role = local.metrics_pub, on = "appinsights", why = "T-506: tiering publishes telemetry to Application Insights (Entra auth only)" },
 
       # KEDA operator: queue length reads need management rights. Only this queue.
       { who = "id-keda-operator", role = local.sb_owner, on = "queue:backtest-jobs", why = "SPEC-06 s2: KEDA scaler reads backtest-jobs queue length" },

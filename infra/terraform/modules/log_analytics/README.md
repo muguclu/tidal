@@ -5,8 +5,8 @@ workspace-based Application Insights component.
 
 - Cost control: `daily_quota_gb` (validated > 0, unlimited is not allowed) is the hard ceiling. Data above the cap is dropped until the daily reset, so alerting on the cap being hit belongs in the budget/observability tasks.
 - Sampling: trace sampling (20 percent, 100 percent on errors) is SDK-side per SPEC-10 section 1. Do not lower the server-side `sampling_percentage` (default 100) to reach it; server-side sampling would stack on the SDK sampling and distort the counts.
-- The workspace has local authentication disabled. Application Insights keeps local (connection string) authentication enabled until T-403 grants Monitoring Metrics Publisher and disables it. Public ingestion and query endpoints stay on (AMPLS skipped for cost; private networking is Phase 4).
-- The connection string output is sensitive. Store it in Key Vault rather than in config.
+- The workspace has local authentication disabled. Application Insights also has local authentication disabled (T-506): telemetry must be sent with an Entra token, so each publisher needs Monitoring Metrics Publisher on the App Insights resource. Public ingestion and query endpoints stay on (AMPLS skipped for cost; private networking is Phase 4).
+- The connection string output is sensitive. It is kept because the SDK needs the ingestion endpoint from it (it carries no secret once local authentication is off) and envs/dev/rbac.tf stores it in Key Vault (`appinsights-connection-string`). Wiring it into the apps as a Key Vault reference is still open: the container_apps and app_service modules reject `*CONNECTION_STRING*` settings and have no secret support.
 
 Usage: see `examples/basic`.
 

@@ -34,9 +34,9 @@ resource "azurerm_application_insights" "this" {
   retention_in_days   = var.retention_in_days
   sampling_percentage = var.sampling_percentage
 
-  # Kept enabled for now: the workload identities hold no Monitoring Metrics Publisher role yet.
-  # T-403 grants Monitoring Metrics Publisher and then disables local authentication here.
-  local_authentication_enabled = true
+  # Entra only (T-506, ADR-0008 R-24/R-27): ingestion without a token is rejected, so the connection string alone is
+  # not a credential. The telemetry identities hold Monitoring Metrics Publisher on this resource (envs/dev/rbac.tf).
+  local_authentication_enabled = false
 
   tags = local.tags
 }
