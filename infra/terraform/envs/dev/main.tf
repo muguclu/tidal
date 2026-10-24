@@ -72,17 +72,18 @@ module "acr" {
 module "sql" {
   source = "../../modules/sql"
 
-  env                       = local.env
-  resource_group_name       = module.resource_group.name
-  location                  = module.resource_group.location
-  server_name_suffix        = var.name_suffix
-  tenant_id                 = data.azurerm_client_config.current.tenant_id
-  entra_admin_login         = var.sql_entra_admin_login
-  entra_admin_object_id     = var.sql_entra_admin_object_id
-  enable_private_networking = var.enable_private_networking
-  use_free_offer            = var.use_free_offer
-  tags                      = module.resource_group.tags
-  component                 = "data"
+  env                        = local.env
+  resource_group_name        = module.resource_group.name
+  location                   = module.resource_group.location
+  server_name_suffix         = var.name_suffix
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  entra_admin_login          = var.sql_entra_admin_login
+  entra_admin_object_id      = var.sql_entra_admin_object_id
+  enable_private_networking  = var.enable_private_networking
+  use_free_offer             = var.use_free_offer
+  log_analytics_workspace_id = module.log_analytics.workspace_id
+  tags                       = module.resource_group.tags
+  component                  = "data"
 }
 
 module "servicebus" {

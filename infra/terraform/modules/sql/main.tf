@@ -11,9 +11,9 @@ locals {
 resource "azurerm_mssql_server" "this" {
   # checkov:skip=CKV_AZURE_113: public access follows enable_private_networking (SPEC-06 section 4); it is on until Phase 4 and access is Entra-only over TLS 1.2 with no firewall rules by default.
   # checkov:skip=CKV2_AZURE_45: the private endpoint belongs to the Phase 4 network module and is created when enable_private_networking is true.
-  # checkov:skip=CKV_AZURE_23: server auditing needs a Log Analytics or storage sink; deferred to T-407.
-  # checkov:skip=CKV_AZURE_24: audit retention is part of the same auditing configuration; deferred to T-407.
-  # checkov:skip=CKV2_AZURE_2: vulnerability assessment needs auditing and a storage account (Defender for SQL cost); deferred to T-407.
+  # checkov:skip=CKV_AZURE_23: auditing is configured in auditing.tf (azurerm_mssql_server_extended_auditing_policy to Log Analytics); the check only recognises the deprecated inline block.
+  # checkov:skip=CKV_AZURE_24: the check demands storage retention of 90 days or more; the sink is Log Analytics with 30 days workspace retention (SPEC-07 section 2), see ADR-0017.
+  # checkov:skip=CKV2_AZURE_2: Vulnerability Assessment is behind enable_defender_for_sql / enable_vulnerability_assessment, off by default for cost (ADR-0017).
   name                = local.server_name
   resource_group_name = var.resource_group_name
   location            = var.location
