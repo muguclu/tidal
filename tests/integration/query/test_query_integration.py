@@ -23,6 +23,7 @@ from testcontainers.community.mssql import SqlServerContainer
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
+from integration.images import AZURITE_IMAGE, SQL_SERVER_IMAGE
 from tidal.common.config import Settings
 from tidal.common.timeutil import FixedClock
 from tidal.contracts.models import Tier
@@ -102,7 +103,7 @@ def engines() -> Iterator[tuple[Engine, Engine]]:
             pytest.skip("TIDAL_TEST_SQL_URL set but no TIDAL_TEST_SQL_PASSWORD")
         yield from _two_databases(shared, password)
         return
-    container = SqlServerContainer("mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04@sha256:4402d880dd4c34bfa7d8705e56a86cd6c88da80a1f6bbbe741f999e76264a090", password=PASSWORD)
+    container = SqlServerContainer(SQL_SERVER_IMAGE, password=PASSWORD)
     # SQL Server needs well over the default 120 s on a busy dev box: wait on its own log line.
     container.waiting_for(
         LogMessageWaitStrategy("ready for client connections").with_startup_timeout(480)
@@ -138,7 +139,7 @@ def _two_databases(server: str, password: str) -> Iterator[tuple[Engine, Engine]
 @pytest.fixture(scope="module")
 def azurite_cs() -> Iterator[str]:
     with (
-        DockerContainer("mcr.microsoft.com/azure-storage/azurite:3.37.0@sha256:830430c1da1a2d537e08f3e6764dd1f5ae00cf0346bcaf625b968ec3f0971fd5")
+        DockerContainer(AZURITE_IMAGE)
         .with_exposed_ports(10000)
         .with_command("azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck")
         .waiting_for(LogMessageWaitStrategy("successfully listens").with_startup_timeout(120)) as c
