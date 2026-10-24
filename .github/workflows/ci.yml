@@ -137,7 +137,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
-      - name: pip-audit on uv.lock (fails on vulns that have a fix)
+      - name: pip-audit on uv.lock (fails on any known vuln or unauditable dep)
         run: |
           uv export --frozen --no-hashes --no-emit-project --all-groups -o "$RUNNER_TEMP/requirements.txt"
           uvx --from pip-audit==2.9.0 pip-audit --requirement "$RUNNER_TEMP/requirements.txt" --no-deps --disable-pip --strict
