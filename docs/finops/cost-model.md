@@ -49,6 +49,10 @@ Observations to act on (before Phase 3):
   consider keeping images in GHCR during development and pushing to ACR only for demos (document trade-off).
 - Target ≤ €60 active is realistic only with disciplined parking; budget alerts enforce it.
 
+Wave 4 fold (T-401–T-407): no change to the totals with default flags (Entra apps free, RBAC and auditing about
+0). Optional levers, from the T-404/T-407 model scripts: `enable_private_networking` +24.95 EUR/month active
+(NAT variant 53.86), `enable_defender_for_sql` +13.20 EUR/month per server.
+
 Wave 3 fold (T-309, T-310): App Service, Container Apps, legacy VM and Logic App rows now come from the
 T-309/T-310 model scripts; totals re-summed (61–114 active, ≈ 47 parked). AKS LB + IP (T-306) still dominates the
 parked figure.

@@ -108,9 +108,9 @@ pool. Lane C: App Service + Container Apps + VM legacy exporter deployments.
 Entra ID app registrations & roles, RBAC matrix, Key Vault references, private endpoints for
 SQL/Blob/KV, Defender for Containers scan in CI, threat model.
 **Gate G4**
-- [ ] `security-reviewer` sign-off on SPEC-06 checklist
-- [ ] No secret in repo (gitleaks), no connection string with key in any app setting
-- [ ] RBAC matrix tested: trader role cannot submit backtests; quant can; reader cannot write
+- [x] `security-reviewer` sign-off on SPEC-06 checklist (dev, with conditions: docs/status/2026-W43-G4.md)
+- [x] No secret in repo (gitleaks), no connection string with key in any app setting
+- [x] RBAC matrix tested: trader role cannot submit backtests; quant can; reader cannot write (unit level; live Entra NEEDS-CLOUD)
 
 ### Phase 5 — FinOps & observability (Wave 5, 2 lanes)
 Cost exporter, measured before/after for each optimisation, dashboards, alerts, budget.
