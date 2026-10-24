@@ -1,0 +1,103 @@
+name: cost
+
+# T-502: weekly cost report from the Cost Management export (SPEC-09 section 2.1).
+# Reads the CSV export written by infra/terraform/modules/cost_export with the READ-ONLY identity
+# sp-tidal-ci-plan (Storage Blob Data Reader on the cost-exports container). Writes nothing to the repo or to
+# Azure: the report is a job summary plus a workflow artifact, so no write token is needed.
+# Subject: no `environment:` is set on purpose. sp-tidal-ci-plan only trusts `ref:refs/heads/main` and
+# `pull_request`; a scheduled or dispatched run on main presents the first (docs/runbooks/bootstrap.md).
+# NEEDS-CLOUD: inactive until the repo variables AZURE_PLAN_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID and
+# TIDAL_COST_STORAGE_ACCOUNT are set and envs/dev has been applied with ci_plan_principal_id.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC; the export lags up to 24 h, so this reports the week that just ended
+  workflow_dispatch:
+    inputs:
+      week:
+        description: "ISO week to report, for example 2026-W44 (default: week of the latest day in the export)"
+        type: string
+        default: ""
+
+permissions: {}
+
+concurrency:
+  group: cost-report
+  cancel-in-progress: false
+
+env:
+  UV_LOCKED: "1"
+
+jobs:
+  report:
+    name: weekly cost report
+    if: github.ref == 'refs/heads/main' && vars.AZURE_PLAN_CLIENT_ID != '' && vars.TIDAL_COST_STORAGE_ACCOUNT != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write # OIDC token for azure/login; this job only
+    env:
+      STORAGE_ACCOUNT: ${{ vars.TIDAL_COST_STORAGE_ACCOUNT }}
+      EXPORT_CONTAINER: cost-exports
+      EXPORT_PREFIX: ${{ vars.TIDAL_COST_EXPORT_PREFIX || 'tidal/export-tidal-dev-actual/' }}
+      REPORT_WEEK: ${{ inputs.week }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate inputs
+        run: |
+          [[ "$STORAGE_ACCOUNT" =~ ^[a-z0-9]{3,24}$ ]] || { echo "::error::TIDAL_COST_STORAGE_ACCOUNT is not a storage account name" >&2; exit 1; }
+          [[ "$EXPORT_PREFIX" =~ ^[A-Za-z0-9._/-]+/$ ]] || { echo "::error::TIDAL_COST_EXPORT_PREFIX must end with /" >&2; exit 1; }
+          [[ -z "$REPORT_WEEK" || "$REPORT_WEEK" =~ ^[0-9]{4}-W[0-9]{2}$ ]] || { echo "::error::week must look like 2026-W44" >&2; exit 1; }
+
+      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+        with:
+          python-version-file: .python-version
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --locked --no-dev
+
+      - name: Azure login (OIDC, read-only identity)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_PLAN_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Blob paths keep their layout: <prefix><YYYYMMDD-YYYYMMDD>/<run id>/part_*.csv, so the report treats each run
+      # directory as one snapshot and orders snapshots by path (= month order). Entra auth only; the account has
+      # shared key access disabled.
+      - name: Download export CSVs
+        run: |
+          mkdir -p exports
+          az storage blob download-batch \
+            --auth-mode login \
+            --account-name "$STORAGE_ACCOUNT" \
+            --source "$EXPORT_CONTAINER" \
+            --destination exports \
+            --pattern "${EXPORT_PREFIX}*.csv" \
+            --overwrite true \
+            --only-show-errors
+          count="$(find exports -name '*.csv' | wc -l)"
+          echo "downloaded $count csv file(s)"
+          [ "$count" -gt 0 ] || { echo "::error::no export CSV under $EXPORT_CONTAINER/$EXPORT_PREFIX; has the first export run yet (up to 24 h after creation)?" >&2; exit 1; }
+
+      - name: Generate report
+        id: report
+        run: |
+          args=(--export exports --out-dir out)
+          if [ -n "$REPORT_WEEK" ]; then args+=(--week "$REPORT_WEEK"); fi
+          path="$(uv run --no-dev python -m tidal.finops.cost_report "${args[@]}")"
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+          # Job summaries are limited to 1 MiB; the report is a few KB.
+          cat "$path" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cost-weekly
+          path: out/cost-weekly-*.md
+          if-no-files-found: error
+          retention-days: 90
