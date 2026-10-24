@@ -52,6 +52,27 @@ def _check_http_url(value: str) -> str:
 Url = Annotated[str, AfterValidator(_check_http_url)]
 
 
+def _guid_set(value: str | None) -> frozenset[str]:
+    if not value:
+        return frozenset()
+    return frozenset(p.strip().lower() for p in value.split(",") if p.strip())
+
+
+def _check_guids(value: str | None, *, single: bool) -> str | None:
+    """Validate one GUID or a comma-separated list of GUIDs (errors never echo the input)."""
+    if value is None:
+        return None
+    parts = [p.strip() for p in value.split(",") if p.strip()]
+    if single and len(parts) > 1:
+        raise ValueError("expected a single GUID")
+    for part in parts:
+        try:
+            UUID(part)
+        except ValueError:
+            raise ValueError("expected GUID(s)") from None
+    return ",".join(parts) or None
+
+
 class _Section(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
@@ -86,6 +107,12 @@ class QuerySettings(_Section):
 
     base_url: Url = "http://query:8000"
     audience: str = "api://tidal-query"
+    app_client_id: str | None = None  # tidal-query app client id: v2 tokens carry it as aud
+
+    @field_validator("app_client_id")
+    @classmethod
+    def _guid(cls, value: str | None) -> str | None:
+        return _check_guids(value, single=True)
 
 
 class AuthSettings(_Section):
@@ -96,8 +123,27 @@ class AuthSettings(_Section):
     disabled: bool = False
     jwks_url: str | None = None  # local only: http(s) URL or file path (.data/dev-jwks/jwks.json)
     query_role: str = "Tidal.Query.Read"  # app role tidal-query requires from its caller
-    api_client_id: str | None = None  # id-api client id, compared with azp/appid (tidal-query)
-    api_object_id: str | None = None  # id-api object id, compared with oid (tidal-query)
+    api_app_client_id: str | None = None  # tidal-api app client id: v2 tokens carry it as aud
+    query_caller_client_ids: str | None = None  # comma-separated GUIDs allowed as azp/appid
+    query_caller_object_ids: str | None = None  # comma-separated GUIDs allowed as oid
+
+    @field_validator("api_app_client_id")
+    @classmethod
+    def _guid(cls, value: str | None) -> str | None:
+        return _check_guids(value, single=True)
+
+    @field_validator("query_caller_client_ids", "query_caller_object_ids")
+    @classmethod
+    def _guid_list(cls, value: str | None) -> str | None:
+        return _check_guids(value, single=False)
+
+    def caller_client_ids(self) -> frozenset[str]:
+        """Allowed ``azp``/``appid`` values for ``tidal-query`` callers (lower case)."""
+        return _guid_set(self.query_caller_client_ids)
+
+    def caller_object_ids(self) -> frozenset[str]:
+        """Allowed ``oid`` values for ``tidal-query`` callers (lower case)."""
+        return _guid_set(self.query_caller_object_ids)
 
 
 class CursorSettings(_Section):
@@ -241,6 +287,15 @@ class Settings(BaseSettings):
     def _startup_rules(self) -> Self:
         problems: list[str] = []
         if self.env != "local":
+            if (
+                self.service_name == "query"
+                and not self.auth.disabled
+                and not (self.auth.caller_client_ids() or self.auth.caller_object_ids())
+            ):
+                problems.append(
+                    "TIDAL_AUTH__QUERY_CALLER_CLIENT_IDS or TIDAL_AUTH__QUERY_CALLER_OBJECT_IDS "
+                    f"is required for tidal-query when TIDAL_ENV={self.env}"
+                )
             if self.auth.jwks_url is not None:
                 problems.append(f"TIDAL_AUTH__JWKS_URL must not be set when TIDAL_ENV={self.env}")
             if self.cursor.key is not None:

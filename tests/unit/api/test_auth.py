@@ -269,3 +269,27 @@ def test_cursor_key_missing_or_bad_outside_local_fails_closed() -> None:
     with pytest.raises(ConfigError) as exc:
         create_app(Settings.from_env(VAULT), secret_source=FakeSecrets(RuntimeError("tok=abc")))
     assert "abc" not in str(exc.value)
+
+
+API_APP = "11111111-aaaa-bbbb-cccc-000000000001"
+OTHER_APP = "22222222-aaaa-bbbb-cccc-000000000002"
+
+
+async def test_api_accepts_app_client_id_guid_audience(jwks: JwksFake) -> None:
+    settings = Settings.from_env({**ENV, "TIDAL_AUTH__API_APP_CLIENT_ID": API_APP})
+    app = create_app(
+        settings,
+        reader=FakeReader(),
+        token_validator=api_validator_from_settings(settings, jwks.async_client()),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        ok = await c.get(
+            "/v1/instruments", headers=bearer(jwks.mint_token(roles=[READER], aud=API_APP))
+        )
+        uri = await c.get("/v1/instruments", headers=bearer(jwks.mint_token(roles=[READER])))
+        bad = await c.get(
+            "/v1/instruments", headers=bearer(jwks.mint_token(roles=[READER], aud=OTHER_APP))
+        )
+    assert (ok.status_code, uri.status_code, bad.status_code) == (200, 200, 401)

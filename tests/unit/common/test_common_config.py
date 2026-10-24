@@ -59,6 +59,14 @@ def _get(settings: Settings, key: str) -> Any:
 def _sample(key: str, typ: str) -> tuple[str, Any]:
     """Env string for ``key`` plus the expected parsed value (non-default where possible)."""
     overrides = {"TIDAL_ENV": ("local", "local"), "TIDAL_LOG_LEVEL": ("debug", "DEBUG")}
+    guid_keys = {
+        "TIDAL_AUTH__API_APP_CLIENT_ID",
+        "TIDAL_QUERY__APP_CLIENT_ID",
+        "TIDAL_AUTH__QUERY_CALLER_CLIENT_IDS",
+        "TIDAL_AUTH__QUERY_CALLER_OBJECT_IDS",
+    }
+    if key in guid_keys:
+        return TENANT, TENANT  # GUID-validated (a list for the allowlists is tested elsewhere)
     if key in overrides:
         return overrides[key]
     if "|" in typ:
@@ -78,7 +86,7 @@ def _sample(key: str, typ: str) -> tuple[str, Any]:
 
 
 def test_contract_table_parsed() -> None:
-    assert len(ROWS) == 32
+    assert len(ROWS) == 34
 
 
 def test_code_keys_equal_contract_keys() -> None:

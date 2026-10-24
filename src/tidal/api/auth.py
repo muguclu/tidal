@@ -120,8 +120,8 @@ class JwksCache:
 class JwtVerifier:
     """Signature + standard-claim validation against one tenant and one audience."""
 
-    def __init__(self, tenant_id: str, audience: str, jwks: JwksCache) -> None:
-        """Bind the verifier to ``tenant_id`` (iss and tid) and ``audience``."""
+    def __init__(self, tenant_id: str, audience: str | list[str], jwks: JwksCache) -> None:
+        """Bind the verifier to ``tenant_id`` (iss, tid) and the accepted ``audience`` value(s)."""
         self._tenant = tenant_id.lower()
         self._audience = audience
         self._jwks = jwks
@@ -191,10 +191,10 @@ class EntraApiValidator:
 
 
 class EntraTokenValidator:
-    """``tidal-query`` caller check: audience, ``Tidal.Query.Read`` role and ``id-api`` identity.
+    """``tidal-query`` caller check: audience, ``Tidal.Query.Read`` role and a caller allowlist.
 
-    ``azp`` (or v1 ``appid``) must equal ``api_client_id`` and/or ``oid`` must equal
-    ``api_object_id``; every configured identifier must match.
+    The caller (``id-api``, ``id-worker``) must hold the role AND have ``azp`` (or v1 ``appid``)
+    in ``client_ids`` OR ``oid`` in ``object_ids``.
     """
 
     def __init__(
@@ -202,38 +202,46 @@ class EntraTokenValidator:
         verifier: JwtVerifier,
         *,
         required_role: str,
-        api_client_id: str | None,
-        api_object_id: str | None,
+        client_ids: frozenset[str],
+        object_ids: frozenset[str],
     ) -> None:
-        """At least one of the two caller identifiers is required (fail closed)."""
-        if not api_client_id and not api_object_id:
+        """Both allowlists empty is a startup ``ConfigError`` (fail closed)."""
+        if not client_ids and not object_ids:
             raise ConfigError(
-                "tidal-query needs TIDAL_AUTH__API_CLIENT_ID or TIDAL_AUTH__API_OBJECT_ID"
+                "tidal-query needs TIDAL_AUTH__QUERY_CALLER_CLIENT_IDS "
+                "or TIDAL_AUTH__QUERY_CALLER_OBJECT_IDS"
             )
         self._verifier = verifier
         self._role = required_role
-        self._client_id = api_client_id.lower() if api_client_id else None
-        self._object_id = api_object_id.lower() if api_object_id else None
+        self._client_ids = frozenset(c.lower() for c in client_ids)
+        self._object_ids = frozenset(o.lower() for o in object_ids)
 
     async def validate(self, token: str) -> None:
-        """Raise ``Unauthenticated`` / ``Forbidden`` unless the caller is ``id-api``."""
+        """Raise ``Unauthenticated`` / ``Forbidden`` unless the caller is allowlisted."""
         claims = await self._verifier.verify(token)
         if self._role not in _roles(claims):
             raise Forbidden(_NOT_ALLOWED)
         azp = claims.get("azp", claims.get("appid"))
-        if self._client_id and (not isinstance(azp, str) or azp.lower() != self._client_id):
-            raise Forbidden(_NOT_ALLOWED)
         oid = claims.get("oid")
-        if self._object_id and (not isinstance(oid, str) or oid.lower() != self._object_id):
+        by_client = isinstance(azp, str) and azp.lower() in self._client_ids
+        by_object = isinstance(oid, str) and oid.lower() in self._object_ids
+        if not (by_client or by_object):
             raise Forbidden(_NOT_ALLOWED)
 
 
-def _verifier(settings: Settings, audience: str, client: httpx.AsyncClient | None) -> JwtVerifier:
+def _verifier(
+    settings: Settings, audiences: list[str], client: httpx.AsyncClient | None
+) -> JwtVerifier:
     tenant = settings.auth.tenant_id
     if tenant is None:
         raise ConfigError("TIDAL_AUTH__TENANT_ID is required to validate tokens")
     url = settings.auth.jwks_url or default_jwks_url(str(tenant))
-    return JwtVerifier(str(tenant), audience, JwksCache(url, client))
+    return JwtVerifier(str(tenant), audiences, JwksCache(url, client))
+
+
+def _audiences(uri: str, client_id: str | None) -> list[str]:
+    """Accepted ``aud`` values: the app id URI and (v2 tokens) the app client id GUID."""
+    return [uri, client_id] if client_id else [uri]
 
 
 def api_validator_from_settings(
@@ -242,7 +250,11 @@ def api_validator_from_settings(
     """JWT validator for ``tidal-api``; rejects everything when no tenant is configured."""
     if settings.auth.tenant_id is None:
         return RejectingValidator()
-    return EntraApiValidator(_verifier(settings, settings.auth.audience, client))
+    return EntraApiValidator(
+        _verifier(
+            settings, _audiences(settings.auth.audience, settings.auth.api_app_client_id), client
+        )
+    )
 
 
 def query_validator_from_settings(
@@ -250,10 +262,12 @@ def query_validator_from_settings(
 ) -> EntraTokenValidator:
     """``tidal-query`` caller validator (audience ``TIDAL_QUERY__AUDIENCE``)."""
     return EntraTokenValidator(
-        _verifier(settings, settings.query.audience, client),
+        _verifier(
+            settings, _audiences(settings.query.audience, settings.query.app_client_id), client
+        ),
         required_role=settings.auth.query_role,
-        api_client_id=settings.auth.api_client_id,
-        api_object_id=settings.auth.api_object_id,
+        client_ids=settings.auth.caller_client_ids(),
+        object_ids=settings.auth.caller_object_ids(),
     )
 
 
