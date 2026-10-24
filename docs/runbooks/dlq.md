@@ -41,11 +41,12 @@ notifies the single action group of the budget module and auto-resolves when the
 points to `tidal dlq inspect`.
 
 ## Prerequisites **[deployed]**
-- `az login`, and Entra data roles on the queue you work on: `Azure Service Bus Data Receiver` to inspect,
-  plus `Azure Service Bus Data Sender` to resubmit (the namespace has SAS keys off: `local_auth_enabled = false`).
-  The expected assignments are in `infra/terraform/envs/dev/rbac.tf`; do not add roles by hand.
-- Environment variables for the CLI (no secrets; values from `terraform output -json tidal_config` in
-  `infra/terraform/envs/dev`): `TIDAL_SERVICEBUS__FQDN` (`sb-tidal-dev-<suffix>.servicebus.windows.net`).
+- `az login`, and a time-bound role on the one queue you work on: `Azure Service Bus Data Receiver` to inspect,
+  plus `Azure Service Bus Data Sender` to resubmit. The namespace has SAS keys off (`local_auth_enabled = false`).
+  See [Access](README.md#access) for how to get and release it.
+- Environment variables for the CLI: export every key of `terraform output -json tidal_config` (run in
+  `infra/terraform/envs/dev`; it contains no secrets), including `TIDAL_ENV=dev`. The one that matters here is
+  `TIDAL_SERVICEBUS__FQDN` (`sb-tidal-dev-<suffix>.servicebus.windows.net`).
   The CLI uses `DefaultAzureCredential` and AMQP over WebSocket (port 443) outside `local`.
 
 ## 1. Inspect (read-only)
@@ -93,7 +94,8 @@ Preview with step 1, then one message first:
 uv run tidal dlq resubmit backtest-jobs --message-id <message-id>
 uv run tidal dlq resubmit tiering-jobs --max 50
 ```
-The command prints `resubmitted <n>`. The copy keeps the original message id, correlation id and `schema` property. It
+The command prints `resubmitted <n>`. If it prints `resubmitted 0`, raise `--max`. Other messages' `deliveries=`
+values increase by one, because the command receives and abandons them. The copy keeps the original message id, correlation id and `schema` property. It
 goes back through the normal path, so the next attempt counts from zero.
 
 Verification:
@@ -114,5 +116,6 @@ If a replay makes things worse, stop the consumer (`make park` stops AKS and the
 and inspect again.
 
 ## Related
+- [Access](README.md#access)
 - `src/tidal/worker/dlq.py`, `src/tidal/worker/consumer.py`
 - `docs/runbooks/restore.md` for re-running tiering

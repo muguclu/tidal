@@ -29,7 +29,8 @@ What the IaC does and does not turn on:
 ## 1. Azure SQL point-in-time restore **[deployed]**
 A restore always creates a new database. It never overwrites the existing one.
 
-Prerequisites: `az login`, Contributor on `<rg-name>` (a human, not CI). The new database is billed like any serverless
+Prerequisites: `az login`, `SQL DB Contributor` on the SQL server, time-bound (see [Access](README.md#access)). If SQL is
+unreachable from your network, do not open public access or add firewall rules by hand; ask the owner. The new database is billed like any serverless
 database. The free offer (`use_free_offer`) is set on the Terraform-managed database only, so the copy is billed normally
 until you delete it. Check the cost impact against `docs/finops/cost-model.md` first.
 
@@ -54,9 +55,13 @@ until you delete it. Check the cost impact against `docs/finops/cost-model.md` f
 4. Switch over. Pick one:
    - **Swap names** (no config change): rename the broken database, then rename `tidal_restore` to `tidal`
      (`az sql db rename -g <rg-name> -s sql-tidal-dev-<suffix> -n tidal --new-name tidal_broken`, then the same for
-     `tidal_restore` to `tidal`). Then update the Terraform state before the next apply, because Terraform
-     still tracks the old database: with a human at the keyboard, `terraform state rm` the old resource and
-     `terraform import` the renamed one, then plan and check there is no replacement. If you are unsure, stop and ask.
+     `tidal_restore` to `tidal`).
+     Do not run `terraform state rm` or `terraform import`. Terraform tracks the database by resource ID, which
+     contains the name, so after the swap the state already refers to the restored database. **Human only:** run
+     `terraform plan` in `infra/terraform/envs/dev`. It must show no replace (`-/+`) of
+     `module.sql.azurerm_mssql_database.tidal`. In-place updates (tags, `azapi_update_resource.free_offer`) are expected.
+     If it shows a replace or destroy, stop and do not apply. Delete `tidal_broken` once the restored database is
+     verified, because it is billed and holds the free-offer flag.
    - **Copy back only what is missing** with SQL from the restored copy into `tidal`. Prefer this for a small loss.
 5. Free-offer property: after a swap, re-apply so `azapi_update_resource.free_offer` sets it on the new database.
 
@@ -70,8 +75,9 @@ Rollback: nothing was changed until step 4. Drop the copy with `az sql db delete
 After a swap, rename back the same way.
 
 ## 2. Blob soft delete **[deployed]**
-Prerequisites: your user needs `Storage Blob Data Contributor` on the container (shared key is off, so all commands use
-`--auth-mode login`). The roles are the ones in `envs/dev/rbac.tf`; do not add one by hand for a drill without a ticket.
+Prerequisites: a time-bound `Storage Blob Data Contributor` on the container (see [Access](README.md#access)). Shared key
+is off, so all commands use `--auth-mode login`. Writing blob index tags needs more than Contributor (`id-tiering` has
+Owner for that reason), so re-tag through the tiering job, not from a laptop.
 
 A delete of a blob or container by an unexpected caller raises `alert-tidal-blob-audit-<env>`
 (`modules/monitoring`). Act within 7 days.
@@ -85,8 +91,14 @@ az storage blob undelete --account-name sttidaldev<suffix> -c marketdata -n <blo
 For many blobs, undelete one prefix at a time and re-list. Containers: `az storage container list --include-deleted`,
 then `az storage container restore --name <container> --deleted-version <version> --account-name sttidaldev<suffix> --auth-mode login`.
 
-An overwritten blob is kept as a soft-deleted snapshot for the same period. Undeleting the blob restores the saved state
-(`az storage blob undelete` promotes the soft-deleted snapshots). Only 7 days exist: past that, use section 3.
+An overwritten blob keeps its previous state as a soft-deleted snapshot. `az storage blob undelete` restores the
+snapshots but does not change the current blob. Then copy the snapshot over the base blob:
+1. Find the snapshot time with
+   `az storage blob list --account-name sttidaldev<suffix> -c marketdata --include sd --prefix <blob-name> --auth-mode login`.
+2. Copy it over with
+   `az storage blob copy start --account-name sttidaldev<suffix> -c marketdata -b <blob-name> --source-uri "https://sttidaldev<suffix>.blob.core.windows.net/marketdata/<blob-name>?snapshot=<snapshot>" --auth-mode login`.
+
+Only 7 days exist: past that, use section 3.
 
 After the restore:
 - The blob index tags (`age_band`, `compacted`) come back with the blob. Check one with `az storage blob tag list`.
@@ -105,15 +117,19 @@ Tiering moves rows older than the hot window from SQL to Parquet, then deletes t
 ### Re-run tiering (safe, idempotent, resumable)
 Use after a SQL restore, after a failed job, or to refill a restored range. The rules for equal rows, restatements and
 conflicts are in `docs/adr/0014-tiering-versioning.md`.
+**Default path: send a `tiering.job/v1` message** to the `tiering-jobs` queue (payload in
+`docs/contracts/messaging-contract.md` section 3, for example `{"table": "md.bar_hot", "hot_window_days": 90,
+"dry_run": true, "batch_rows": 500000}`; run with `dry_run` true first). The worker runs it as `id-tiering`, which
+already has the roles it needs. Failures land in the DLQ (`docs/runbooks/dlq.md`).
+
+Manual path, same code, from a shell. It needs the Access roles above on storage, SQL and the queue, and the environment
+from `terraform output -json tidal_config`: export every key (it contains no secrets), including `TIDAL_ENV=dev`.
 ```bash
 uv run tidal tiering run --dry-run                       # plan only, changes nothing
 uv run tidal tiering run --table bar_hot --table tick_hot
 uv run tidal tiering retag                               # yearly; also after a blob restore
 uv run tidal tiering compact --dataset bars_1d --year 2020
 ```
-Needs the storage and SQL settings in the environment (`TIDAL_STORAGE__ACCOUNT_URL`, `TIDAL_SQL__SERVER` from
-`terraform output -json tidal_config`) and `az login`. Equivalent without a shell: send a `tiering.job/v1` message to the
-`tiering-jobs` queue; the same code runs in `tidal-worker --queue tiering-jobs`.
 
 Exit code 0 means done, or another run holds the lock (then wait and re-run). Exit code 1 means a data error in at least one
 table; the output line shows `errors=<n>` and the log has the detail (a `TieringConflict` is a same-key, same-version row
@@ -143,5 +159,6 @@ only). The verbatim source responses live in the `raw` container (lifecycle: Coo
 ones need rehydration, which takes hours). Treat a loss of real data as a manual task and raise it with the orchestrator.
 
 ## Related
+- [Access](README.md#access)
 - `docs/runbooks/dlq.md`, `docs/runbooks/park.md`
 - `docs/adr/0014-tiering-versioning.md`, `docs/specs/SPEC-07-infra-platform.md`

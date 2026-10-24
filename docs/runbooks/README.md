@@ -14,3 +14,13 @@ which Terraform output holds them.
 | [key-rotation.md](key-rotation.md) | Rotate the one signing key, revoke CI/deploy OIDC access, and handle a suspected leak. |
 | [restore.md](restore.md) | Restore Azure SQL or deleted blobs, re-run tiering, re-generate synthetic data. |
 | [integration-tests.md](integration-tests.md) | Run the integration tests against local emulators. |
+
+## Access
+No human holds data-plane roles in IaC. For an incident, request a time-bound assignment (PIM-eligible, or a direct
+assignment removed at the end of the incident), scoped to the single entity:
+- `Azure Service Bus Data Receiver` on the one queue, plus `Data Sender` for resubmit;
+- `Storage Blob Data Contributor` on the one container;
+- `SQL DB Contributor` on server `sql-tidal-dev-<suffix>` for restore or rename, not RG Contributor.
+
+Record the ticket. The nightly `rbac-drift` run flags the assignment until it is removed. Never re-enable shared keys,
+SAS (`local_auth_enabled`), SQL authentication, public network access or a 0.0.0.0 firewall rule as a shortcut.

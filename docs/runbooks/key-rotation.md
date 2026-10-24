@@ -24,25 +24,31 @@ literal credential-shaped strings are public emulator values (Azurite `devstorea
 Effect: cursors issued before the change stop verifying. A client in the middle of paging gets an error and restarts
 from page one. No data is touched. The API caches the key at start, so instances must restart.
 
-Prerequisites: Terraform access to `infra/terraform/envs/dev` (remote state, see `docs/runbooks/bootstrap.md`).
+Prerequisites:
+- Terraform access to `infra/terraform/envs/dev` (remote state, see `docs/runbooks/bootstrap.md`).
+- The API app setting `TIDAL_CURSOR__KEYVAULT_URL` is set. Check with
+  `az webapp config appsettings list -g <rg-name> -n <webapp-name> --query "[?name=='TIDAL_CURSOR__KEYVAULT_URL'].name"`.
+  Known gap: IaC does not set it today (`envs/dev/apps.tf`). If it is missing, the API cannot read the key at all, so fix
+  that first through a separate infra task.
 
-1. In `infra/terraform/envs/dev` set `cursor_hmac_version` to the current value plus one (variable in `rbac.tf`; default 1).
-   Pass it with `-var cursor_hmac_version=2` or in your tfvars file.
+1. In `infra/terraform/envs/dev` set `cursor_hmac_version` to the current value plus one (variable in `rbac.tf`; default 1)
+   in the tracked tfvars file, and record the new version there before you apply.
 2. Review the plan. It must show only `azapi_resource.cursor_hmac` changing (the value is write-only and shown as
    sensitive; it is never stored in state):
    ```bash
-   terraform plan -var cursor_hmac_version=2
-   terraform apply -var cursor_hmac_version=2
+   terraform plan -var cursor_hmac_version=<current+1>
+   terraform apply -var cursor_hmac_version=<current+1>
    ```
 3. Restart the API so it reads the new version: restart the App Service `app-tidal-api-dev-<suffix>`
-   (`az webapp restart -g <rg-name> -n <webapp-name>`) and re-run the deploy workflow if the Container App `ca-tidal-query` also
-   holds the key (`docs/runbooks/deploy.md`).
-4. Keep `cursor_hmac_version` in your tfvars at the new number. Any change of the number, up or down, writes a new
+   (`az webapp restart -g <rg-name> -n <webapp-name>`).
+4. Keep `cursor_hmac_version` in the tracked tfvars at the new number. Any change of the number, up or down, writes a new
    random key; if the variable falls back to its default of 1, that is a rotation too.
 
-Verification: `az keyvault secret show --vault-name kv-tidal-dev-<suffix> -n cursor-hmac-key --query attributes.updated`
-shows a new time (needs `Key Vault Secrets User` on the secret; do not print `.value`). Then call a paged endpoint
-and use the returned cursor on page two.
+Verification: `az resource show --ids "<key-vault-id>/secrets/cursor-hmac-key" --query properties.attributes.updated -o tsv`.
+This is an ARM read: it needs only Reader on the vault and never returns the value. `<key-vault-id>` is
+`az keyvault show -n kv-tidal-dev-<suffix> --query id -o tsv`. Do not use `az keyvault secret show`, because it
+downloads the value. No human needs a data-plane role on this secret. Then call a paged endpoint and use the returned
+cursor on page two.
 
 Overlap: the API accepts an optional `cursor-hmac-key-previous` secret for verification only
 (`TIDAL_CURSOR__SECRET_NAME`, `src/tidal/api/auth.py`). Terraform does not create it today and the API identity is granted
@@ -75,8 +81,8 @@ for their short lifetime (about an hour at most):
 az ad app federated-credential list --id <app-client-id> --query "[].{name:name,subject:subject}"
 az ad app federated-credential delete --id <app-client-id> --federated-credential-id <credential-id>
 ```
-`<app-client-id>`: output `deploy_client_id` for `sp-tidal-deploy`; the others are in the bootstrap outputs
-(`infra/terraform/bootstrap/outputs.tf`). Then also restrict the GitHub environment (required reviewers, branch policy).
+`<app-client-id>`: output `deploy_client_id` (envs/dev) for `sp-tidal-deploy`; bootstrap outputs `ci_client_id`
+(`sp-tidal-ci`), `ci_plan_client_id` (`sp-tidal-ci-plan`) and `rbac_drift_client_id` (`sp-tidal-rbac-drift`). Then also restrict the GitHub environment (required reviewers, branch policy).
 
 **Replace (planned)**: change `github_repo_path` or `deploy_github_environment` (envs/dev) or the bootstrap repo variable,
 run `terraform plan`, review that the credential is replaced and the roles are unchanged, then apply. A manual delete
@@ -94,20 +100,25 @@ Assume it is compromised. Order matters: revoke first, clean up after.
    `secrets-scan`, config `.gitleaks.toml`):
    ```bash
    uv run pre-commit run gitleaks --all-files
-   gitleaks detect --source . --log-opts="--all" --redact
+   gitleaks dir . --redact
+   gitleaks git . --redact
    ```
-   The second line needs a local gitleaks install and scans all history.
+   The last two need a local gitleaks install (v8.19 or later for these subcommands): `dir` scans the working tree,
+   `git` scans history. Always use `--redact`.
+   **Never paste the leaked value** into an issue, ADR, chat or terminal command. Refer to it by file, commit SHA and
+   gitleaks rule ID only.
 3. **Check use** **[deployed]**. Look for use between exposure and revocation: Entra sign-in logs for the app, and for
    storage the alert `alert-tidal-blob-audit-<env>` and the activity-log alerts (`storage-listkeys`, `role-write`,
    `storage-write`) from `infra/terraform/modules/monitoring`. A `listKeys` event should never happen (shared key is off).
 4. **Remove from git.** Deleting the file is not enough: the value stays in history and in forks. Rewriting history needs
    a human decision and a force-push to a protected branch, so ask the repository owner. Revocation in step 1 is the real fix.
 5. **Record** the cause and the control that should have stopped it (a new gitleaks rule, a pre-commit hook) in an issue
-   or an ADR.
+   or an ADR, without the value (file, commit SHA, rule ID only).
 
 A gitleaks hit on an emulator value: add an inline `# gitleaks:allow` or a narrow rule to `.gitleaks.toml` only if
 the value is public and documented (Azurite). Never allow-list a real-looking value to make CI green.
 
 ## Related
+- [Access](README.md#access) (time-bound roles; no human needs a data-plane role for this runbook)
 - `docs/runbooks/bootstrap.md` (creates the CI apps), `docs/runbooks/deploy.md`, `docs/runbooks/images.md`
 - `docs/adr/0008-threat-model.md`
