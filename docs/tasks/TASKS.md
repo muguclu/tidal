@@ -105,26 +105,26 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 ### Lane A — backtest (data-engineer, api-engineer)
 | ID | Title | Agent | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|---|
-| T-301 | Engine, strategies, metrics | data-engineer | T-003 | `src/tidal/backtest/**`, `tests/unit/backtest/test_engine.py` (T-301's own; T-302 adds separate files), `benchmarks/backtest/**` | SPEC-05 §2–3; engine is pure over polars frames (data loading is the worker's job), so it can start in W2 | todo |
-| T-302 | Golden + look-ahead + determinism tests | test-engineer | T-301 | `tests/unit/backtest/**` except `test_engine.py` (owned by T-301), `tests/fixtures/backtest/**` | hash identical across CI matrix | todo |
-| T-303 | Worker consumer | data-engineer | T-301, T-208 | `src/tidal/worker/**` +tests | idempotent; SIGTERM abandon; lock renew; `tidal dlq inspect/resubmit` CLI. Also consume `tiering-jobs`: validate `tiering.job/v1` (`TieringJobMessage`) and call `tidal.storage.tiering.run_job` (T-205 provides it; a held `sp_getapplock` returns `locked=True` => complete the message) | todo |
-| T-304 | Submit endpoint + aggregator | api-engineer | T-209, T-303 | `api/routers/backtests.py`, `src/tidal/api/aggregator.py`, `src/tidal/api/app.py` (router registration only) +tests | sweep fan-out batching; parent status; aggregator idempotent on redelivery (messaging §4); messages serialised with `exclude_none=True` and checked against `MAX_MESSAGE_BYTES` | todo |
+| T-301 | Engine, strategies, metrics | data-engineer | T-003 | `src/tidal/backtest/**`, `tests/unit/backtest/test_engine.py` (T-301's own; T-302 adds separate files), `benchmarks/backtest/**` | SPEC-05 §2–3; engine is pure over polars frames (data loading is the worker's job), so it can start in W2 | done |
+| T-302 | Golden + look-ahead + determinism tests | test-engineer | T-301 | `tests/unit/backtest/**` except `test_engine.py` (owned by T-301), `tests/fixtures/backtest/**` | hash identical across CI matrix | done |
+| T-303 | Worker consumer | data-engineer | T-301, T-208 | `src/tidal/worker/**` +tests | idempotent; SIGTERM abandon; lock renew; `tidal dlq inspect/resubmit` CLI. Also consume `tiering-jobs`: validate `tiering.job/v1` (`TieringJobMessage`) and call `tidal.storage.tiering.run_job` (T-205 provides it; a held `sp_getapplock` returns `locked=True` => complete the message) | done |
+| T-304 | Submit endpoint + aggregator | api-engineer | T-209, T-303 | `api/routers/backtests.py`, `src/tidal/api/aggregator.py`, `src/tidal/api/app.py` (router registration only) +tests | sweep fan-out batching; parent status; aggregator idempotent on redelivery (messaging §4); messages serialised with `exclude_none=True` and checked against `MAX_MESSAGE_BYTES` | done |
 
 ### Lane B — containers & AKS (platform-engineer, infra-engineer)
 | ID | Title | Agent | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|---|
-| T-305 | Production Dockerfile | platform-engineer | T-112 | `deploy/docker/**` | size measured and ≤ 500 MB, non-root, all entrypoints; sets `TIDAL_ENV` explicitly (ADR-0012) | todo |
-| T-306 | Module: aks (spot pool, KEDA, WI) | infra-engineer | T-126 | `modules/aks/**`, `envs/dev/aks.tf`, `docs/finops/deltas/T-306.md`, `docs/finops/deltas/T-306_model.py` | SPEC-07 §2 AKS row | todo |
-| T-307 | Helm chart + ScaledJob | platform-engineer | T-305, T-306 | `deploy/helm/tidal/**` | lint/kubeconform/kube-linter clean; default-deny NetworkPolicy (egress 443 only) and PSA `restricted` label on namespace `tidal`; SA `tidal/tidal-worker` | todo |
-| T-308 | images.yml pipeline | platform-engineer | T-305, T-122 | `.github/workflows/images.yml` | trivy + sbom + push via OIDC | todo |
+| T-305 | Production Dockerfile | platform-engineer | T-112 | `deploy/docker/**` | size measured and ≤ 500 MB, non-root, all entrypoints; sets `TIDAL_ENV` explicitly (ADR-0012) | done |
+| T-306 | Module: aks (spot pool, KEDA, WI) | infra-engineer | T-126 | `modules/aks/**`, `envs/dev/aks.tf`, `docs/finops/deltas/T-306.md`, `docs/finops/deltas/T-306_model.py` | SPEC-07 §2 AKS row | done |
+| T-307 | Helm chart + ScaledJob | platform-engineer | T-305, T-306 | `deploy/helm/tidal/**` | lint/kubeconform/kube-linter clean; default-deny NetworkPolicy (egress 443 only) and PSA `restricted` label on namespace `tidal`; SA `tidal/tidal-worker` | done |
+| T-308 | images.yml pipeline | platform-engineer | T-305, T-122 | `.github/workflows/images.yml` | trivy + sbom + push via OIDC | done |
 
 ### Lane C — PaaS, serverless & legacy (infra-engineer, platform-engineer)
 | ID | Title | Agent | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|---|
-| T-309 | App Service + Container Apps (+Jobs) | infra-engineer | T-126 | `modules/{app_service,container_apps}/**`, `envs/dev/apps.tf`, `docs/finops/deltas/T-309.md` | scale-to-zero query; cron ingest; SB-triggered tiering job; scheduled yearly job must run retag and then compact for all five datasets (SPEC-03 §3.1, T-207 `compacted=true` guard); sets `TIDAL_ENV` explicitly (ADR-0012) | todo |
-| T-310 | Legacy VM + exporter | infra-engineer | T-126 | `modules/vm_legacy/**`, `legacy/exporter/**`, `tests/unit/legacy/`, `docs/finops/deltas/T-310.md` | Logic App start + self-deallocate; MI to Blob; CSV feed; sets `TIDAL_ENV` explicitly (ADR-0012) | todo |
-| T-311 | deploy.yml | platform-engineer | T-307, T-308, T-309 | `.github/workflows/deploy.yml`, `tests/smoke/**` | tag → env < 15 min | todo |
-| T-312 | integration.yml | test-engineer | T-112 | `.github/workflows/integration.yml`, `tests/integration/conftest.py` | nightly green | todo |
+| T-309 | App Service + Container Apps (+Jobs) | infra-engineer | T-126 | `modules/{app_service,container_apps}/**`, `envs/dev/apps.tf`, `docs/finops/deltas/T-309.md` | scale-to-zero query; cron ingest; SB-triggered tiering job; scheduled yearly job must run retag and then compact for all five datasets (SPEC-03 §3.1, T-207 `compacted=true` guard); sets `TIDAL_ENV` explicitly (ADR-0012) | done |
+| T-310 | Legacy VM + exporter | infra-engineer | T-126 | `modules/vm_legacy/**`, `legacy/exporter/**`, `tests/unit/legacy/`, `docs/finops/deltas/T-310.md` | Logic App start + self-deallocate; MI to Blob; CSV feed; sets `TIDAL_ENV` explicitly (ADR-0012) | done |
+| T-311 | deploy.yml | platform-engineer | T-307, T-308, T-309 | `.github/workflows/deploy.yml`, `tests/smoke/**` | tag → env < 15 min | done |
+| T-312 | integration.yml | test-engineer | T-112 | `.github/workflows/integration.yml`, `tests/integration/conftest.py` | nightly green | superseded (by T-128, #54) |
 | T-313 | park / unpark | platform-engineer | T-306, T-309, T-310 | `scripts/{park,unpark}.sh`, `docs/runbooks/park.md` | idempotent; SPEC-07 §6; Makefile targets wired by orchestrator | done |
 
 **Gate G3** (record the 100-job KEDA demo)

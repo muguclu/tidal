@@ -13,18 +13,18 @@ Rows marked with a delta are MODELLED from `docs/finops/prices.yaml` (captured 2
 | AKS system pool | 1× B2s | 10–35 (35 if never stopped) | 0 (`az aks stop`) | stop cluster |
 | AKS spot pool | D4as_v5 spot, 0–10, 32 GB P4 OS disk | 1.63–6.12 (40–150 node-hours, incl. prorated OS disk) | 0 | spot + KEDA min 0 (T-306 delta) |
 | AKS disks / LB / public IP | P4 system OS disk, Standard LB, static public IP | 24.38 (5.11 + 16.06 + 3.21) | 24.38 if `az aks stop` keeps LB + IP; 5.11 if released (unverified, T-313) | delete cluster when parked long (T-306 delta) |
-| Container Apps | Consumption | 0–3 (free grant covers most) | 0 | min replicas 0 |
-| App Service | B1 Linux | ~12 | ~12 (or delete via flag) | smallest SKU; `enable_app_service` flag |
+| Container Apps | Consumption | 0 (assumed usage 50–81 % of the free grant; compute meters unpriced, T-309 delta) | 0 | min replicas 0; cron jobs suspended when parked |
+| App Service | B1 Linux | 11.53 (730 h × 0.0158) | 11.53 (stopped B1 still bills) or 0 with `enable_app_service=false` | smallest SKU; `enable_app_service` flag (T-309 delta) |
 | Azure SQL | GP serverless 0.5–2 vCore, 32 GB | 0 on the free offer via azapi (ADR-0011); list 13.95 (0.5 vCore × 40 h) – 44.25 (2 vCore × 40 h) | 0 (free) / 3.85 list (storage only) | auto-pause; free offer is a dev-only lever (T-123 delta) |
 | Storage | LRS Hot, flat namespace; tick parts tiered Cool/Cold by `age_band` (2 index tags, ADR-0015), bars stay Hot | ≈ 0.04 at rest (M scale: 0.0516 all-Hot − 0.0100 net ticks-only tiering after index-tag cost) + transactions | ≈ 0.04 | Parquet (F5 is 3.6x smaller than SQL rowstore F0, T-204) + tiers (T-121, T-207, T-211; transactions measured in T-503) |
 | Service Bus | Basic | ≈ 0.001 (30 × 100-job sweeps) | 0 | SKU (T-124 delta); Standard (topic flag) not yet priced → T-502b |
 | ACR | Basic | 4.40 (0.1466/day) + 0.088/GB over 10 GB | 4.40 | weekly purge (T-122 delta) |
 | Key Vault | Standard | 0.03–0.26 (10k–100k ops) | < 0.03 | — (T-121 delta) |
 | Log Analytics + App Insights | PerGB2018, 0.2 GB/day cap (≈ 6 GB/month), 30 d | ≤ cap × price (first 5 GB/month free) | ≈ 0 | cap, SDK sampling 20 % (T-120 delta) |
-| VM legacy | B1s + disk | 2–4 | ~1 (disk) | schedule |
-| Logic App (VM start) | Consumption | < 0.1 | < 0.1 | ≈ 2 actions/day |
+| VM legacy | B1s + E4 StandardSSD | 2.16 (5 h compute + 2.11 disk) | 2.11 (disk) or 0 with `enable_legacy_vm=false` | daily start, self-deallocate (T-310 delta) |
+| Logic App (VM start) | Consumption | 0 (≈ 30 built-in actions/month, free tier) | 0 | `start_enabled` (T-310 delta) |
 | Budget + action group + TF state | — / email / LRS few KB | 0 / 0 / < 0.01 | same | free (T-125, T-008 deltas) |
-| **Total** | | **≈ 61–120** | **≈ 45** (≈ 33 with `enable_app_service=false`) | |
+| **Total** | | **≈ 61–114** | **≈ 47** (≈ 35 with `enable_app_service=false`) | |
 
 ### Composed so far: `envs/dev` (T-126)
 
@@ -48,6 +48,10 @@ Observations to act on (before Phase 3):
 - App Service B1 and ACR Basic dominate the parked cost → `enable_app_service` flag to delete when parked;
   consider keeping images in GHCR during development and pushing to ACR only for demos (document trade-off).
 - Target ≤ €60 active is realistic only with disciplined parking; budget alerts enforce it.
+
+Wave 3 fold (T-309, T-310): App Service, Container Apps, legacy VM and Logic App rows now come from the
+T-309/T-310 model scripts; totals re-summed (61–114 active, ≈ 47 parked). AKS LB + IP (T-306) still dominates the
+parked figure.
 
 Wave 3 fold (T-306): the AKS load balancer and public IP alone cost 19.27 EUR/month and do not stop with the
 cluster unless `az aks stop` releases them (unverified). The old 3–6 estimate was too low; the totals above are
