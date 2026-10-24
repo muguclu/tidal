@@ -30,8 +30,10 @@ SQL: Entra-only authentication (`azuread_authentication_only = true`), identitie
 `CREATE USER [id-api] FROM EXTERNAL PROVIDER`. No SQL logins.
 
 ## 3. Secrets
-- Key Vault (RBAC mode, purge protection on, soft delete 7 d) holds only the App Insights connection
-  string (no vendor keys since ADR-0013).
+- Key Vault (RBAC mode, purge protection on, soft delete 7 d) holds the App Insights connection
+  string and `cursor-hmac-key` (Terraform-generated, T-403; base64 of 32+ random bytes; readable by
+  `id-api` with Secrets User; an optional `cursor-hmac-key-previous` is verify-only during rotation).
+  No vendor keys since ADR-0013.
 - App Service / Container Apps read via Key Vault references; AKS via Secrets Store CSI driver.
 - `gitleaks` in pre-commit and CI; `TIDAL_SQL__PASSWORD` only exists in git-ignored `.env`/`.env.local`; the sole exception is an ephemeral, per-run, masked SA password generated inside the CI integration job (T-128).
 

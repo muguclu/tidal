@@ -9,6 +9,12 @@ import uvicorn
 from fastapi import FastAPI
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from tidal.api.auth import (
+    PrincipalValidator,
+    SecretSource,
+    api_validator_from_settings,
+    resolve_cursor_key,
+)
 from tidal.api.deps import assert_auth_allowed
 from tidal.api.errors import (
     CORRELATION_HEADER,
@@ -86,14 +92,19 @@ def create_app(
     reader: Reader | None = None,
     bus: Bus | None = None,
     clock: Clock | None = None,
+    token_validator: PrincipalValidator | None = None,
+    secret_source: SecretSource | None = None,
 ) -> FastAPI:
     """Build the API (Factory pattern); every external client is injected.
 
     ``reader`` and ``bus`` default to ``None`` (real clients arrive with T-208); the ready probe
-    then reports ``not_ready``. ``clock`` defaults to the system clock.
+    then reports ``not_ready``. ``clock`` defaults to the system clock. ``token_validator`` defaults
+    to the Entra JWT validator and ``secret_source`` (Key Vault) supplies the cursor HMAC key;
+    outside local a missing key fails startup with ``ConfigError``.
     """
     settings = settings or get_settings()
     assert_auth_allowed(settings)
+    cursor_key = resolve_cursor_key(settings, secret_source)
     configure_logging(settings)
 
     @asynccontextmanager
@@ -119,6 +130,8 @@ def create_app(
     app.state.reader = reader
     app.state.bus = bus
     app.state.clock = clock or SystemClock()
+    app.state.token_validator = token_validator or api_validator_from_settings(settings)
+    app.state.cursor_key = cursor_key  # None (local only): pagination makes a random key
     app.state.rate_limiter = TokenBucketLimiter(app.state.clock)
     app.add_middleware(CorrelationMiddleware)
     register_exception_handlers(app)
