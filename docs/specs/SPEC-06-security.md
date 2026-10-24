@@ -16,22 +16,26 @@ Owner agents: `infra-engineer`, `api-engineer`; reviewer: `security-reviewer` ·
 
 | Identity | Storage (md, reference) | Storage (backtests) | SQL | Service Bus | Key Vault | ACR |
 |---|---|---|---|---|---|---|
-| id-api | Blob Data Reader | Blob Data Reader | db_datareader + exec on `ops` procs | Data Sender (`backtest-jobs`, `tiering-jobs`), Data Receiver (`backtest-results`) | Secrets User | AcrPull on the registry (only while `enable_app_service` is true) |
-| id-query | Blob Data Reader | — | db_datareader | — | Secrets User | AcrPull on the registry |
+| id-api | Blob Data Reader | Blob Data Reader | db_datareader + exec on `ops` procs | Data Sender (`backtest-jobs`, `tiering-jobs`), Data Receiver (`backtest-results`) | Secrets User on secrets `cursor-hmac-key` and `appinsights-connection-string` | AcrPull on the registry (only while `enable_app_service` is true) |
+| id-query | Blob Data Reader | — | db_datareader | — | Secrets User on secret `appinsights-connection-string` | AcrPull on the registry |
 | id-worker | Blob Data Reader | Blob Data Contributor | calls tidal-query (app role/audience per T-402), no SQL access (ADR-0016) | Data Receiver (`backtest-jobs`), Data Sender (`backtest-results`) | — | — |
 | id-ingest | Blob Data Contributor (`raw`,`marketdata`,`reference`) | — | db_datareader + db_datawriter on `md`, `ref`, `ops` (checkpoints, instrument first/last ts) | — | — | AcrPull on the registry |
-| id-tiering | Blob Data Owner on container `marketdata` (blob index tags need `tags/write`; the ARM "Tag Contributor" role does **not** cover blob tags; T-403 checks whether Blob Data Contributor + a custom `tags/write` role is tighter) | — | db_datareader/writer + delete on `md`, `ops` | Data Receiver (`tiering-jobs`) | — | AcrPull on the registry |
+| id-tiering | Blob Data Owner on container `marketdata` (blob index tags need `tags/write`; the ARM "Tag Contributor" role does **not** cover blob tags. T-403 kept Data Owner: a custom `tags/write` role on top of Blob Data Contributor was not adopted because it cannot be verified without Azure and Find Blobs by Tags may need a further `filter/action`; revisit with a live test) | — | db_datareader/writer (writer includes delete) | Data Receiver (`tiering-jobs`); **Data Owner on that one queue while `enable_tiering_event_job` is true**: the Container Apps job identity doubles as the KEDA scale-rule identity and queue counts need Manage rights | — | AcrPull on the registry |
 | id-legacy-vm | Blob Data Contributor (`exports`), Blob Data Reader (`marketdata`) | — | — | — | — | — (plus custom role `vm-self-deallocate`: `deallocate/action` on its own VM only) |
 | AKS kubelet | — | — | — | — | — | AcrPull |
-| KEDA operator (workload identity) | — | — | — | Data Owner on `backtest-jobs` (queue-length reads need management rights; T-403 checks whether a narrower custom role works) | — | — |
-| sp-tidal-ci | — | — | — | — | — | AcrPush; Contributor on RG `rg-tidal-dev` only (enough for image push and app updates; **not** for `terraform apply`, which needs role-assignment and Graph rights and stays human-only) |
+| KEDA operator (workload identity) | — | — | — | Data Owner on `backtest-jobs` only (queue-length reads need management rights; identity `id-keda-operator`, federated to `system:serviceaccount:kube-system:keda-operator`; a narrower custom role was not adopted: the Service Bus data actions KEDA calls are not documented as separable) | — | — |
+| sp-tidal-ci | — | — | — | — | — | AcrPush on the registry **only**. The RG-wide Contributor was dropped in T-403: app updates move to `sp-tidal-deploy` (next row), so the image-push identity cannot change infrastructure |
+| sp-tidal-deploy (T-403) | — | — | — | — | AcrPull on the registry; Website Contributor on the web app; Contributor on `ca-tidal-query` and on each Container Apps Job; Reader + Cluster User Role on the AKS cluster and RBAC Writer on namespace `tidal`; Managed Identity Operator on the identities of those targets. Never `terraform apply` (needs role-assignment and Graph rights, human-only) |
 
 SQL: Entra-only authentication (`azuread_authentication_only = true`), identities mapped with
-`CREATE USER [id-api] FROM EXTERNAL PROVIDER`. No SQL logins.
+`CREATE USER [id-api] FROM EXTERNAL PROVIDER`. No SQL logins. The SQL roles are database objects, not Azure RBAC:
+`docs/rbac/sql-grants.sql` (run once by the SQL Entra admin) is their source; the drift export cannot see them.
+`db_datareader`/`db_datawriter` are database-wide, which equals "md, ref, ops" while those are the only schemas.
 
 ## 3. Secrets
-- Key Vault (RBAC mode, purge protection on, soft delete 7 d) holds only the App Insights connection
-  string (no vendor keys since ADR-0013).
+- Key Vault (RBAC mode, purge protection on, soft delete 7 d) holds the App Insights connection
+  string and the API cursor HMAC key `cursor-hmac-key` (T-402; Terraform-generated, so its value is in
+  Terraform state), and no vendor keys (ADR-0013).
 - App Service / Container Apps read via Key Vault references; AKS via Secrets Store CSI driver.
 - `gitleaks` in pre-commit and CI; `TIDAL_SQL__PASSWORD` only exists in git-ignored `.env`/`.env.local`; the sole exception is an ephemeral, per-run, masked SA password generated inside the CI integration job (T-128).
 
@@ -54,7 +58,7 @@ STRIDE table in `docs/adr/0008-threat-model.md` (owned by `security-reviewer`).
 
 ## 7. Acceptance checklist (security-reviewer sign-off)
 - [ ] Zero secrets in repo, image layers, app settings (except KV references).
-- [ ] Each identity has exactly the roles in §2 (`az role assignment list` export diffed in CI).
+- [ ] Each identity has exactly the roles in §2 (`scripts/rbac-export.sh`: role assignments, Entra app role assignments and app credentials, diffed against `docs/rbac/expected.json` by the nightly, non-required `rbac-drift` job in `iac.yml`).
 - [ ] Shared key access disabled on storage; SQL Entra-only.
 - [ ] Role tests: Reader cannot POST backtests (403); Trader cannot call admin (403).
 - [ ] Trivy clean; non-root containers; no `privileged`/`hostPath` in Helm chart (kube-linter/kubeconform).

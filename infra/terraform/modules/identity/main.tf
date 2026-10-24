@@ -1,5 +1,5 @@
-# Identities only. All role assignments (blob, SQL, Service Bus, Key Vault, ACR pull) live in T-403
-# so that RBAC is reviewed in one place, scoped per SPEC-06 section 2.
+# Identities, plus the RBAC engine in rbac.tf (T-403): role assignments and federated credentials are passed in as data
+# so that RBAC is reviewed in one place (envs/dev/rbac.tf), scoped per SPEC-06 section 2.
 resource "azurerm_user_assigned_identity" "this" {
   for_each = var.identity_names
 
