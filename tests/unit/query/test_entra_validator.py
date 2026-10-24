@@ -63,10 +63,11 @@ def mint(
     aud: str = AUD,
 ) -> str:
     return jwks.mint_token(
+        kind="app",
         aud=aud,
         roles=[ROLE] if roles is None else roles,
         oid=oid,
-        extra_claims=({"azp": azp} if azp else {}) | {"idtyp": "app"},
+        azp=azp or "",
     )
 
 
@@ -84,7 +85,7 @@ REFUSED: dict[str, Callable[[JwksFake], str]] = {
     "audience": lambda j: j.mint_token(aud="api://tidal", roles=[ROLE], oid=API_OID),
     "other-app-guid": lambda j: mint(j, aud=OTHER_APP),
     "unknown-mi-with-role": lambda j: mint(j, azp=UNKNOWN),
-    "allowed-mi-without-role": lambda j: mint(j, roles=[]),
+    "allowed-mi-without-role": lambda j: mint(j, roles=["Tidal.Unrelated"]),
     "allowed-mi-with-end-user-role": lambda j: mint(j, roles=["Tidal.Reader"]),
     "user-token-scp": lambda j: j.mint_token(
         aud=AUD,
@@ -105,7 +106,9 @@ async def test_other_callers_are_refused(jwks: JwksFake, name: str) -> None:
 
 
 async def test_appid_claim_is_accepted(jwks: JwksFake) -> None:
-    v1 = jwks.mint_token(aud=AUD, roles=[ROLE], extra_claims={"appid": API_CLIENT, "idtyp": "app"})
+    v1 = jwks.mint_token(
+        kind="app", aud=AUD, azp="", extra_claims={"appid": API_CLIENT}
+    )  # v1-style app id claim
     await call(jwks, v1)
 
 
