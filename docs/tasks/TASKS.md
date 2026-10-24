@@ -125,7 +125,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | T-310 | Legacy VM + exporter | infra-engineer | T-126 | `modules/vm_legacy/**`, `legacy/exporter/**`, `tests/unit/legacy/`, `docs/finops/deltas/T-310.md` | Logic App start + self-deallocate; MI to Blob; CSV feed; sets `TIDAL_ENV` explicitly (ADR-0012) | todo |
 | T-311 | deploy.yml | platform-engineer | T-307, T-308, T-309 | `.github/workflows/deploy.yml`, `tests/smoke/**` | tag → env < 15 min | todo |
 | T-312 | integration.yml | test-engineer | T-112 | `.github/workflows/integration.yml`, `tests/integration/conftest.py` | nightly green | todo |
-| T-313 | park / unpark | platform-engineer | T-306, T-309, T-310 | `scripts/{park,unpark}.sh`, `docs/runbooks/park.md` | idempotent; SPEC-07 §6; Makefile targets wired by orchestrator | todo |
+| T-313 | park / unpark | platform-engineer | T-306, T-309, T-310 | `scripts/{park,unpark}.sh`, `docs/runbooks/park.md` | idempotent; SPEC-07 §6; Makefile targets wired by orchestrator | done |
 
 **Gate G3** (record the 100-job KEDA demo)
 
