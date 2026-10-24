@@ -1,6 +1,11 @@
 # Dev overrides. Placeholders are replaced with Terraform outputs at deploy time
 # (helm --set or a generated values file). None of these values is a secret.
 env: dev
+# R-26 (ADR-0008): the deploy identity only has RBAC Writer inside `tidal`, so it cannot create or adopt the
+# Namespace. The human applier creates it WITH the PSA restricted labels (docs/runbooks/deploy.md).
+namespace:
+  create: false
+  externallyManagedAck: true
 image:
   repository: acrtidaldev.azurecr.io/tidal
   tag: sha-0000000   # informational only; digest wins

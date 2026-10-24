@@ -72,8 +72,14 @@ RBAC Writer is scoped to the namespace and cannot create it, and `deploy.yml` de
 Before the first deploy, and before applying the namespace-scoped role assignment, run once as a cluster admin:
 
 ```bash
-az aks get-credentials --name <aks_name> --resource-group <rg> && kubectl create namespace tidal
+az aks get-credentials --name <aks_name> --resource-group <rg>
+kubectl create namespace tidal
+kubectl label namespace tidal \n  pod-security.kubernetes.io/enforce=restricted \n  pod-security.kubernetes.io/audit=restricted \n  pod-security.kubernetes.io/warn=restricted
+kubectl get namespace tidal --show-labels   # verify all three labels before the first deploy
 ```
+
+`values-dev.yaml` therefore sets `namespace.create=false` and `externallyManagedAck=true` (R-26 in ADR-0008):
+without the labels the worker would run without PSA `restricted`.
 
 ## Behaviour and limits
 - App Service health is polled from the runner (`/v1/health/live`, up to 4 min). If the app has an IP allow-list
