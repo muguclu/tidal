@@ -1,0 +1,19 @@
+[Unit]
+Description=Tidal legacy daily-bar CSV exporter (exports, then deallocates the VM)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=15min
+EnvironmentFile=/etc/tidal/exporter.env
+ExecStart=/opt/tidal-exporter/venv/bin/python /opt/tidal-exporter/export_daily_bars.py
+# Hardening: the job needs outbound HTTPS only.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+DynamicUser=true
+
+[Install]
+WantedBy=multi-user.target

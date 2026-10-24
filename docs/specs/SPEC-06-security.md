@@ -21,7 +21,7 @@ Owner agents: `infra-engineer`, `api-engineer`; reviewer: `security-reviewer` ·
 | id-worker | Blob Data Reader | Blob Data Contributor | calls tidal-query (app role/audience per T-402), no SQL access (ADR-0016) | Data Receiver (`backtest-jobs`), Data Sender (`backtest-results`) | — | — |
 | id-ingest | Blob Data Contributor (`raw`,`marketdata`,`reference`) | — | db_datareader + db_datawriter on `md`, `ref`, `ops` (checkpoints, instrument first/last ts) | — | — | AcrPull on the registry |
 | id-tiering | Blob Data Owner on container `marketdata` (blob index tags need `tags/write`; the ARM "Tag Contributor" role does **not** cover blob tags; T-403 checks whether Blob Data Contributor + a custom `tags/write` role is tighter) | — | db_datareader/writer + delete on `md`, `ops` | Data Receiver (`tiering-jobs`) | — | AcrPull on the registry |
-| id-legacy-vm | Blob Data Contributor (`exports`) | — | db_datareader | — | — | — (plus custom role `vm-self-deallocate`: `deallocate/action` on its own VM only) |
+| id-legacy-vm | Blob Data Contributor (`exports`), Blob Data Reader (`marketdata`) | — | — | — | — | — (plus custom role `vm-self-deallocate`: `deallocate/action` on its own VM only) |
 | AKS kubelet | — | — | — | — | — | AcrPull |
 | KEDA operator (workload identity) | — | — | — | Data Owner on `backtest-jobs` (queue-length reads need management rights; T-403 checks whether a narrower custom role works) | — | — |
 | sp-tidal-ci | — | — | — | — | — | AcrPush; Contributor on RG `rg-tidal-dev` only (enough for image push and app updates; **not** for `terraform apply`, which needs role-assignment and Graph rights and stays human-only) |
@@ -42,7 +42,7 @@ SQL: Entra-only authentication (`azuread_authentication_only = true`), identitie
   documented: we keep SB public with RBAC + `minimum_tls_version 1.2` to avoid Premium cost; ADR-0006).
 - Storage: `public_network_access_enabled = false` when flag on; `allow_nested_items_to_be_public = false`;
   shared key access **disabled** (`shared_access_key_enabled = false`) → forces Entra auth everywhere.
-- VM: no public IP; access via **Azure Bastion Developer** (free tier; check region availability) or `az ssh vm` with Entra login.
+- VM: no public IP and no inbound path; no interactive access by design; logs via boot diagnostics / serial console.
 
 ## 5. Supply chain
 - Images: multi-stage, non-root user, read-only root FS, pinned base digest.
