@@ -276,6 +276,11 @@
       "scope": "microsoft.storage/storageaccounts/*/blobservices/default/containers/backtests"
     },
     {
+      "principal": "sp-tidal-ci-plan",
+      "role": "Storage Blob Data Reader",
+      "scope": "microsoft.storage/storageaccounts/*/blobservices/default/containers/cost-exports"
+    },
+    {
       "principal": "id-legacy-vm",
       "role": "Storage Blob Data Contributor",
       "scope": "microsoft.storage/storageaccounts/*/blobservices/default/containers/exports"
