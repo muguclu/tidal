@@ -3,7 +3,9 @@
 env: dev
 image:
   repository: acrtidaldev.azurecr.io/tidal
-  tag: sha-0000000   # replaced by CI (T-311)
+  tag: sha-0000000   # informational only; digest wins
+  # Required for every non-local values file (T-405). Placeholder replaced by CI (T-311) via --set-string.
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
 serviceAccount:
   clientId: "00000000-0000-0000-0000-000000000000"
   tenantId: "00000000-0000-0000-0000-000000000000"

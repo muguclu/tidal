@@ -60,6 +60,7 @@ from integration.crash_support import (
     Params,
     run_once,
 )
+from integration.images import AZURITE_IMAGE, SQL_SERVER_IMAGE
 from tidal.common.config import Settings
 from tidal.common.timeutil import FixedClock, month_bounds
 from tidal.contracts.models import Tier
@@ -154,7 +155,7 @@ def server() -> Iterator[tuple[str, str]]:
             "no SQL Server: set TIDAL_TEST_SQL_PASSWORD (or TIDAL_SQL__PASSWORD) for the "
             "compose server, or TIDAL_TEST_SQL_CONTAINER=1 for a throwaway container"
         )
-    container = SqlServerContainer("mcr.microsoft.com/mssql/server:2022-latest", password=PASSWORD)
+    container = SqlServerContainer(SQL_SERVER_IMAGE, password=PASSWORD)
     container.waiting_for(
         LogMessageWaitStrategy("ready for client connections").with_startup_timeout(480)
     )
@@ -206,7 +207,7 @@ def azurite() -> Iterator[tuple[str, str]]:
         yield given, endpoint.group(1)
         return
     with (
-        DockerContainer("mcr.microsoft.com/azure-storage/azurite:3.37.0")
+        DockerContainer(AZURITE_IMAGE)
         .with_exposed_ports(10000)
         .with_command("azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck")
         .waiting_for(LogMessageWaitStrategy("successfully listens").with_startup_timeout(120)) as c
