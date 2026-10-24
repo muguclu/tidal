@@ -56,9 +56,9 @@ jobs:
       - name: Start Azurite
         run: |
           docker run -d --name azurite -p 127.0.0.1:10000:10000 \
-            mcr.microsoft.com/azure-storage/azurite:3.37.0 \
+            mcr.microsoft.com/azure-storage/azurite:3.37.0@sha256:830430c1da1a2d537e08f3e6764dd1f5ae00cf0346bcaf625b968ec3f0971fd5 \
             azurite -l /data --blobHost 0.0.0.0 --skipApiVersionCheck
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if (echo > /dev/tcp/127.0.0.1/10000) 2>/dev/null; then exit 0; fi
             sleep 1
           done

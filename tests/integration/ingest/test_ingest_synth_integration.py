@@ -17,6 +17,7 @@ from testcontainers.community.mssql import SqlServerContainer
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
+from integration.images import AZURITE_IMAGE, SQL_SERVER_IMAGE
 from tidal.common.config import Settings
 from tidal.common.timeutil import FixedClock, to_ts_ns
 from tidal.contracts.schemas import Interval
@@ -47,7 +48,7 @@ def _odbc_driver() -> str:
 
 @pytest.fixture(scope="module")
 def engine() -> Iterator[Engine]:
-    with SqlServerContainer("mcr.microsoft.com/mssql/server:2022-latest", password=PASSWORD) as c:
+    with SqlServerContainer(SQL_SERVER_IMAGE, password=PASSWORD) as c:
         odbc = (
             f"DRIVER={{{_odbc_driver()}}};SERVER={c.get_container_host_ip()},"
             f"{c.get_exposed_port(1433)};DATABASE=master;UID=sa;PWD={{{PASSWORD}}};"
@@ -72,7 +73,7 @@ def engine() -> Iterator[Engine]:
 @pytest.fixture(scope="module")
 def service() -> Iterator[BlobServiceClient]:
     with (
-        DockerContainer("mcr.microsoft.com/azure-storage/azurite:3.37.0")
+        DockerContainer(AZURITE_IMAGE)
         .with_exposed_ports(10000)
         .with_command("azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck")
         .waiting_for(LogMessageWaitStrategy("successfully listens").with_startup_timeout(120)) as c

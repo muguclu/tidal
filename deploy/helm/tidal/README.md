@@ -24,7 +24,7 @@ Never from a subagent; for humans or the deploy workflow (T-311) after `az aks g
 `kubelogin convert-kubeconfig -l azurecli`:
 
     helm upgrade --install tidal deploy/helm/tidal -n tidal -f deploy/helm/tidal/values-dev.yaml \
-      --set image.tag=sha-<short> \
+      --set-string image.digest=sha256:<digest> \
       --set serviceAccount.clientId=<id-worker client id> --set serviceAccount.tenantId=<tenant>
 
 The chart creates the namespace itself, so do not pass `--create-namespace`. Use `image.digest=sha256:...`

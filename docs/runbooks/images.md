@@ -43,3 +43,20 @@ The last step always runs `docker logout` and `az logout`.
 - Vulnerability fix path: bump the base digest in `deploy/docker/Dockerfile` or the locked dependency, re-run.
   Do not add blanket `.trivyignore` entries; any exception needs an expiry date and an issue link.
 - Verify an attestation (if enabled): `gh attestation verify oci://<acr>.azurecr.io/tidal@<digest> -R <owner>/<repo>`.
+
+## SPEC-06 section 5 supply-chain checklist (T-405)
+
+| Item | Enforced by |
+|---|---|
+| Multi-stage build, non-root UID 10001, read-only root FS | `deploy/docker/Dockerfile` (T-305); chart `securityContext` (`readOnlyRootFilesystem`, `runAsNonRoot`), kube-linter in CI |
+| Pinned base digest | Dockerfile `FROM ...@sha256:`; Dependabot `docker` ecosystem raises bumps weekly |
+| Pinned emulator and test images | Same `tag@sha256` in `docker-compose.yml`, `integration.yml`, `bench.yml`, `tests/integration/**` (azurite 3.37.0, mssql 2022-CU27-ubuntu-22.04, servicebus-emulator 2.0.1); keep them in sync when bumping |
+| Helm image pinned by digest | `values-dev.yaml` sets `image.digest`; `deploy.yml` passes `--set-string image.digest`; `tests/unit/deploy/test_helm_chart.py::test_non_local_values_pin_image_by_digest` |
+| `trivy image` HIGH/CRITICAL with fix | `images.yml` (required on image PRs) |
+| Trivy misconfig (Dockerfile + chart) | `ci.yml` job `trivy-config` (not a required check) |
+| Python dependency vulns | `ci.yml` job `dependency-audit`: `uvx pip-audit==2.9.0` on `uv export` of `uv.lock` (not required; no new runtime dependency) |
+| SBOM (SPDX) | `images.yml`, artifact `tidal-sbom-spdx` |
+| Action SHAs pinned, updates | all `uses:` pinned to commit SHA; Dependabot `github-actions` |
+| Secrets in repo | `ci.yml` `secrets-scan` (gitleaks, `.gitleaks.toml`) |
+| ACR Basic, admin user disabled, MI pulls | Terraform ACR module (infra); see One-time setup above |
+
