@@ -66,13 +66,14 @@ locals {
 
   # Blob tag writes and deletes by callers outside the expected set (T-207 security note, ADR-0008 R-1 family).
   # Data-plane calls are not in the activity log, hence the StorageWrite/StorageDelete diagnostic categories.
-  # Only attributable (OAuth) callers are listed: shared key and SAS are disabled on the account, and service-internal
-  # operations such as lifecycle management carry no requester object id.
+  # Shared key and SAS successes are flagged (they should be impossible, so any is a bypass); OAuth callers outside the
+  # expected set are flagged. Service-internal operations such as lifecycle management carry neither and stay excluded.
   kql_blob_audit = <<-EOT
     StorageBlobLogs
     | where TimeGenerated > ago(1h)
-    | where OperationName in ("SetBlobTags", "DeleteBlob") and StatusText == "Success"
-    | where isnotempty(RequesterObjectId) and RequesterObjectId !in (dynamic(${local.blob_expected_callers}))
+    | where StatusText == "Success" and Uri contains "/marketdata"
+    | where OperationName in ("PutBlob", "PutBlockList", "SetBlobTier", "DeleteContainer", "UndeleteBlob", "SetBlobTags", "DeleteBlob")
+    | where AuthenticationType in ("AccountKey", "SAS") or (isnotempty(RequesterObjectId) and RequesterObjectId !in (dynamic(${local.blob_expected_callers})))
   EOT
 }
 
@@ -123,7 +124,9 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "ingest_freshness" {
   severity             = 2
   evaluation_frequency = "PT1H"
   window_duration      = "P2D"
-  enabled              = true
+  # Off until ingest calls configure_telemetry and record_rows_written (follow-up): without those datapoints the rule
+  # would page permanently. Enable with enable_ingest_freshness_alert.
+  enabled = var.enable_ingest_freshness_alert
 
   auto_mitigation_enabled = true
 
@@ -314,23 +317,52 @@ resource "azurerm_monitor_metric_alert" "dlq" {
 # --- Activity-log alerts (free): control-plane changes that bypass the Terraform path (ADR-0008 R-1) ---------------
 
 locals {
-  activity_alerts = {
-    mgmt-policy = {
-      scope       = var.storage_account_id
-      operation   = "Microsoft.Storage/storageAccounts/managementPolicies/write"
-      description = "A storage lifecycle management policy was written (ADR-0008 R-1). A rewrite can demote or delete cold data. Expected only during a Terraform apply."
-    }
-    role-write = {
-      scope       = var.resource_group_id
-      operation   = "Microsoft.Authorization/roleAssignments/write"
-      description = "A role assignment was created or changed in the resource group. docs/rbac/expected.json is the reference; expected only during a Terraform apply."
-    }
-    role-delete = {
-      scope       = var.resource_group_id
-      operation   = "Microsoft.Authorization/roleAssignments/delete"
-      description = "A role assignment was deleted in the resource group. Expected only during a Terraform apply."
-    }
+  watched_operations = {
+    storage-write           = "Microsoft.Storage/storageAccounts/write"
+    storage-delete          = "Microsoft.Storage/storageAccounts/delete"
+    storage-listkeys        = "Microsoft.Storage/storageAccounts/listKeys/action"
+    blobservice-write       = "Microsoft.Storage/storageAccounts/blobServices/write"
+    immutability-write      = "Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies/write"
+    immutability-delete     = "Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies/delete"
+    immutability-lock       = "Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies/lock/action"
+    diagsetting-write       = "Microsoft.Insights/diagnosticSettings/write"
+    diagsetting-delete      = "Microsoft.Insights/diagnosticSettings/delete"
+    scheduledquery-write    = "Microsoft.Insights/scheduledQueryRules/write"
+    scheduledquery-delete   = "Microsoft.Insights/scheduledQueryRules/delete"
+    activitylogalert-write  = "Microsoft.Insights/activityLogAlerts/write"
+    activitylogalert-delete = "Microsoft.Insights/activityLogAlerts/delete"
+    metricalert-write       = "Microsoft.Insights/metricAlerts/write"
+    metricalert-delete      = "Microsoft.Insights/metricAlerts/delete"
+    actiongroup-write       = "Microsoft.Insights/actionGroups/write"
+    actiongroup-delete      = "Microsoft.Insights/actionGroups/delete"
   }
+
+  activity_alerts = merge(
+    {
+      mgmt-policy = {
+        scope       = var.storage_account_id
+        operation   = "Microsoft.Storage/storageAccounts/managementPolicies/write"
+        description = "A storage lifecycle management policy was written (ADR-0008 R-1). A rewrite can demote or delete cold data. Expected only during a Terraform apply."
+      }
+      role-write = {
+        scope       = var.resource_group_id
+        operation   = "Microsoft.Authorization/roleAssignments/write"
+        description = "A role assignment was created or changed in the resource group. docs/rbac/expected.json is the reference; expected only during a Terraform apply."
+      }
+      role-delete = {
+        scope       = var.resource_group_id
+        operation   = "Microsoft.Authorization/roleAssignments/delete"
+        description = "A role assignment was deleted in the resource group. Expected only during a Terraform apply."
+      }
+    },
+    # R-1 bypasses of the lifecycle-policy and audit controls: the storage account itself, its keys and immutability, and the
+    # alerting and diagnostics that watch it. Resource group scope. Expected only during a Terraform apply.
+    { for k, op in local.watched_operations : k => {
+      scope       = var.resource_group_id
+      operation   = op
+      description = "${op} happened in the resource group (ADR-0008 R-1 bypass control). Expected only during a Terraform apply."
+    } }
+  )
 }
 
 resource "azurerm_monitor_activity_log_alert" "control_plane" {

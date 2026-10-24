@@ -123,6 +123,12 @@ variable "expected_blob_modifier_object_ids" {
   }
 }
 
+variable "enable_ingest_freshness_alert" {
+  description = "Enable the ingest freshness rule. Default false: enable once ingest calls configure_telemetry and record_rows_written (follow-up), otherwise no datapoint ever arrives and the rule pages permanently."
+  type        = bool
+  default     = false
+}
+
 variable "api_5xx_threshold_percent" {
   description = "Alert when the share of 5xx responses in the 10 minute window exceeds this percentage (SPEC-10 section 3: 2)."
   type        = number

@@ -201,17 +201,7 @@
       "scope": "microsoft.insights/components/appi-tidal-dev"
     },
     {
-      "principal": "id-ingest",
-      "role": "Monitoring Metrics Publisher",
-      "scope": "microsoft.insights/components/appi-tidal-dev"
-    },
-    {
       "principal": "id-query",
-      "role": "Monitoring Metrics Publisher",
-      "scope": "microsoft.insights/components/appi-tidal-dev"
-    },
-    {
-      "principal": "id-tiering",
       "role": "Monitoring Metrics Publisher",
       "scope": "microsoft.insights/components/appi-tidal-dev"
     },

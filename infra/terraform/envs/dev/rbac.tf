@@ -267,8 +267,6 @@ locals {
       { who = "id-api", role = local.metrics_pub, on = "appinsights", why = "T-506: API publishes telemetry to Application Insights (Entra auth only)" },
       { who = "id-query", role = local.metrics_pub, on = "appinsights", why = "T-506: query service publishes telemetry to Application Insights (Entra auth only)" },
       { who = "id-worker", role = local.metrics_pub, on = "appinsights", why = "T-506: worker publishes telemetry to Application Insights (Entra auth only)" },
-      { who = "id-ingest", role = local.metrics_pub, on = "appinsights", why = "T-506: ingest publishes telemetry to Application Insights (Entra auth only)" },
-      { who = "id-tiering", role = local.metrics_pub, on = "appinsights", why = "T-506: tiering publishes telemetry to Application Insights (Entra auth only)" },
 
       # KEDA operator: queue length reads need management rights. Only this queue.
       { who = "id-keda-operator", role = local.sb_owner, on = "queue:backtest-jobs", why = "SPEC-06 s2: KEDA scaler reads backtest-jobs queue length" },

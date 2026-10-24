@@ -10,13 +10,14 @@ ADR-0008 R-1. It reuses the email action group of `modules/budget`, Application 
 |---|---|---|---|
 | `alert-tidal-api-5xx-<env>` | log, 5 min | 5xx share above 2 % over 10 min, at least 20 requests | App Insights `requests` |
 | `alert-tidal-dlq-<env>` | metric, 5 min | `DeadletteredMessages` above 0, per entity | Service Bus namespace |
-| `alert-tidal-ingest-freshness-<env>` | log, hourly | no positive `tidal.ingest.rows_written` datapoint for 36 h, UTC Mon to Fri | workspace `AppMetrics` |
+| `alert-tidal-ingest-freshness-<env>` | log, hourly, disabled by default (`enable_ingest_freshness_alert`) | no positive `tidal.ingest.rows_written` datapoint for 36 h, UTC Mon to Fri | workspace `AppMetrics` |
 | `alert-tidal-la-daily-cap-<env>` | log, 15 min | "Data collection stopped" / `OverQuota` in the operations table | workspace `_LogOperation` |
 | `alert-tidal-spot-eviction-<env>` | log, 15 min | above 30 % of spot nodes gone in 1 h without autoscaler scale-down | `KubeNodeInventory`, `KubeEvents`; only with `container_insights_enabled` |
 | budget 80 % | - | already in `modules/budget` (actual 80 % notification) | Cost Management |
 | `alert-tidal-mgmt-policy-<env>` | activity log | `managementPolicies/write` on the storage account | R-1 |
 | `alert-tidal-role-write-<env>`, `alert-tidal-role-delete-<env>` | activity log | `roleAssignments/write` and `/delete` in the resource group | R-1 |
-| `alert-tidal-blob-audit-<env>` | log, 15 min | `SetBlobTags` or `DeleteBlob` succeeded for a caller outside `expected_blob_modifier_object_ids` | `StorageBlobLogs` via a diagnostic setting |
+| `alert-tidal-blob-audit-<env>` | log, 15 min | successful PutBlob, PutBlockList, SetBlobTier, DeleteContainer, UndeleteBlob, SetBlobTags or DeleteBlob on `marketdata` by shared key, SAS, or an OAuth caller outside `expected_blob_modifier_object_ids` | `StorageBlobLogs` via a diagnostic setting |
+| `alert-tidal-<control>-<env>` x17 | activity log | storage account write/delete/listKeys, blobServices write, immutability policy write/delete/lock, diagnostic setting, scheduled query / activity log / metric alert and action group write/delete, all at resource group scope | R-1 bypass controls |
 
 Limits that are real, not hidden:
 
@@ -59,7 +60,7 @@ Limits that are real, not hidden:
 | `azurerm_monitor_scheduled_query_rules_alert_v2.blob_audit` | resource (when `enable_blob_audit`) |
 | `azurerm_monitor_diagnostic_setting.blob_audit` | resource (when `enable_blob_audit`) |
 | `azurerm_monitor_metric_alert.dlq` | resource |
-| `azurerm_monitor_activity_log_alert.control_plane` | resource (one per entry: mgmt-policy, role-write, role-delete) |
+| `azurerm_monitor_activity_log_alert.control_plane` | resource (one per entry: mgmt-policy, role-write, role-delete and 17 watched operations) |
 
 ## Inputs
 
@@ -75,6 +76,7 @@ Limits that are real, not hidden:
 | `servicebus_namespace_id` | Service Bus namespace ID. | `string` | n/a | yes |
 | `storage_account_id` | Storage account ID. | `string` | n/a | yes |
 | `sql_database_id` | SQL database ID for the space tile; null omits it. | `string` | `null` | no |
+| `enable_ingest_freshness_alert` | Enable the freshness rule once ingest emits telemetry. | `bool` | `false` | no |
 | `container_insights_enabled` | Container Insights tables exist; creates the spot eviction alert. | `bool` | `false` | no |
 | `enable_blob_audit` | Blob diagnostic logs plus the unexpected-caller alert. | `bool` | `true` | no |
 | `expected_blob_modifier_object_ids` | Principals allowed to set blob tags or delete blobs. | `list(string)` | `[]` | no |
