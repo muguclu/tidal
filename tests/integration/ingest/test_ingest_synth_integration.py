@@ -47,7 +47,7 @@ def _odbc_driver() -> str:
 
 @pytest.fixture(scope="module")
 def engine() -> Iterator[Engine]:
-    with SqlServerContainer("mcr.microsoft.com/mssql/server:2022-latest", password=PASSWORD) as c:
+    with SqlServerContainer("mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04@sha256:4402d880dd4c34bfa7d8705e56a86cd6c88da80a1f6bbbe741f999e76264a090", password=PASSWORD) as c:
         odbc = (
             f"DRIVER={{{_odbc_driver()}}};SERVER={c.get_container_host_ip()},"
             f"{c.get_exposed_port(1433)};DATABASE=master;UID=sa;PWD={{{PASSWORD}}};"
@@ -72,7 +72,7 @@ def engine() -> Iterator[Engine]:
 @pytest.fixture(scope="module")
 def service() -> Iterator[BlobServiceClient]:
     with (
-        DockerContainer("mcr.microsoft.com/azure-storage/azurite:3.37.0")
+        DockerContainer("mcr.microsoft.com/azure-storage/azurite:3.37.0@sha256:830430c1da1a2d537e08f3e6764dd1f5ae00cf0346bcaf625b968ec3f0971fd5")
         .with_exposed_ports(10000)
         .with_command("azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck")
         .waiting_for(LogMessageWaitStrategy("successfully listens").with_startup_timeout(120)) as c

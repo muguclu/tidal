@@ -4,6 +4,7 @@ Renders the chart with ``values-dev.yaml`` through the pinned ``alpine/helm`` im
 ScaledJob container env to ``Settings.from_env``. Skipped when Docker or the image is unavailable.
 """
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -54,3 +55,14 @@ def test_secret_like_key_is_rejected(rendered: list[dict[str, object]]) -> None:
     proc = _render("--set", "worker.config.TIDAL_STORAGE__CONNECTION_STRING=x")
     assert proc.returncode != 0
     assert "secret" in proc.stderr
+
+
+def test_non_local_values_pin_image_by_digest(rendered: list[dict[str, object]]) -> None:
+    """T-405: no floating tags; every non-local values file sets a well-formed image.digest."""
+    for path in sorted(CHART.glob("values-*.yaml")):
+        image = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("image", {})
+        assert re.fullmatch(r"sha256:[0-9a-f]{64}", str(image.get("digest", ""))), path.name
+        assert image.get("tag") != "latest", path.name
+    images = re.findall(r"image:\s*\"?([^\s\"]+)", yaml.safe_dump_all(rendered))
+    assert images, "no container images rendered"
+    assert all("@sha256:" in i for i in images), images

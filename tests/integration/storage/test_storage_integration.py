@@ -111,7 +111,7 @@ def engine() -> Iterator[Engine]:
                 conn.execute(text(f"DROP DATABASE [{db}]"))
             admin.dispose()
         return
-    with _SlowStartSqlServer("mcr.microsoft.com/mssql/server:2022-latest", password=PASSWORD) as c:
+    with _SlowStartSqlServer("mcr.microsoft.com/mssql/server:2022-CU27-ubuntu-22.04@sha256:4402d880dd4c34bfa7d8705e56a86cd6c88da80a1f6bbbe741f999e76264a090", password=PASSWORD) as c:
         eng = _engine_for(
             f"{c.get_container_host_ip()},{c.get_exposed_port(1433)}", "sa", PASSWORD, "master"
         )
@@ -223,7 +223,7 @@ def test_ticks_real_column_and_watermark(repo: sr.SqlRepository) -> None:
 @pytest.fixture(scope="module")
 def azurite_url() -> Iterator[str]:
     with (
-        DockerContainer("mcr.microsoft.com/azure-storage/azurite:3.37.0")
+        DockerContainer("mcr.microsoft.com/azure-storage/azurite:3.37.0@sha256:830430c1da1a2d537e08f3e6764dd1f5ae00cf0346bcaf625b968ec3f0971fd5")
         .with_exposed_ports(10000)
         .with_command("azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck")
         .waiting_for(LogMessageWaitStrategy("successfully listens").with_startup_timeout(120)) as c
