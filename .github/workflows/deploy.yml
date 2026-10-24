@@ -1,0 +1,263 @@
+name: deploy
+
+# Roll one image DIGEST to the dev environment (T-311, SPEC-07, SPEC-08).
+#   workflow_run: after `images` completed successfully for a push of a v* tag.
+#   workflow_dispatch: explicit `digest` input (sha256:<64 hex>) that must already exist in ACR.
+# Never `pull_request`. Untrusted values (tag name, inputs) reach `run:` only through env vars.
+# The deployed reference is always <acr>/tidal@sha256:..., never a bare tag.
+#
+# Required variables on the GitHub environment "dev" (none is a secret; docs/runbooks/deploy.md shows the
+# `terraform output` commands that print them):
+#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID   OIDC app (same as images.yml)
+#   ACR_NAME, TIDAL_RESOURCE_GROUP, TIDAL_WEBAPP_NAME, TIDAL_QUERY_APP_NAME, TIDAL_JOB_NAMES (space separated),
+#   TIDAL_AKS_NAME, TIDAL_WORKER_CLIENT_ID, TIDAL_KEDA_CLIENT_ID, TIDAL_STORAGE_URL, TIDAL_SQL_SERVER,
+#   TIDAL_SERVICEBUS_FQDN, TIDAL_QUERY_BASE_URL, TIDAL_API_BASE_URL
+# GitHub-hosted runners only.
+
+on:
+  workflow_run:
+    workflows: [images]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      digest:
+        description: "Image digest to deploy (sha256:<64 hex>); must exist in the dev ACR"
+        required: true
+        type: string
+
+# One deploy at a time per environment; a running deploy is never cancelled half way.
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: deploy-dev
+    # Only a successful tag push of images, or a manual dispatch. Re-checked in the resolve step.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.event == 'push' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: dev
+    permissions:
+      id-token: write # OIDC to Entra (this job only)
+      contents: read
+    outputs:
+      digest: ${{ steps.resolve.outputs.digest }}
+      api_url: ${{ steps.urls.outputs.api_url }}
+      query_url: ${{ steps.urls.outputs.query_url }}
+    env:
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      RG: ${{ vars.TIDAL_RESOURCE_GROUP }}
+    steps:
+      - name: Checkout (the commit the image was built from)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+
+      - name: Validate configuration variables
+        id: urls
+        env:
+          V_CLIENT: ${{ vars.AZURE_CLIENT_ID }}
+          V_TENANT: ${{ vars.AZURE_TENANT_ID }}
+          V_SUB: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          V_WEBAPP: ${{ vars.TIDAL_WEBAPP_NAME }}
+          V_QUERY: ${{ vars.TIDAL_QUERY_APP_NAME }}
+          V_JOBS: ${{ vars.TIDAL_JOB_NAMES }}
+          V_AKS: ${{ vars.TIDAL_AKS_NAME }}
+          V_WORKER: ${{ vars.TIDAL_WORKER_CLIENT_ID }}
+          V_KEDA: ${{ vars.TIDAL_KEDA_CLIENT_ID }}
+          V_STORAGE: ${{ vars.TIDAL_STORAGE_URL }}
+          V_SQL: ${{ vars.TIDAL_SQL_SERVER }}
+          V_SB: ${{ vars.TIDAL_SERVICEBUS_FQDN }}
+          V_QUERY_URL: ${{ vars.TIDAL_QUERY_BASE_URL }}
+          V_API_URL: ${{ vars.TIDAL_API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          guid='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          name='^[A-Za-z0-9][A-Za-z0-9._-]{0,89}$'
+          fail() { echo "::error::$1 is missing or malformed (see docs/runbooks/deploy.md)"; exit 1; }
+          for v in V_CLIENT V_TENANT V_SUB V_WORKER V_KEDA; do [[ "${!v}" =~ $guid ]] || fail "$v"; done
+          for v in ACR_NAME RG V_WEBAPP V_QUERY V_AKS; do [[ "${!v}" =~ $name ]] || fail "$v"; done
+          [ -n "$V_JOBS" ] || fail "TIDAL_JOB_NAMES"
+          for j in $V_JOBS; do [[ "$j" =~ $name ]] || fail "TIDAL_JOB_NAMES"; done
+          for v in V_STORAGE V_QUERY_URL V_API_URL; do [[ "${!v}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || fail "$v"; done
+          for v in V_SQL V_SB; do [[ "${!v}" =~ ^[a-z0-9.-]+$ ]] || fail "$v"; done
+          echo "api_url=${V_API_URL}" >> "$GITHUB_OUTPUT"
+          echo "query_url=${V_QUERY_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Azure login (OIDC)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve and pin the image digest
+        id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_DIGEST: ${{ inputs.digest }}
+          RUN_TAG: ${{ github.event.workflow_run.head_branch }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          digest_re='^sha256:[0-9a-f]{64}$'
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            [[ "$INPUT_DIGEST" =~ $digest_re ]] || { echo "::error::digest input must match sha256:<64 hex>"; exit 1; }
+            digest="$INPUT_DIGEST"
+            # Must exist in our registry (az fails otherwise).
+            az acr manifest show-metadata --registry "$ACR_NAME" --name "tidal@${digest}" --query digest -o tsv >/dev/null
+            source="dispatch input"
+          else
+            [[ "$RUN_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "::error::not a release tag"; exit 1; }
+            [[ "$RUN_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::bad head sha"; exit 1; }
+            digest="$(az acr repository show --name "$ACR_NAME" --image "tidal:${RUN_TAG}" --query digest -o tsv)"
+            sha_digest="$(az acr repository show --name "$ACR_NAME" --image "tidal:sha-${RUN_SHA::12}" --query digest -o tsv)"
+            [[ "$digest" =~ $digest_re ]] || { echo "::error::could not resolve ${RUN_TAG}"; exit 1; }
+            # The release tag and the commit tag must be the same image (a moved tag is refused).
+            [ "$digest" = "$sha_digest" ] || { echo "::error::tag ${RUN_TAG} (${digest}) != sha-${RUN_SHA::12} (${sha_digest})"; exit 1; }
+            source="tag ${RUN_TAG}"
+          fi
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "image=${ACR_NAME}.azurecr.io/tidal@${digest}" >> "$GITHUB_OUTPUT"
+          echo "Resolved from ${source}: ${digest}"
+
+      - name: App Service - set image and wait for health
+        env:
+          IMAGE: ${{ steps.resolve.outputs.image }}
+          WEBAPP: ${{ vars.TIDAL_WEBAPP_NAME }}
+          API_URL: ${{ vars.TIDAL_API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          az webapp config container set --name "$WEBAPP" --resource-group "$RG" \
+            --container-image-name "$IMAGE" --output none
+          # Poll for up to 4 minutes. The runner must be allowed by the app's IP restrictions (runbook).
+          code=000
+          for i in $(seq 1 24); do
+            code="$(curl -s -o /dev/null -m 10 -w '%{http_code}' "${API_URL}/v1/health/live" || true)"
+            if [ "$code" = "200" ]; then echo "api live after attempt $i"; exit 0; fi
+            sleep 10
+          done
+          echo "::error::api did not become live (last HTTP ${code})"
+          exit 1
+
+      - name: Container Apps - update tidal-query and jobs
+        env:
+          IMAGE: ${{ steps.resolve.outputs.image }}
+          QUERY_APP: ${{ vars.TIDAL_QUERY_APP_NAME }}
+          JOBS: ${{ vars.TIDAL_JOB_NAMES }}
+        run: |
+          set -euo pipefail
+          az config set extension.use_dynamic_install=no >/dev/null
+          az extension add --name containerapp --version 0.3.55 --yes
+          az containerapp update --name "$QUERY_APP" --resource-group "$RG" --image "$IMAGE" --output none
+          for j in $JOBS; do
+            az containerapp job update --name "$j" --resource-group "$RG" --image "$IMAGE" --output none
+          done
+          got="$(az containerapp show --name "$QUERY_APP" --resource-group "$RG" --query 'properties.template.containers[0].image' -o tsv)"
+          [ "$got" = "$IMAGE" ] || { echo "::error::query app runs ${got}, expected ${IMAGE}"; exit 1; }
+
+      - name: Install kubelogin (pinned)
+        uses: azure/use-kubelogin@0ce7c36141aa27d4934872cf00b0120804c98a29 # v1.3
+        with:
+          kubelogin-version: v0.2.21
+
+      - name: AKS - helm upgrade (digest pinned)
+        id: aks
+        env:
+          IMAGE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          AKS_NAME: ${{ vars.TIDAL_AKS_NAME }}
+          TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          WORKER_CLIENT_ID: ${{ vars.TIDAL_WORKER_CLIENT_ID }}
+          KEDA_CLIENT_ID: ${{ vars.TIDAL_KEDA_CLIENT_ID }}
+          STORAGE_URL: ${{ vars.TIDAL_STORAGE_URL }}
+          SQL_SERVER: ${{ vars.TIDAL_SQL_SERVER }}
+          SB_FQDN: ${{ vars.TIDAL_SERVICEBUS_FQDN }}
+          QUERY_URL: ${{ vars.TIDAL_QUERY_BASE_URL }}
+        run: |
+          set -euo pipefail
+          state="$(az aks show --name "$AKS_NAME" --resource-group "$RG" --query powerState.code -o tsv)"
+          if [ "$state" != "Running" ]; then
+            echo "::warning::AKS is ${state}; Helm step skipped (az aks start, then re-run via workflow_dispatch)"
+            echo "aks=skipped (${state})" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          az aks get-credentials --name "$AKS_NAME" --resource-group "$RG" --file "$KUBECONFIG" --overwrite-existing
+          kubelogin convert-kubeconfig -l azurecli
+          sb_ns="${SB_FQDN%%.*}"
+          helm upgrade --install tidal deploy/helm/tidal \
+            --namespace tidal \
+            --values deploy/helm/tidal/values-dev.yaml \
+            --set-string "image.repository=${ACR_NAME}.azurecr.io/tidal" \
+            --set-string "image.tag=pinned-by-digest" \
+            --set-string "image.digest=${IMAGE_DIGEST}" \
+            --set-string "serviceAccount.clientId=${WORKER_CLIENT_ID}" \
+            --set-string "serviceAccount.tenantId=${TENANT_ID}" \
+            --set-string "keda.identityClientId=${KEDA_CLIENT_ID}" \
+            --set-string "worker.config.TIDAL_STORAGE__ACCOUNT_URL=${STORAGE_URL}" \
+            --set-string "worker.config.TIDAL_SQL__SERVER=${SQL_SERVER}" \
+            --set-string "worker.config.TIDAL_SERVICEBUS__FQDN=${SB_FQDN}" \
+            --set-string "worker.config.TIDAL_QUERY__BASE_URL=${QUERY_URL}" \
+            --set-string "scaledJob.serviceBusNamespace=${sb_ns}" \
+            --atomic --wait --timeout 6m
+          echo "aks=deployed" >> "$GITHUB_OUTPUT"
+
+      - name: Job summary
+        if: success()
+        env:
+          IMAGE: ${{ steps.resolve.outputs.image }}
+          AKS_RESULT: ${{ steps.aks.outputs.aks }}
+        run: |
+          {
+            echo "### Deployed to dev"
+            echo "- image: \`${IMAGE}\`"
+            echo "- time (UTC): \`$(date -u +%Y-%m-%dT%H:%M:%SZ)\`"
+            echo "- AKS: ${AKS_RESULT}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Logout (credentials cleanup)
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/kubeconfig"
+          rm -rf ~/.kube/cache
+          az logout || true
+
+  smoke:
+    name: smoke-dev
+    needs: deploy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      contents: read # no id-token: the smoke job holds no Azure credentials
+    env:
+      # URLs come from the validated deploy job outputs (smoke has no environment, so vars are empty here).
+      TIDAL_SMOKE_API_URL: ${{ needs.deploy.outputs.api_url }}
+      TIDAL_SMOKE_QUERY_URL: ${{ needs.deploy.outputs.query_url }}
+      TIDAL_SMOKE_REQUIRED: "1" # empty URL fails instead of skipping
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+
+      - name: Smoke tests
+        run: uv run --frozen pytest tests/smoke -m smoke --no-cov -p no:cacheprovider
+
+      - name: Record result
+        if: success()
+        env:
+          DIGEST: ${{ needs.deploy.outputs.digest }}
+        run: echo "- smoke tests passed for \`${DIGEST}\` at $(date -u +%H:%M:%SZ)" >> "$GITHUB_STEP_SUMMARY"
