@@ -61,6 +61,7 @@ from tidal.common.errors import (
     ValidationFailed,
 )
 from tidal.common.logging import configure_logging, get_correlation_id, get_logger
+from tidal.common.telemetry import configure_telemetry, instrument_fastapi, record_query
 from tidal.common.timeutil import clock_from_settings
 from tidal.contracts.instruments import AssetClass, Instrument, Source
 from tidal.contracts.models import Bar, LatestBar, Tick, Tier
@@ -186,7 +187,8 @@ class InstrumentRows(_Wire):
 
 
 # -- server -------------------------------------------------------------------------------------
-async def _frames(stream: RowStream) -> AsyncIterator[bytes]:
+async def _frames(stream: RowStream, endpoint: str = "stream") -> AsyncIterator[bytes]:
+    rows = size = 0
     # Any: aclosing wants an object with aclose(); AsyncIterator does not declare it
     async with aclosing(cast("Any", stream.batches)) as batches:
         async for batch in batches:
@@ -196,8 +198,10 @@ async def _frames(stream: RowStream) -> AsyncIterator[bytes]:
             data = sink.getvalue().to_pybytes()
             if len(data) > _MAX_FRAME:
                 raise DependencyUnavailable("A result batch exceeds the stream frame limit.")
+            rows, size = rows + batch.num_rows, size + len(data)
             code = _TIERS.index(observed_tier(stream))
             yield _LEN.pack(len(data)) + bytes([code]) + data
+    record_query(endpoint, observed_tier(stream).value, rows, size)
     yield _LEN.pack(0)
 
 
@@ -206,9 +210,11 @@ def _json(model: _Wire, tier: Tier | None = None) -> Response:
     return Response(model.model_dump_json(), media_type="application/json", headers=headers)
 
 
-def _stream(stream: RowStream) -> StreamingResponse:
+def _stream(stream: RowStream, endpoint: str) -> StreamingResponse:
     return StreamingResponse(
-        _frames(stream), media_type=FRAMES_MEDIA_TYPE, headers={TIER_HEADER: stream.tier.value}
+        _frames(stream, endpoint),
+        media_type=FRAMES_MEDIA_TYPE,
+        headers={TIER_HEADER: stream.tier.value},
     )
 
 
@@ -239,12 +245,14 @@ def create_query_app(
     ) -> Response:
         check_bars_range(interval, start_ns, end_ns)
         got = await reader.read_bars(instrument_id, interval, start_ns, end_ns, as_of_ns=as_of_ns)
+        record_query("bars", got.tier.value, len(got.rows))
         return _json(BarRows.model_construct(tier=got.tier, rows=got.rows), got.tier)
 
     @router.get("/ticks")
     async def ticks(instrument_id: iid, start_ns: ns, end_ns: ns) -> Response:
         check_ticks_range(start_ns, end_ns)
         got = await reader.read_ticks(instrument_id, start_ns, end_ns)
+        record_query("ticks", got.tier.value, len(got.rows))
         return _json(TickRows.model_construct(tier=got.tier, rows=got.rows), got.tier)
 
     @router.get("/stream/bars")
@@ -253,13 +261,14 @@ def create_query_app(
     ) -> StreamingResponse:
         check_bars_range(interval, start_ns, end_ns)
         return _stream(
-            await reader.stream_bars(instrument_id, interval, start_ns, end_ns, as_of_ns=as_of_ns)
+            await reader.stream_bars(instrument_id, interval, start_ns, end_ns, as_of_ns=as_of_ns),
+            "stream_bars",
         )
 
     @router.get("/stream/ticks")
     async def stream_ticks(instrument_id: iid, start_ns: ns, end_ns: ns) -> StreamingResponse:
         check_ticks_range(start_ns, end_ns)
-        return _stream(await reader.stream_ticks(instrument_id, start_ns, end_ns))
+        return _stream(await reader.stream_ticks(instrument_id, start_ns, end_ns), "stream_ticks")
 
     @router.get("/latest")
     async def latest(
@@ -267,6 +276,7 @@ def create_query_app(
         interval: Interval = Interval.D1,
     ) -> Response:
         rows = await reader.latest(instrument_id, interval)
+        record_query("latest", Tier.HOT.value, len(rows))
         return _json(LatestRows(rows=rows), Tier.HOT)
 
     @router.get("/instruments")
@@ -285,6 +295,8 @@ def create_query_app(
     app.state.settings = settings
     app.add_middleware(CorrelationMiddleware)
     register_exception_handlers(app)
+    configure_telemetry(settings, settings.service_name)
+    instrument_fastapi(app)
 
     @app.get("/health/live")
     async def live() -> dict[str, str]:

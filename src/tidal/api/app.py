@@ -33,6 +33,7 @@ from tidal.common.logging import (
     new_correlation_id,
     reset_correlation_id,
 )
+from tidal.common.telemetry import configure_telemetry, instrument_fastapi, set_span_correlation_id
 from tidal.common.timeutil import SystemClock
 from tidal.query.protocols import Bus, Clock, Reader
 
@@ -62,6 +63,7 @@ class CorrelationMiddleware:
         supplied = dict(scope["headers"]).get(_HEADER_KEY, b"").decode("latin-1")
         cid = supplied if _VALID_CORRELATION_ID.match(supplied) else new_correlation_id()
         token = bind_correlation_id(cid)
+        set_span_correlation_id(cid)
         started = False
 
         async def send_with_id(message: Message) -> None:
@@ -106,6 +108,7 @@ def create_app(
     assert_auth_allowed(settings)
     cursor_key = resolve_cursor_key(settings, secret_source)
     configure_logging(settings)
+    configure_telemetry(settings, settings.service_name)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -135,6 +138,7 @@ def create_app(
     app.state.rate_limiter = TokenBucketLimiter(app.state.clock)
     app.add_middleware(CorrelationMiddleware)
     register_exception_handlers(app)
+    instrument_fastapi(app)
     for module in (health, instruments, bars, ticks, latest, spreads, backtests, admin):
         app.include_router(module.router)
     default_openapi = app.openapi
