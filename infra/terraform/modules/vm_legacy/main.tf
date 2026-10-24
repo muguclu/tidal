@@ -134,12 +134,12 @@ resource "azurerm_linux_virtual_machine" "this" {
     storage_account_type = var.os_disk_type
   }
 
-  # Ubuntu 24.04 LTS (Python 3.12, matching the repository baseline).
+  # Ubuntu 24.04 LTS (Python 3.12, matching the repository baseline), pinned by var.image_version.
   source_image_reference {
     publisher = "Canonical"
     offer     = "ubuntu-24_04-lts"
     sku       = "server"
-    version   = "latest"
+    version   = var.image_version
   }
 
   # Managed boot diagnostics storage (no storage account to pay for or secure).

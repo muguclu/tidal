@@ -196,3 +196,14 @@ variable "auto_shutdown_time" {
     error_message = "auto_shutdown_time must be HHMM, for example 2000."
   }
 }
+
+variable "image_version" {
+  description = "Version of the Canonical ubuntu-24_04-lts server image, pinned so a re-created VM is reproducible (not latest). Check current versions with az vm image list --publisher Canonical --offer ubuntu-24_04-lts --sku server --all and bump deliberately. UNVERIFIED default: confirm it exists before the first apply."
+  type        = string
+  default     = "24.04.202510160"
+
+  validation {
+    condition     = can(regex("^24[.]04[.][0-9]{9}$", var.image_version))
+    error_message = "image_version must be a dated 24.04 image version such as 24.04.202510160, not latest."
+  }
+}

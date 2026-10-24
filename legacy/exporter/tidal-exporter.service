@@ -5,6 +5,7 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+TimeoutStartSec=15min
 EnvironmentFile=/etc/tidal/exporter.env
 ExecStart=/opt/tidal-exporter/venv/bin/python /opt/tidal-exporter/export_daily_bars.py
 # Hardening: the job needs outbound HTTPS only.

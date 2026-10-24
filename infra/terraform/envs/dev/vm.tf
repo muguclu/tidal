@@ -18,7 +18,7 @@ variable "legacy_vm_ssh_public_key" {
 }
 
 variable "legacy_exporter_lookback_days" {
-  description = "Trade dates (days back from the run date) that the exporter writes into each CSV feed."
+  description = "Days back from the run date covered by each CSV feed. A lookback of N days yields N+1 trade dates (the window starts at UTC midnight N days ago and includes today)."
   type        = number
   default     = 7
 

@@ -23,3 +23,6 @@ budget_start_date = "2026-11-01T00:00:00Z"
 
 # Image tag deployed to App Service and Container Apps (T-309); `latest` is rejected.
 apps_image_tag = "v0.1.0"
+
+# Legacy VM admin key (T-310). Azure requires one; the VM has no public IP and no inbound path, so it cannot be used to log in.
+legacy_vm_ssh_public_key = "ssh-ed25519 AAAA...replace-with-your-public-key... you@example.com"

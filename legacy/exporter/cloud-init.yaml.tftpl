@@ -25,7 +25,7 @@ write_files:
       ${indent(6, unit)}
 runcmd:
   - python3 -m venv /opt/tidal-exporter/venv
-  - /opt/tidal-exporter/venv/bin/pip install --no-cache-dir -r /opt/tidal-exporter/requirements.txt
+  - /opt/tidal-exporter/venv/bin/pip install --no-cache-dir --require-hashes --only-binary=:all: -r /opt/tidal-exporter/requirements.txt
   - systemctl daemon-reload
   # Enabled for every later boot (the Logic App start). --no-block lets cloud-init finish before the unit
   # deallocates the VM; the first boot runs the export too.

@@ -24,6 +24,7 @@ import math
 import os
 import re
 import sys
+import time
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterable, Mapping
@@ -44,6 +45,7 @@ VALID_ENVS = ("dev", "prod")
 IMDS = "http://169.254.169.254/metadata"
 ARM = "https://management.azure.com"
 COMPUTE_API = "2024-07-01"
+RETRY_DEADLINE_S = 300.0
 
 # v1/bars_1d/instrument=EIA.BRENT.SPOT/year=2024/month=00/part-00000.parquet
 _PART = re.compile(
@@ -216,8 +218,7 @@ def vm_resource_id(fetch: Fetch = _fetch) -> str:
     )
 
 
-def deallocate_self(client_id: str | None, fetch: Fetch = _fetch) -> None:
-    """POST .../deallocate on this VM. Needs only ``Microsoft.Compute/virtualMachines/deallocate/action`` on it."""
+def _deallocate_once(client_id: str | None, fetch: Fetch) -> None:
     token = imds_token(client_id, fetch)
     url = f"{ARM}{vm_resource_id(fetch)}/deallocate?api-version={COMPUTE_API}"
     req = urllib.request.Request(  # noqa: S310
@@ -226,31 +227,65 @@ def deallocate_self(client_id: str | None, fetch: Fetch = _fetch) -> None:
     status, _ = fetch(req)
     if status not in (200, 202):
         raise RuntimeError(f"deallocate returned HTTP {status}")
+
+
+def deallocate_self(
+    client_id: str | None,
+    fetch: Fetch = _fetch,
+    sleep: Callable[[float], None] = time.sleep,
+    deadline_s: float = RETRY_DEADLINE_S,
+) -> None:
+    """POST .../deallocate on this VM, retrying with backoff for up to ``deadline_s`` seconds.
+
+    Needs only ``Microsoft.Compute/virtualMachines/deallocate/action`` on the VM. The retry covers the first
+    boot, when the role assignment or the identity token may not have propagated yet (401/403, no token).
+    """
+    waited = 0.0
+    delay = 5.0
+    while True:
+        try:
+            _deallocate_once(client_id, fetch)
+            break
+        except Exception as exc:
+            if waited + delay > deadline_s:
+                raise
+            LOG.warning("deallocate not ready (%s); retrying in %.0f s", exc, delay)
+            sleep(delay)
+            waited += delay
+            delay = min(delay * 2, 60.0)
     LOG.info("deallocate requested")
 
 
 def main(environ: Mapping[str, str] | None = None) -> int:
-    """Entry point: export, then always deallocate (a stuck VM costs more than a missed feed)."""
+    """Entry point: export, then always deallocate (a stuck VM costs more than a missed feed).
+
+    The configuration is parsed inside the guarded path: a missing ``TIDAL_ENV`` exits 1 and still deallocates
+    unless ``EXPORT_DEALLOCATE=false``.
+    """
     logging.basicConfig(
         level=logging.INFO,
         stream=sys.stdout,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    config = Config.from_env(os.environ if environ is None else environ)
+    env = os.environ if environ is None else environ
     code = 0
     try:
+        config = Config.from_env(env)
         from azure.identity import ManagedIdentityCredential
         from azure.storage.blob import BlobServiceClient
 
         credential = ManagedIdentityCredential(client_id=config.client_id)
         service = BlobServiceClient(config.account_url, credential=credential)
         run_export(config, datetime.now(UTC), service)
+    except ConfigError as exc:
+        LOG.error("invalid configuration: %s", exc)
+        code = 1
     except Exception:
         LOG.exception("export failed")
         code = 1
-    if config.deallocate:
+    if env.get("EXPORT_DEALLOCATE", "true").lower() != "false":
         try:
-            deallocate_self(config.client_id)
+            deallocate_self(env.get("AZURE_CLIENT_ID") or None)
         except Exception:
             LOG.exception("deallocate failed; the 20:00 auto-shutdown is the safety net")
             code = code or 2

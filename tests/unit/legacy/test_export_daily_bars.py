@@ -176,17 +176,127 @@ def test_deallocate_failure_raises() -> None:
         return 403, b""
 
     with pytest.raises(RuntimeError, match="403"):
-        exp.deallocate_self(None, fetch)
+        exp.deallocate_self(None, fetch, lambda _s: None)
 
 
 def test_main_deallocates_even_when_export_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str | None] = []
-    monkeypatch.setattr(
-        exp, "deallocate_self", lambda client_id, fetch=None: calls.append(client_id)
-    )
-    # No azure packages are needed: a missing or failing import is caught like any export failure.
+    monkeypatch.setattr(exp, "deallocate_self", lambda client_id, *a, **k: calls.append(client_id))
     monkeypatch.setattr(
         exp, "run_export", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
     )
+    # No azure packages are needed: a missing or failing import is caught like any export failure.
     assert exp.main(_env(AZURE_CLIENT_ID="cid")) == 1
     assert calls == ["cid"]
+
+
+def test_main_missing_tidal_env_fails_but_still_deallocates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str | None] = []
+    monkeypatch.setattr(exp, "deallocate_self", lambda client_id, *a, **k: calls.append(client_id))
+    env = _env(AZURE_CLIENT_ID="cid")
+    del env["TIDAL_ENV"]
+    assert exp.main(env) == 1
+    assert calls == ["cid"]
+
+
+def test_main_respects_deallocate_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str | None] = []
+    monkeypatch.setattr(exp, "deallocate_self", lambda client_id, *a, **k: calls.append(client_id))
+    assert exp.main({"EXPORT_DEALLOCATE": "false"}) == 1
+    assert calls == []
+
+
+def test_deallocate_retries_with_backoff_then_succeeds() -> None:
+    attempts = {"n": 0}
+    sleeps: list[float] = []
+
+    def fetch(req: urllib.request.Request) -> tuple[int, bytes]:
+        if "oauth2/token" in req.full_url:
+            attempts["n"] += 1
+            if attempts["n"] < 3:
+                raise OSError("identity not ready")
+            return 200, b'{"access_token": "t"}'
+        if "instance/compute" in req.full_url:
+            return 200, b'{"subscriptionId": "s", "resourceGroupName": "r", "name": "n"}'
+        return 202, b""
+
+    exp.deallocate_self(None, fetch, sleeps.append)
+    assert sleeps == [5.0, 10.0]
+
+
+def test_deallocate_gives_up_after_deadline() -> None:
+    sleeps: list[float] = []
+
+    def fetch(req: urllib.request.Request) -> tuple[int, bytes]:
+        raise OSError("down")
+
+    with pytest.raises(OSError, match="down"):
+        exp.deallocate_self(None, fetch, sleeps.append, deadline_s=300.0)
+    assert 240 <= sum(sleeps) <= 300
+
+
+def test_imds_token_requests_arm_resource() -> None:
+    seen: list[str] = []
+
+    def fetch(req: urllib.request.Request) -> tuple[int, bytes]:
+        seen.append(req.full_url)
+        return 200, b'{"access_token": "t"}'
+
+    assert exp.imds_token("cid", fetch) == "t"
+    assert "resource=https%3A%2F%2Fmanagement.azure.com%2F" in seen[0]
+    assert "client_id=cid" in seen[0]
+
+
+def test_empty_data_gives_header_only_csv() -> None:
+    assert exp.to_csv([]) == "date,instrument_id,open,high,low,close,volume\n"
+
+
+class _FakeBlob:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _FakeContainer:
+    def __init__(self) -> None:
+        self.blobs: dict[str, bytes] = {}
+        self.uploads: list[str] = []
+
+    def list_blobs(self, name_starts_with: str = "") -> list[_FakeBlob]:
+        return [_FakeBlob(n) for n in self.blobs if n.startswith(name_starts_with)]
+
+    def upload_blob(self, name: str, data: bytes, overwrite: bool = False) -> None:
+        assert overwrite is True
+        self.uploads.append(name)
+        self.blobs[name] = data
+
+
+class _FakeService:
+    def __init__(self) -> None:
+        self.containers: dict[str, _FakeContainer] = {}
+
+    def get_container_client(self, name: str) -> _FakeContainer:
+        return self.containers.setdefault(name, _FakeContainer())
+
+
+def test_rerun_same_day_overwrites_same_blob() -> None:
+    service = _FakeService()
+    cfg = exp.Config.from_env(_env())
+    first = exp.run_export(cfg, NOW, service)
+    second = exp.run_export(cfg, NOW.replace(hour=22), service)
+    assert first == second == ("risk-feed/daily_bars_2026-01-03.csv", 0)
+    exports = service.get_container_client("exports")
+    assert exports.uploads == [first[0], first[0]]
+    assert list(exports.blobs) == [first[0]]
+
+
+def test_requirements_are_fully_hash_locked() -> None:
+    text = (_SCRIPT.parent / "requirements.txt").read_text(encoding="utf-8")
+    logical = text.replace("\\\n", " ").splitlines()
+    reqs = [ln for ln in logical if ln.strip() and not ln.lstrip().startswith("#")]
+    names = {ln.split("==")[0].strip() for ln in reqs}
+    assert {"pyarrow", "azure-identity", "azure-storage-blob", "cryptography", "requests"} <= names
+    for ln in reqs:
+        assert "==" in ln, ln
+        assert "--hash=sha256:" in ln, ln
