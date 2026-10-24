@@ -2,11 +2,9 @@
 
 A cursor encodes the position of the first un-emitted row: ``(ts_ns, idx)`` where ``idx`` is the
 ordinal of the row among rows sharing that ``ts_ns`` (ticks can collide). The signing key is a
-per-process random key held on ``app.state``.
-
-LIMITATION (until T-402 adds a configured key): there is no key in settings yet, so cursors are
-valid only on the process that issued them (and die on restart). Multi-instance deployments need
-a shared key.
+key held on ``app.state.cursor_key``: the shared secret from Key Vault (``TIDAL_CURSOR__*``,
+resolved by ``tidal.api.auth.resolve_cursor_key``), so cursors survive restarts and work across
+replicas. Only in ``TIDAL_ENV=local`` without a configured key is a per-process random key used.
 
 Pages are read from the reader's stream starting at the cursor position (see
 ``tidal.api.streaming.page_from_stream``), so a page costs at most one reader slice.
@@ -41,8 +39,20 @@ class Position:
     anchor_ns: int | None = None  # ffill: last real bar before this position (read start)
 
 
+class CursorKey(bytes):
+    """Signing key; ``previous`` keys (rotation overlap) verify cursors but never sign."""
+
+    previous: tuple[bytes, ...]
+
+    def __new__(cls, current: bytes, previous: tuple[bytes, ...] = ()) -> "CursorKey":
+        """Current key bytes plus optional previous keys."""
+        obj = super().__new__(cls, current)
+        obj.previous = previous
+        return obj
+
+
 def cursor_key(request: Request) -> bytes:
-    """The per-process signing key (created on first use)."""
+    """The configured signing key; local without one gets a per-process random key."""
     state = request.app.state
     if getattr(state, "cursor_key", None) is None:
         state.cursor_key = secrets.token_bytes(32)
@@ -78,7 +88,9 @@ def decode_cursor(key: bytes, bound: str, token: str) -> Position:
     if not _TOKEN.fullmatch(token):  # before any crypto; also guarantees ASCII for the compare
         raise ValidationFailed(_BAD)
     payload, _, sig = token.partition(".")
-    if not hmac.compare_digest(sig.encode(), _sign(key, payload).encode()):
+    candidates = [bytes(key), *getattr(key, "previous", ())]
+    valid = [hmac.compare_digest(sig.encode(), _sign(k, payload).encode()) for k in candidates]
+    if not any(valid):  # every candidate is checked: no early exit on which key matched
         raise ValidationFailed(_BAD)
     try:
         ts_ns, idx, got, as_of, anchor = json.loads(

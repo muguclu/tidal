@@ -15,14 +15,14 @@ workflows (the build workflow never gets deploy rights, and `images.yml` stays u
 after the whole `images` run (build, scan, push) is green. The cost is that a `workflow_run` executes from the default branch
 and carries tag data as untrusted input, so the workflow re-validates everything: strict `vX.Y.Z` regex, 40-hex head sha,
 tag and commit tag must resolve to the same digest (a moved tag is refused), and all of it enters shell only via env vars.
-Because the run's ref is `main`, the `dev` environment must allow `main` (already required by `docs/runbooks/images.md`).
+Because the run's ref is `main`, the `dev-deploy` environment must allow `main` (see the next section).
 The chart and smoke tests are checked out at the tag's commit.
 
 Never trusted: a bare tag. Everything is deployed as `<acr>.azurecr.io/tidal@sha256:...` (App Service, Container Apps,
 Helm `image.digest`). The digest and UTC time are in the job summary.
 
 ## Configuration source (no secrets, no Terraform in CI)
-The workflow reads **environment variables of the GitHub environment `dev`** that a human sets once after
+The workflow reads **environment variables of the GitHub environment `dev-deploy`** that a human sets once after
 `terraform apply` (never from CI). Run in `infra/terraform/envs/dev`:
 
 ```bash
@@ -33,7 +33,8 @@ terraform output -raw api_hostname; terraform output -json apps_job_names
 
 | Variable | Source |
 |---|---|
-| `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `ACR_NAME` | as for `images.yml` |
+| `AZURE_CLIENT_ID` | **environment-scoped** to `dev-deploy`: output `deploy_client_id` (app `sp-tidal-deploy`). Never the `images.yml` app and never a repository-level variable |
+| `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `ACR_NAME` | as for `images.yml` |
 | `TIDAL_RESOURCE_GROUP` | output `resource_group_name` |
 | `TIDAL_WEBAPP_NAME` | web app name, `app-tidal-api-dev-<suffix>` (output `api_hostname` minus `.azurewebsites.net`) |
 | `TIDAL_API_BASE_URL` | `https://<api_hostname>` |
@@ -42,17 +43,37 @@ terraform output -raw api_hostname; terraform output -json apps_job_names
 | `TIDAL_JOB_NAMES` | space separated values of output `apps_job_names` (`caj-tidal-...`) |
 | `TIDAL_AKS_NAME` | output `aks_name` |
 | `TIDAL_WORKER_CLIENT_ID` | `IDENTITY_CLIENT_ID_WORKER` |
-| `TIDAL_KEDA_CLIENT_ID` | KEDA operator identity client id (created by T-403) |
+| `TIDAL_KEDA_CLIENT_ID` | output `keda_identity.client_id` (T-403) |
 | `TIDAL_STORAGE_URL`, `TIDAL_SQL_SERVER`, `TIDAL_SERVICEBUS_FQDN` | `TIDAL_STORAGE__ACCOUNT_URL`, `TIDAL_SQL__SERVER`, `TIDAL_SERVICEBUS__FQDN` |
 
 Every value is format-validated in the first step; a missing or malformed one fails the run before any login.
 
-## Permissions the OIDC app needs (to be granted in Terraform, T-403)
-AcrPull/Reader on the ACR (resolve digests); Website Contributor on the web app; Container Apps contributor on the
-Container Apps resource group; `Azure Kubernetes Service Cluster User Role` plus RBAC Writer/Admin on namespace `tidal`
-(local accounts are disabled; kubelogin uses the `azurecli` login). Not granted today: until it is, the matching step fails with 403.
+## GitHub environment `dev-deploy` (identity isolation, T-403)
+Deploy uses its own Entra app `sp-tidal-deploy` and its own GitHub environment, so the image-build identity
+(`sp-tidal-ci`, environment `dev`, AcrPush only) can never obtain deploy rights. Each app has exactly one federated subject:
 
-T-403 follow-up: use a separate, deploy-only app registration/environment so deploy rights are not shared with the image push identity (least privilege).
+| App | Subject | Roles |
+|---|---|---|
+| `sp-tidal-ci` | `repo:<owner>/<repo>:environment:dev` | AcrPush on the registry |
+| `sp-tidal-deploy` | `repo:<owner>/<repo>:environment:dev-deploy` | see below |
+
+Create the environment `dev-deploy` once (Settings, Environments) with: **deployment branches and tags: selected branches,
+`main` only** (a `workflow_run` deploy executes from `main`), **required reviewers: at least one human** (the deploy job waits
+for approval), and no environment secrets. Set the variables above on it. Do not create a `dev-deploy` variable at repository level.
+
+Roles of `sp-tidal-deploy` (all in `infra/terraform/envs/dev/rbac.tf`, each with a justification): AcrPull on the registry;
+Website Contributor on the web app; Contributor on `ca-tidal-query` and on each Container Apps Job; Reader and
+`Azure Kubernetes Service Cluster User Role` on the cluster; `Azure Kubernetes Service RBAC Writer` on namespace `tidal`;
+Managed Identity Operator on the identities of those targets (verify live, drop where image-only updates do not need it:
+through it the deploy identity effectively holds the union of its targets' identities' rights).
+
+### Namespace `tidal` is created by the human applier
+RBAC Writer is scoped to the namespace and cannot create it, and `deploy.yml` deliberately does not pass `--create-namespace`.
+Before the first deploy, and before applying the namespace-scoped role assignment, run once as a cluster admin:
+
+```bash
+az aks get-credentials --name <aks_name> --resource-group <rg> && kubectl create namespace tidal
+```
 
 ## Behaviour and limits
 - App Service health is polled from the runner (`/v1/health/live`, up to 4 min). If the app has an IP allow-list

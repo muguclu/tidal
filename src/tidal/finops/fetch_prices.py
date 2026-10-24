@@ -151,6 +151,15 @@ METERS: tuple[MeterSpec, ...] = (
         meter_id="2fb5f78a-0428-4e17-8fee-5b176a3ef34c",
         note="per 10K index tags per month (not per blob); a blob with 5 tags counts as 5",
     ),
+    # --- Defender for SQL (T-407, ADR-0017): per server per month, not reduced by auto-pause ---
+    _m(
+        "defender_sql_server_month",
+        "Microsoft Defender for Cloud",
+        "Microsoft Defender for SQL",
+        "Standard",
+        "Standard Node",
+        note="per server per month; billed regardless of auto-pause",
+    ),
     # Early-delete meters exist for Cold and Archive only (see module docstring).
     _blob("blob_cold_early_delete_gb", "Cold LRS", "Cold LRS Early Delete", note="90-day minimum"),
     _blob(
@@ -370,6 +379,72 @@ METERS: tuple[MeterSpec, ...] = (
         "Standard",
         "Standard IPv4 Static Public IP",
         note="per hour; month = x730",
+    ),
+    # --- Private networking (T-404): private endpoints, Link data, DNS, NAT ---
+    # Private Link and NAT gateway meters are published under region "Global"; DNS zones under "".
+    _m(
+        "private_endpoint_hour",
+        "Virtual Network",
+        "Virtual Network Private Link",
+        "Standard",
+        "Standard Private Endpoint",
+        region="Global",
+        note="per endpoint-hour; month = x730; region Global",
+    ),
+    _m(
+        "private_link_data_ingress_gb",
+        "Virtual Network",
+        "Virtual Network Private Link",
+        "Standard",
+        "Standard Data Processed - Ingress",
+        region="Global",
+        note="per GB, first 1,000,000 GB tier; region Global",
+    ),
+    _m(
+        "private_link_data_egress_gb",
+        "Virtual Network",
+        "Virtual Network Private Link",
+        "Standard",
+        "Standard Data Processed - Egress",
+        region="Global",
+        note="per GB, first 1,000,000 GB tier; region Global",
+    ),
+    _m(
+        "private_dns_zone_month",
+        "Azure DNS",
+        "Azure DNS",
+        "Private",
+        "Private Zone",
+        region="",
+        meter_id="0b608a26-f611-4232-8192-ce81b6b57194",
+        note="per hosted zone per month, first 25 zones; region blank in the API",
+    ),
+    _m(
+        "private_dns_queries_1m",
+        "Azure DNS",
+        "Azure DNS",
+        "Private",
+        "Private Queries",
+        region="Zone 1",
+        note="per million queries; region Zone 1 in the API",
+    ),
+    _m(
+        "nat_gateway_hour",
+        "NAT Gateway",
+        "NAT Gateway",
+        "Standard",
+        "Standard Gateway",
+        region="Global",
+        note="per gateway-hour; month = x730; region Global",
+    ),
+    _m(
+        "nat_gateway_data_gb",
+        "NAT Gateway",
+        "NAT Gateway",
+        "Standard",
+        "Standard Data Processed",
+        region="Global",
+        note="per GB processed; region Global",
     ),
     # --- ACR Basic ---
     _m(

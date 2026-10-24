@@ -1,4 +1,4 @@
-# Config Contract — v1.2
+# Config Contract — v1.3
 
 Code mirror: `src/tidal/common/config.py` (pydantic-settings, prefix `TIDAL_`, nested delimiter `__`).
 Every service reads only these keys. Unknown `TIDAL_*` keys fail startup (catches typos).
@@ -23,6 +23,16 @@ Every service reads only these keys. Unknown `TIDAL_*` keys fail startup (catche
 | `TIDAL_AUTH__TENANT_ID` | uuid | — | no | required when auth is enabled and `TIDAL_ENV != local` |
 | `TIDAL_AUTH__AUDIENCE` | str | `api://tidal` | no | |
 | `TIDAL_AUTH__DISABLED` | bool | `false` | no | `true` only when `TIDAL_ENV=local` (startup asserts) |
+| `TIDAL_AUTH__JWKS_URL` | str | — | no | local only: http(s) URL or file path (e.g. `.data/dev-jwks/jwks.json`); default is the tenant's Entra v2.0 keys endpoint; set outside local fails startup |
+| `TIDAL_AUTH__QUERY_ROLE` | str | `Tidal.Query.Read` | no | app role `tidal-query` requires in the caller's token |
+| `TIDAL_AUTH__API_APP_CLIENT_ID` | str | — | no | tidal-api app registration client id GUID; accepted as `aud` next to `TIDAL_AUTH__AUDIENCE` (v2 tokens carry the GUID) |
+| `TIDAL_QUERY__APP_CLIENT_ID` | str | — | no | tidal-query app registration client id GUID; accepted as `aud` next to `TIDAL_QUERY__AUDIENCE` |
+| `TIDAL_AUTH__ALLOWED_CLIENT_IDS` | str | — | no | comma-separated client app GUIDs (e.g. tidal-cli); `tidal-api` requires `azp` in this list and `access_as_user` in `scp`, else 401 (empty = everything rejected) |
+| `TIDAL_AUTH__QUERY_CALLER_CLIENT_IDS` | str | — | no | comma-separated GUIDs (`id-api`, `id-worker`); tidal-query requires `azp`/`appid` in this list OR `oid` in the object-id list, plus the query role |
+| `TIDAL_AUTH__QUERY_CALLER_OBJECT_IDS` | str | — | no | comma-separated principal object id GUIDs; both lists empty fails `tidal-query` startup outside local |
+| `TIDAL_CURSOR__KEY` | secret | — | **yes** | local only; base64 of >= 32 random bytes; unset locally gives a per-process random key; never set in Azure |
+| `TIDAL_CURSOR__KEYVAULT_URL` | url | — | no | required outside local: Key Vault read with the app's Managed Identity |
+| `TIDAL_CURSOR__SECRET_NAME` | str | `cursor-hmac-key` | no | Key Vault secret holding the HMAC key (base64 of >= 32 random bytes); an optional `<name>-previous` secret is accepted for verification only (rotation) |
 | `TIDAL_HOT_WINDOW_DAYS` | int | `90` | no | must be > 0 |
 | `TIDAL_SYNTH__SCALE` | `S\|M\|L` | `S` | no | |
 | `TIDAL_SYNTH__SEED` | int | `20261021` | no | |
@@ -37,7 +47,7 @@ Rules:
 - `AZURE_CLIENT_ID` (user-assigned managed identity) is read by `DefaultAzureCredential`, not by
   Tidal settings; it is outside the `TIDAL_` namespace and therefore not subject to the unknown-key rule.
 - `TIDAL_STORAGE__CONNECTION_STRING`, `TIDAL_SERVICEBUS__CONNECTION_STRING`, `TIDAL_SQL__PASSWORD` and
-  `TIDAL_CLOCK__NOW` set while `TIDAL_ENV != local` fail startup. `TIDAL_OTEL__CONNECTION_STRING` is exempt:
+  `TIDAL_CLOCK__NOW`, `TIDAL_AUTH__JWKS_URL` and `TIDAL_CURSOR__KEY` set while `TIDAL_ENV != local` fail startup. `TIDAL_OTEL__CONNECTION_STRING` is exempt:
   in Azure it is a Key Vault reference.
 - Outside local, `TIDAL_SQL__AUTH` must be `entra_mi` and `TIDAL_STORAGE__USE_MANAGED_IDENTITY` must be `true` (SPEC-06: Entra-only).
 - `TIDAL_SQL__AUTH=entra_mi` requires a real server (not empty, `localhost` or `127.0.0.1`).
@@ -61,3 +71,13 @@ Rules:
   `TIDAL_*` keys fail startup, a deployment that still sets either variable now stops with a
   `ConfigError` naming the key. Minor bump by the same reasoning as v1.1: no deployed consumer
   (no Azure app settings or Key Vault secrets for these keys were ever created).
+- **v1.3 (T-402)**: added `TIDAL_AUTH__JWKS_URL` (local only), `TIDAL_AUTH__QUERY_ROLE`,
+  `TIDAL_AUTH__ALLOWED_CLIENT_IDS` (user-token client allowlist),
+  `TIDAL_AUTH__API_APP_CLIENT_ID`, `TIDAL_QUERY__APP_CLIENT_ID` (v2 tokens carry the app client id
+  GUID as `aud`; both forms are accepted), `TIDAL_AUTH__QUERY_CALLER_CLIENT_IDS`,
+  `TIDAL_AUTH__QUERY_CALLER_OBJECT_IDS` (tidal-query caller allowlists, ADR-0016: id-api and
+  id-worker) and the `TIDAL_CURSOR__*` group (HMAC key
+  from Key Vault so cursors survive restarts and replicas). Minor bump: additive keys with
+  defaults. Outside local `tidal-api` requires `TIDAL_CURSOR__KEYVAULT_URL` at startup (app
+  factory, not `Settings`), and `TIDAL_AUTH__JWKS_URL` / `TIDAL_CURSOR__KEY` fail startup.
+  T-401 supplies the client/object ids and the Key Vault URL as app settings.

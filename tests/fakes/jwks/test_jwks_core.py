@@ -6,7 +6,14 @@ from collections.abc import Callable
 import jwt
 import pytest
 
-from fakes.jwks.core import DEFAULT_AUDIENCE, JwksFake, issuer_for, jwks_url
+from fakes.jwks.core import (
+    DEFAULT_AUDIENCE,
+    DEV_API_CLIENT_ID,
+    DEV_CLI_CLIENT_ID,
+    JwksFake,
+    issuer_for,
+    jwks_url,
+)
 
 
 def _decode(fake: JwksFake, token: str) -> dict[str, object]:
@@ -141,3 +148,31 @@ def test_async_client(jwks: JwksFake) -> None:
 def test_no_private_material_in_jwks(jwks: JwksFake) -> None:
     for jwk in jwks.jwks()["keys"]:
         assert set(jwk) == {"kty", "use", "alg", "kid", "n", "e"}
+
+
+def test_user_token_defaults_carry_scp_and_dev_cli_azp(jwks: JwksFake) -> None:
+    claims = jwt.decode(
+        jwks.mint_token(roles=["Tidal.Reader"]), options={"verify_signature": False}
+    )
+    assert claims["scp"] == "access_as_user"
+    assert claims["azp"] == DEV_CLI_CLIENT_ID
+    assert "idtyp" not in claims
+
+
+def test_app_token_mode(jwks: JwksFake) -> None:
+    claims = jwt.decode(jwks.mint_token(kind="app"), options={"verify_signature": False})
+    assert claims["idtyp"] == "app"
+    assert claims["azp"] == DEV_API_CLIENT_ID
+    assert claims["roles"] == ["Tidal.Query.Read"]
+    assert "scp" not in claims
+
+
+def test_empty_string_omits_scp_and_azp(jwks: JwksFake) -> None:
+    claims = jwt.decode(jwks.mint_token(scp="", azp=""), options={"verify_signature": False})
+    assert "scp" not in claims
+    assert "azp" not in claims
+
+
+def test_unknown_kind_rejected(jwks: JwksFake) -> None:
+    with pytest.raises(ValueError, match="kind"):
+        jwks.mint_token(kind="service")

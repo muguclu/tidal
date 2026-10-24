@@ -26,11 +26,15 @@ resource "azurerm_container_app_environment" "this" {
   location            = var.location
 
   # Checkov has no policies for the container app resource types (0 resources evaluated), so there are no skips here.
-  # Deferred hardening: internal load balancer and VNet (T-404, SPEC-06 section 4).
+  # VNet and internal load balancer come from the network module when enable_private_networking is true (T-404).
   # Logs go to the shared workspace (0.2 GB/day cap) when log_analytics_workspace_id is set.
   log_analytics_workspace_id = var.log_analytics_workspace_id
 
-  # Zone redundancy needs a VNet subnet (T-404) and costs more; single-zone dev environment (provider default).
+  infrastructure_subnet_id = var.infrastructure_subnet_id
+  # The provider requires both arguments together or neither.
+  internal_load_balancer_enabled = var.infrastructure_subnet_id == null ? null : var.internal_load_balancer_enabled
+
+  # Zone redundancy costs more; single-zone dev environment (provider default).
 
   tags = local.tags
 }

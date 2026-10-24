@@ -145,11 +145,6 @@ resource "azuread_application_federated_identity_credential" "github_environment
 # `environment: dev` protection. T-127 adds a separate app sp-tidal-ci-plan (Reader + Storage Blob Data Reader only).
 
 # ---------------------------------------------------------------------------
-# RBAC: state container only. AcrPush / Contributor on rg-tidal-dev are added in later tasks (SPEC-06 section 2).
+# RBAC: none here, on purpose. sp-tidal-ci holds no role on the state account (CI never touches state; plans use the
+# read-only sp-tidal-ci-plan). Its only role, AcrPush on the registry, is assigned by envs/dev/rbac.tf (T-403, SPEC-06 section 2).
 # ---------------------------------------------------------------------------
-resource "azurerm_role_assignment" "ci_state_blob" {
-  scope                = azurerm_storage_container.tfstate.id
-  role_definition_name = "Storage Blob Data Contributor"
-  principal_id         = azuread_service_principal.ci.object_id
-  principal_type       = "ServicePrincipal"
-}

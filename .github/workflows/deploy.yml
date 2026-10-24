@@ -6,9 +6,9 @@ name: deploy
 # Never `pull_request`. Untrusted values (tag name, inputs) reach `run:` only through env vars.
 # The deployed reference is always <acr>/tidal@sha256:..., never a bare tag.
 #
-# Required variables on the GitHub environment "dev" (none is a secret; docs/runbooks/deploy.md shows the
+# Required variables on the GitHub environment "dev-deploy" (none is a secret; docs/runbooks/deploy.md shows the
 # `terraform output` commands that print them):
-#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID   OIDC app (same as images.yml)
+#   AZURE_CLIENT_ID (environment-scoped: client id of sp-tidal-deploy, NOT the images.yml app), AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
 #   ACR_NAME, TIDAL_RESOURCE_GROUP, TIDAL_WEBAPP_NAME, TIDAL_QUERY_APP_NAME, TIDAL_JOB_NAMES (space separated),
 #   TIDAL_AKS_NAME, TIDAL_WORKER_CLIENT_ID, TIDAL_KEDA_CLIENT_ID, TIDAL_STORAGE_URL, TIDAL_SQL_SERVER,
 #   TIDAL_SERVICEBUS_FQDN, TIDAL_QUERY_BASE_URL, TIDAL_API_BASE_URL
@@ -45,7 +45,7 @@ jobs:
        startsWith(github.event.workflow_run.head_branch, 'v'))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    environment: dev
+    environment: dev-deploy
     permissions:
       id-token: write # OIDC to Entra (this job only)
       contents: read

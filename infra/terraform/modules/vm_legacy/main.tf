@@ -1,13 +1,15 @@
 locals {
   tags        = merge(var.tags, { component = var.component })
   vm_name     = "vm-tidal-legacy-${var.env}"
-  create_net  = var.subnet_id == null
+  create_net  = !var.use_external_subnet
   subnet_id   = local.create_net ? azurerm_subnet.this[0].id : var.subnet_id
   compute_api = "2024-07-01"
 }
 
 # --- Network: private only ----------------------------------------------------------------------
-# No public IP and no inbound rule. When T-404 provides snet-vm, pass subnet_id and the VNet below is not created.
+# No inbound rule anywhere (NIC NSG and, with the network module, the subnet NSG both deny all inbound). By default no
+# public IP either. With enable_private_networking the network module supplies snet-vm and an outbound-only Standard
+# public IP (public_ip_id; ADR-0018 records this dev deviation from "no public IP"); the VNet below is then not created.
 
 resource "azurerm_virtual_network" "this" {
   count = local.create_net ? 1 : 0
@@ -29,8 +31,8 @@ resource "azurerm_subnet" "this" {
 
   # The VM must reach Blob, management.azure.com (deallocate), PyPI and the Ubuntu mirrors. A NAT gateway
   # (about 30 EUR/month) or a public IP would cost more than the VM itself, so the subnet keeps the platform
-  # default outbound access (no address of our own, no inbound). T-404 can replace this with a storage
-  # service endpoint plus NAT, see docs/finops/deltas/T-310.md.
+  # default outbound access (no address of our own, no inbound). With enable_private_networking the network
+  # module owns snet-vm instead: default outbound off, explicit public IP or NAT (docs/finops/deltas/T-404.md).
   default_outbound_access_enabled = true
 }
 
@@ -64,6 +66,23 @@ resource "azurerm_network_security_group" "this" {
     destination_address_prefix = "Internet"
   }
 
+  # Private endpoints (Blob in snet-pe, T-404) sit inside the VNet, so they are not covered by the Internet tag above.
+  # Limited to the snet-pe prefix (var.private_endpoint_subnet_cidr), not the whole VNet.
+  dynamic "security_rule" {
+    for_each = var.private_endpoint_subnet_cidr == null ? [] : [var.private_endpoint_subnet_cidr]
+    content {
+      name                       = "AllowPrivateEndpointHttpsOutbound"
+      priority                   = 110
+      direction                  = "Outbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_range     = "443"
+      source_address_prefix      = "*"
+      destination_address_prefix = security_rule.value
+    }
+  }
+
   security_rule {
     name                       = "DenyAllOtherOutbound"
     priority                   = 4000
@@ -94,6 +113,7 @@ resource "azurerm_network_interface" "this" {
     name                          = "internal"
     subnet_id                     = local.subnet_id
     private_ip_address_allocation = "Dynamic"
+    public_ip_address_id          = var.public_ip_id
   }
 }
 

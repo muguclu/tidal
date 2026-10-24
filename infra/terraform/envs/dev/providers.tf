@@ -13,6 +13,14 @@ provider "azurerm" {
       recover_soft_deleted_key_vaults = true
     }
 
+    storage {
+      # Skip data-plane calls (blob/queue service properties) during refresh and plan. With enable_private_networking
+      # the storage account has public access off and a runner or laptop outside the VNet would time out reading them.
+      # Changes: the provider no longer reads or manages blob service properties from the data plane; containers and
+      # the account itself still go through ARM. Harmless with the flag off, so it is set unconditionally.
+      data_plane_available = false
+    }
+
     resource_group {
       # `terraform destroy` must remove the whole environment even when the group still holds resources
       # that Terraform does not track (for example items created by the platform itself).

@@ -26,8 +26,9 @@ Authentication (api -> query)
 - ``tidal-api`` obtains an Entra token for ``settings.query.audience`` from a
   :class:`TokenProvider` (Managed Identity ``id-api`` in Azure; an anonymous provider in
   ``TIDAL_ENV=local`` with auth disabled; a fake in tests) and sends it as a bearer token.
-- ``tidal-query`` validates it with an injected :class:`TokenValidator`. The Entra JWKS validator
-  is T-402; until then the default validator fails closed. With ``TIDAL_ENV=local`` and
+- ``tidal-query`` validates it with an injected :class:`TokenValidator`: in Azure the
+  ``tidal.api.auth.EntraTokenValidator`` (audience, ``Tidal.Query.Read`` role, azp/oid == id-api).
+  ``FailClosedValidator`` is the default when none is configured. With ``TIDAL_ENV=local`` and
   ``TIDAL_AUTH__DISABLED=true`` validation is skipped. Tokens are never logged.
 """
 
@@ -46,6 +47,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from tidal.api.app import CorrelationMiddleware
+from tidal.api.auth import build_credential, query_validator_from_settings
 from tidal.api.deps import assert_auth_allowed
 from tidal.api.errors import CORRELATION_HEADER, register_exception_handlers
 from tidal.api.streaming import TIER_HEADER
@@ -132,7 +134,7 @@ class AnonymousTokenProvider:
 
 
 class FailClosedValidator:
-    """SEAM (T-402): rejects every token until the Entra JWKS validator replaces it."""
+    """Rejects every token; used where no Entra validator is configured."""
 
     async def validate(self, token: str) -> None:  # noqa: ARG002 - protocol signature
         """Always reject."""
@@ -140,9 +142,15 @@ class FailClosedValidator:
 
 
 def token_provider_for(settings: Settings) -> TokenProvider:
-    """Managed Identity everywhere except local with auth disabled."""
+    """Managed Identity everywhere except local with auth disabled.
+
+    Outside local the credential is pinned (workload identity, then the user-assigned identity
+    named by ``AZURE_CLIENT_ID``); a missing ``AZURE_CLIENT_ID`` is a startup ``ConfigError``.
+    """
     if settings.env == "local" and settings.auth.disabled:
         return AnonymousTokenProvider()
+    if settings.env != "local":
+        return ManagedIdentityTokenProvider(build_credential(aio=True))
     return ManagedIdentityTokenProvider()
 
 
@@ -535,5 +543,8 @@ def run() -> None:
     """``tidal-query`` entrypoint: serve the unified reader on ``0.0.0.0:8000``."""
     settings = get_settings()
     configure_logging(settings)
-    app = create_query_app(build_reader(settings), FailClosedValidator(), settings)
+    validator: TokenValidator = FailClosedValidator()
+    if not (settings.auth.disabled and settings.env == "local"):
+        validator = query_validator_from_settings(settings)  # ConfigError without caller ids
+    app = create_query_app(build_reader(settings), validator, settings)
     uvicorn.run(app, host="0.0.0.0", port=8000, log_config=None)  # noqa: S104 - container bind

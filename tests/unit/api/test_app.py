@@ -443,9 +443,15 @@ async def test_docs_only_in_local(make_client: MakeClient) -> None:
             "TIDAL_SQL__AUTH": "entra_mi",
             "TIDAL_SQL__SERVER": "x.database.windows.net",
             "TIDAL_STORAGE__USE_MANAGED_IDENTITY": "true",
+            "TIDAL_CURSOR__KEYVAULT_URL": "https://kv-test.vault.azure.net",
         }
     )
-    async with make_client(create_app(dev)) as c:
+
+    class _Secrets:
+        def get(self, name: str) -> str:
+            return "a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s="
+
+    async with make_client(create_app(dev, secret_source=_Secrets())) as c:
         assert (await c.get("/docs")).status_code == 404
         assert (await c.get("/openapi.json")).status_code == 404
     async with make_client(create_app(Settings.from_env({"TIDAL_ENV": "local"}))) as c:

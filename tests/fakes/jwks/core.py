@@ -22,6 +22,20 @@ TEST_TENANT_ID = "11111111-2222-3333-4444-555555555555"
 DEFAULT_AUDIENCE = "api://tidal"
 FOREIGN_TENANT_ID = "99999999-9999-9999-9999-999999999999"
 DEFAULT_OID = "00000000-0000-0000-0000-0000000000a1"
+# Documented dev identities (fixed GUIDs, public, local only): the dev CLI public client that
+# signs users in, and the id-api / id-worker stand-ins calling tidal-query with app tokens.
+DEV_CLI_CLIENT_ID = "dddddddd-0000-4000-8000-0000000000c1"
+DEV_API_CLIENT_ID = "dddddddd-0000-4000-8000-0000000000a1"
+DEV_APP_OID = "dddddddd-0000-4000-8000-0000000000a2"
+USER_SCOPE = "access_as_user"
+QUERY_ROLE = "Tidal.Query.Read"
+# Documented dev identities (fixed GUIDs, public, local only): the dev CLI public client that
+# signs users in, and the id-api / id-worker stand-ins calling tidal-query with app tokens.
+DEV_CLI_CLIENT_ID = "dddddddd-0000-4000-8000-0000000000c1"
+DEV_API_CLIENT_ID = "dddddddd-0000-4000-8000-0000000000a1"
+DEV_APP_OID = "dddddddd-0000-4000-8000-0000000000a2"
+USER_SCOPE = "access_as_user"
+QUERY_ROLE = "Tidal.Query.Read"
 
 
 def issuer_for(tenant_id: str = TEST_TENANT_ID) -> str:
@@ -101,6 +115,18 @@ def _encode_forged(header: Mapping[str, Any], claims: Mapping[str, Any], signatu
     return f"{h}.{p}.{_b64(signature)}"
 
 
+def _kind_claims(kind: str, scp: str | None, azp: str | None) -> dict[str, str]:
+    """``scp``/``azp``/``idtyp`` for a user or an app token (``""`` omits a claim)."""
+    if kind == "app":
+        out = {"idtyp": "app", "azp": DEV_API_CLIENT_ID if azp is None else azp}
+    else:
+        out = {
+            "scp": USER_SCOPE if scp is None else scp,
+            "azp": DEV_CLI_CLIENT_ID if azp is None else azp,
+        }
+    return {k: v for k, v in out.items() if v != ""}
+
+
 def mint_token(
     key: KeyPair,
     *,
@@ -116,6 +142,9 @@ def mint_token(
     extra_claims: Mapping[str, Any] | None = None,  # Any: arbitrary JSON claim values
     tenant_id: str = TEST_TENANT_ID,
     hs256_secret: bytes | None = None,
+    kind: str = "user",
+    scp: str | None = None,
+    azp: str | None = None,
 ) -> str:
     """Mint a JWT shaped like an Entra v2 access token.
 
@@ -134,13 +163,26 @@ def mint_token(
         extra_claims: Extra claims merged last.
         tenant_id: Tenant used for the default ``iss`` and for ``tid`` (so they always agree).
         hs256_secret: HMAC secret for ``alg=HS256`` (defaults to the public key PEM).
+        kind: ``"user"`` (default): delegated token with ``scp=access_as_user`` and
+            ``azp=DEV_CLI_CLIENT_ID``. ``"app"``: application token with ``idtyp="app"``, no
+            ``scp``, ``azp=DEV_API_CLIENT_ID``, ``oid=DEV_APP_OID`` and, when ``roles`` is
+            empty, ``roles=["Tidal.Query.Read"]`` (a token for a local tidal-query).
+        scp: Override the ``scp`` claim (user kind); ``""`` omits it.
+        azp: Override the ``azp`` claim; ``""`` omits it.
 
     Returns:
         The compact serialised token.
     """
     if isinstance(roles, str):
         raise TypeError("roles must be a sequence of strings, not a single str")
+    if kind not in {"user", "app"}:
+        raise ValueError(f"unsupported kind {kind!r}")
     issued = int(time.time() if now is None else now)
+    if kind == "app":
+        if oid == DEFAULT_OID:
+            oid = DEV_APP_OID
+        if roles is not None and not roles:
+            roles = (QUERY_ROLE,)
     claims: dict[str, Any] = {  # Any: heterogeneous JSON claim values
         "iss": iss if iss is not None else issuer_for(tenant_id),
         "aud": aud,
@@ -153,6 +195,7 @@ def mint_token(
     }
     if roles is not None:
         claims["roles"] = list(roles)
+    claims.update(_kind_claims(kind, scp, azp))
     claims.update(extra_claims or {})
     header_kid = kid if kid is not None else key.kid
     if alg == "RS256":

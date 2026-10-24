@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 from fakes.jwks.core import (
     DEFAULT_AUDIENCE,
     DEFAULT_OID,
+    QUERY_ROLE,
     TEST_TENANT_ID,
     KeyPair,
     issuer_for,
@@ -46,22 +47,38 @@ def _load_or_create_key(keys_dir: Path) -> KeyPair:
 
 @app.command()
 def main(  # noqa: PLR0917 - typer options
-    role: Annotated[list[str], typer.Option("--role", help="App role; repeatable.")],
+    role: Annotated[list[str] | None, typer.Option("--role", help="App role; repeatable.")] = None,
     ttl: Annotated[int, typer.Option(help="Token lifetime in seconds.")] = 3600,
     print_jwks: Annotated[
         Path | None, typer.Option("--print-jwks", help="Also write the public JWKS to PATH.")
     ] = None,
     keys_dir: Annotated[Path, typer.Option(help="Key cache directory.")] = DEFAULT_KEYS_DIR,
-    audience: Annotated[str, typer.Option(help="aud claim.")] = DEFAULT_AUDIENCE,
+    audience: Annotated[
+        str, typer.Option(help="aud claim (use api://tidal-query with --app).")
+    ] = DEFAULT_AUDIENCE,
     tenant_id: Annotated[str, typer.Option(help="Tenant id for the iss claim.")] = TEST_TENANT_ID,
     oid: Annotated[str, typer.Option(help="oid claim.")] = DEFAULT_OID,
+    app_token: Annotated[
+        bool,
+        typer.Option(
+            "--app",
+            help="App token for a local tidal-query: idtyp=app, no scp, azp=id-api stand-in.",
+        ),
+    ] = False,
+    azp: Annotated[
+        str, typer.Option(help="azp claim (default: dev CLI, or the id-api stand-in with --app).")
+    ] = "",
 ) -> None:
-    """Print a signed JWT carrying ``--role`` app roles."""
+    """Print a signed JWT: a user token (``--role`` app roles) or, with ``--app``, an app token."""
     env = os.environ.get("TIDAL_ENV")
     if env != "local":  # fail closed: unset is refused too
         typer.echo("refusing to mint dev tokens: TIDAL_ENV is not 'local'", err=True)
         raise typer.Exit(2)
-    unknown = [r for r in role if r not in ROLES]
+    roles = role or []
+    if not roles and not app_token:
+        typer.echo("at least one --role is required (or use --app)", err=True)
+        raise typer.Exit(2)
+    unknown = [r for r in roles if r not in ROLES and not (app_token and r == QUERY_ROLE)]
     if unknown:
         typer.echo(f"unknown role(s): {', '.join(unknown)}; expected one of {ROLES}", err=True)
         raise typer.Exit(2)
@@ -73,11 +90,13 @@ def main(  # noqa: PLR0917 - typer options
         print_jwks.write_text(jwks_json, encoding="utf-8")
     token = mint_token(
         key,
-        roles=role,
+        roles=roles,
         aud=audience,
         iss=issuer_for(tenant_id),
         oid=oid,
         exp_offset=ttl,
+        kind="app" if app_token else "user",
+        azp=azp or None,
     )
     typer.echo(token)
 

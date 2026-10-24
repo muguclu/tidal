@@ -136,7 +136,30 @@ variable "encryption_at_host_enabled" {
 }
 
 variable "subnet_id" {
-  description = "Existing subnet for the VM NIC (snet-vm from the network module, T-404). null creates a small private VNet and subnet in this module."
+  description = "Existing subnet for the VM NIC (snet-vm from the network module, T-404). Used only when use_external_subnet is true; otherwise this module creates a small private VNet and subnet."
+  type        = string
+  default     = null
+}
+
+variable "use_external_subnet" {
+  description = "true when subnet_id is supplied by the caller (network module, T-404). Needed as a separate plan-time-known flag because a subnet ID created in the same apply is unknown at plan time and cannot decide a count. false (default): this module creates its own private VNet and subnet."
+  type        = bool
+  default     = false
+}
+
+variable "private_endpoint_subnet_cidr" {
+  description = "CIDR of snet-pe (network module output pe_subnet_cidr). When set, the NIC NSG allows outbound TCP 443 to that prefix only, so the VM reaches the Blob private endpoint and nothing else inside the VNet. null (default): no such rule."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.private_endpoint_subnet_cidr == null || can(cidrhost(var.private_endpoint_subnet_cidr, 0))
+    error_message = "private_endpoint_subnet_cidr must be null or a valid CIDR block."
+  }
+}
+
+variable "public_ip_id" {
+  description = "Optional Standard static public IP to attach to the NIC for outbound-only internet access once the subnet has default outbound access off (network module, T-404, vm_outbound = public_ip). null (default): no public address on the VM. The NIC NSG still denies all inbound."
   type        = string
   default     = null
 }

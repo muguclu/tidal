@@ -46,6 +46,15 @@ module "vm_legacy" {
   identity_principal_id = module.identity.identities["id-legacy-vm"].principal_id
   admin_ssh_public_key  = var.legacy_vm_ssh_public_key
 
+  # Flag on (network.tf): snet-vm has default outbound access off, so the NIC carries the outbound-only public IP
+  # (network_vm_outbound = public_ip) or the subnet has a NAT gateway (nat_gateway). Flag off: both are null and the
+  # module keeps its own VNet with platform default outbound access.
+  use_external_subnet = var.enable_private_networking
+  subnet_id           = module.network.vm_subnet_id
+  public_ip_id        = module.network.vm_public_ip_id
+
+  private_endpoint_subnet_cidr = module.network.pe_subnet_cidr
+
   # TIDAL_ENV is set explicitly (ADR-0012). No secret is rendered: the exporter uses the managed identity.
   custom_data = templatefile("${local.legacy_exporter_dir}/cloud-init.yaml.tftpl", {
     tidal_env           = local.env
