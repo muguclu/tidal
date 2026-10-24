@@ -113,3 +113,9 @@ variable "budget_scope" {
     error_message = "budget_scope must be subscription or resource_group."
   }
 }
+
+variable "enable_anomaly_alert" {
+  description = "Create the subscription-scoped cost anomaly alert (PLANNING gate G5). Free; needs Cost Management Contributor on the subscription at apply time (human-only)."
+  type        = bool
+  default     = true
+}

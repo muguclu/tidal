@@ -103,14 +103,15 @@ module "servicebus" {
 module "budget" {
   source = "../../modules/budget"
 
-  env                 = local.env
-  resource_group_name = module.resource_group.name
-  resource_group_id   = module.resource_group.id
-  alert_emails        = var.alert_emails
-  budget_scope        = var.budget_scope
-  start_date          = var.budget_start_date
-  tags                = module.resource_group.tags
-  component           = "finops"
+  env                  = local.env
+  resource_group_name  = module.resource_group.name
+  resource_group_id    = module.resource_group.id
+  alert_emails         = var.alert_emails
+  budget_scope         = var.budget_scope
+  start_date           = var.budget_start_date
+  enable_anomaly_alert = var.enable_anomaly_alert
+  tags                 = module.resource_group.tags
+  component            = "finops"
 }
 
 # --- Not composed yet -------------------------------------------------------------------------

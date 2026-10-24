@@ -115,8 +115,8 @@ SQL/Blob/KV, Defender for Containers scan in CI, threat model.
 ### Phase 5 — FinOps & observability (Wave 5, 2 lanes)
 Cost exporter, measured before/after for each optimisation, dashboards, alerts, budget.
 **Gate G5**
-- [ ] `docs/finops/cost-optimization.md` has a measured number for every row in SPEC-09 §3
-- [ ] Budget alert + anomaly alert configured in Terraform
+- [ ] `docs/finops/cost-optimization.md` has a measured number for every row in SPEC-09 §3 — every row has a number; C1/C2 MEASURED locally, C3–C10 MODELLED/NEEDS-CLOUD (see `docs/status/2026-W43-G5.md`)
+- [x] Budget alert + anomaly alert configured in Terraform
 
 ### Phase 6 — Polish (Wave 6)
 README, architecture diagram, runbooks, demo script, 3-minute video, LinkedIn post draft.

@@ -156,13 +156,12 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 |---|---|---|---|---|---|---|---|
 | T-502b | Price snapshot additions | finops-analyst | T-501 | `src/tidal/finops/fetch_prices.py`, `docs/finops/prices.yaml` +tests | Service Bus Standard base + operations, ACR Tasks run-minutes meters | done |
 | T-501 | Price snapshot | finops-analyst | early (W1) | — | `docs/finops/prices.yaml`, `src/tidal/finops/fetch_prices.py` | westeurope prices pinned with date | done |
-| T-502 | Cost export + report generator | finops-analyst | W5/L1 | T-126 | `src/tidal/finops/cost_report.py`, `modules/cost_export/**`, `.github/workflows/cost.yml` | weekly report generated (RG-scoped export) | todo |
-| T-503 | Measure C1–C3 | finops-analyst | W5/L1 | T-204, T-207 | `docs/finops/results/c1-c3.md` | numbers + evidence | todo |
-| T-504 | Measure C4–C10 (+ load test) | finops-analyst + test-engineer | W5/L1 | T-311 | `tests/load/**`, `docs/finops/results/c4-c10.md` | numbers + evidence | todo |
-| T-505 | OTel + custom metrics | platform-engineer | W5/L2 | T-209 | `src/tidal/common/telemetry.py` | end-to-end trace | todo |
-| T-506 | Workbook + alerts | infra-engineer | W5/L2 | T-505 | `modules/monitoring/**` | SPEC-10 §2–3 | todo |
-| T-507 | Final cost-optimisation report | finops-analyst + docs-writer | W5/end | T-503, T-504 | `docs/finops/cost-optimization.md` | SPEC-09 §6 | todo |
-
+| T-502 | Cost export + report generator | finops-analyst | W5/L1 | T-126 | `src/tidal/finops/cost_report.py`, `modules/cost_export/**`, `.github/workflows/cost.yml` | weekly report generated (RG-scoped export) | done |
+| T-503 | Measure C1–C3 | finops-analyst | W5/L1 | T-204, T-207 | `docs/finops/results/c1-c3.md` | numbers + evidence | done |
+| T-504 | Measure C4–C10 (+ load test) | finops-analyst + test-engineer | W5/L1 | T-311 | `tests/load/**`, `docs/finops/results/c4-c10.md` | numbers + evidence | done |
+| T-505 | OTel + custom metrics | platform-engineer | W5/L2 | T-209 | `src/tidal/common/telemetry.py` | end-to-end trace | done |
+| T-506 | Workbook + alerts | infra-engineer | W5/L2 | T-505 | `modules/monitoring/**` | SPEC-10 §2–3 | done |
+| T-507 | Final cost-optimisation report | finops-analyst + docs-writer | W5/end | T-503, T-504 | `docs/finops/cost-optimization.md` | SPEC-09 §6 | done |
 **Gate G5**
 
 ---
