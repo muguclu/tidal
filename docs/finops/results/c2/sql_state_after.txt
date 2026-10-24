@@ -1,0 +1,12 @@
+   
+- -
+tick 0
+bar 756
+
+(2 rows affected)
+name rows reserved data index_size unused
+---- ---- -------- ---- ---------- ------
+tick_hot 0                    200 KB 8 KB 24 KB 168 KB
+name rows reserved data index_size unused
+---- ---- -------- ---- ---------- ------
+bar_hot 756                  328 KB 56 KB 40 KB 232 KB
