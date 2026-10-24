@@ -19,9 +19,9 @@ variable "apps_image_tag" {
 }
 
 variable "enable_tiering_event_job" {
-  description = "Create the Service Bus triggered tiering job. Keep false until T-403 grants its KEDA scaler identity Data Owner on the tiering-jobs queue (queue counts need Manage rights) and the id-tiering Data Receiver role; without them the scaler cannot read the queue."
+  description = "Create the Service Bus triggered tiering job. true since T-403: envs/dev/rbac.tf grants id-tiering (the job identity, which also authenticates the KEDA scale rule) Data Owner on the tiering-jobs queue only, because queue counts need Manage rights. Set false to remove the job (the role then drops back to Data Receiver)."
   type        = bool
-  default     = false
+  default     = true
 }
 
 locals {
@@ -131,7 +131,7 @@ module "container_apps" {
     }
     },
     # SQL hot -> Parquet cold migration, started by a message on tiering-jobs (KEDA scaler with the job identity, no
-    # secret). Off by default: the scaler reads queue counts, which needs Data Owner on the queue, a T-403 decision.
+    # secret). On by default since T-403: the scaler reads queue counts, which needs Data Owner on that queue (rbac.tf).
     var.enable_tiering_event_job ? {
       tiering = {
         trigger_type       = "event"

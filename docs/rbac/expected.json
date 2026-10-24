@@ -1,0 +1,309 @@
+{
+  "entra": {
+    "appRoleAssignedTo": {
+      "sp-tidal-ci": [],
+      "sp-tidal-deploy": [],
+      "tidal-api": [],
+      "tidal-cli": [],
+      "tidal-query": [
+        {
+          "principal": "id-api",
+          "role": "Tidal.Query.Read"
+        },
+        {
+          "principal": "id-worker",
+          "role": "Tidal.Query.Read"
+        }
+      ]
+    },
+    "apps": {
+      "sp-tidal-ci": {
+        "federatedCredentials": [
+          {
+            "name": "github-env-dev",
+            "subject": "repo:<repo>:environment:dev"
+          }
+        ],
+        "keyCredentials": [],
+        "passwordCredentials": []
+      },
+      "sp-tidal-deploy": {
+        "federatedCredentials": [
+          {
+            "name": "github-env-dev-deploy",
+            "subject": "repo:<repo>:environment:dev-deploy"
+          }
+        ],
+        "keyCredentials": [],
+        "passwordCredentials": []
+      },
+      "tidal-api": {
+        "federatedCredentials": [],
+        "keyCredentials": [],
+        "passwordCredentials": []
+      },
+      "tidal-cli": {
+        "federatedCredentials": [],
+        "keyCredentials": [],
+        "passwordCredentials": []
+      },
+      "tidal-query": {
+        "federatedCredentials": [],
+        "keyCredentials": [],
+        "passwordCredentials": []
+      }
+    }
+  },
+  "managedIdentityFederatedCredentials": {
+    "id-api": [],
+    "id-ingest": [],
+    "id-keda-operator": [
+      {
+        "name": "keda-operator",
+        "subject": "system:serviceaccount:kube-system:keda-operator"
+      }
+    ],
+    "id-legacy-vm": [],
+    "id-query": [],
+    "id-tiering": [],
+    "id-worker": [
+      {
+        "name": "worker",
+        "subject": "system:serviceaccount:tidal:tidal-worker"
+      }
+    ]
+  },
+  "roleAssignments": [
+    {
+      "principal": "sp-tidal-deploy",
+      "role": "Contributor",
+      "scope": "microsoft.app/containerapps/ca-tidal-query"
+    },
+    {
+      "principal": "sp-tidal-deploy",
+      "role": "Contributor",
+      "scope": "microsoft.app/jobs/caj-tidal-synth-daily"
+    },
+    {
+      "principal": "sp-tidal-deploy",
+      "role": "Contributor",
+      "scope": "microsoft.app/jobs/caj-tidal-tiering"
+    },
+    {
+      "principal": "sp-tidal-deploy",
+      "role": "Contributor",
+      "scope": "microsoft.app/jobs/caj-tidal-tiering-yearly"
+    },
+    {
+      "principal": "id-legacy-vm",
+      "role": "tidal-vm-self-deallocate-dev",
+      "scope": "microsoft.compute/virtualmachines/vm-tidal-legacy-dev"
+    },
+    {
+      "principal": "logic-tidal-vm-start-dev",
+      "role": "tidal-vm-start-dev",
+      "scope": "microsoft.compute/virtualmachines/vm-tidal-legacy-dev"
+    },
+    {
+      "principal": "aks-tidal-dev-agentpool",
+      "role": "AcrPull",
+      "scope": "microsoft.containerregistry/registries/*"
+    },
+    {
+      "principal": "id-api",
+      "role": "AcrPull",
+      "scope": "microsoft.containerregistry/registries/*"
+    },
+    {
+      "principal": "id-ingest",
+      "role": "AcrPull",
+      "scope": "microsoft.containerregistry/registries/*"
+    },
+    {
+      "principal": "id-query",
+      "role": "AcrPull",
+      "scope": "microsoft.containerregistry/registries/*"
+    },
+    {
+      "principal": "id-tiering",
+      "role": "AcrPull",
+      "scope": "microsoft.containerregistry/registries/*"
+    },
+    {
+      "principal": "sp-tidal-deploy",
+      "role": "AcrPull",
+      "scope": "microsoft.containerregistry/registries/*"
+    },
+    {
+      "principal": "sp-tidal-ci",
+      "role": "AcrPush",
+      "scope": "microsoft.containerregistry/registries/*"
+    },
+    {
+      "principal": "sp-tidal-deploy",
+      "role": "Azure Kubernetes Service Cluster User Role",
+      "scope": "microsoft.containerservice/managedclusters/*"
+    },
+    {
+      "principal": "<user>",
+      "role": "Azure Kubernetes Service RBAC Cluster Admin",
+      "scope": "microsoft.containerservice/managedclusters/*"
+    },
+    {
+      "principal": "sp-tidal-deploy",
+      "role": "Reader",
+      "scope": "microsoft.containerservice/managedclusters/*"
+    },
+    {
+      "principal": "sp-tidal-deploy",
+      "role": "Azure Kubernetes Service RBAC Writer",
+      "scope": "microsoft.containerservice/managedclusters/*/namespaces/tidal"
+    },
+    {
+      "principal": "id-api",
+      "role": "Key Vault Secrets User",
+      "scope": "microsoft.keyvault/vaults/*/secrets/appinsights-connection-string"
+    },
+    {
+      "principal": "id-query",
+      "role": "Key Vault Secrets User",
+      "scope": "microsoft.keyvault/vaults/*/secrets/appinsights-connection-string"
+    },
+    {
+      "principal": "id-api",
+      "role": "Key Vault Secrets User",
+      "scope": "microsoft.keyvault/vaults/*/secrets/cursor-hmac-key"
+    },
+    {
+      "principal": "sp-tidal-deploy",
+      "role": "Managed Identity Operator",
+      "scope": "microsoft.managedidentity/userassignedidentities/id-api"
+    },
+    {
+      "principal": "sp-tidal-deploy",
+      "role": "Managed Identity Operator",
+      "scope": "microsoft.managedidentity/userassignedidentities/id-ingest"
+    },
+    {
+      "principal": "sp-tidal-deploy",
+      "role": "Managed Identity Operator",
+      "scope": "microsoft.managedidentity/userassignedidentities/id-query"
+    },
+    {
+      "principal": "sp-tidal-deploy",
+      "role": "Managed Identity Operator",
+      "scope": "microsoft.managedidentity/userassignedidentities/id-tiering"
+    },
+    {
+      "principal": "id-keda-operator",
+      "role": "Azure Service Bus Data Owner",
+      "scope": "microsoft.servicebus/namespaces/*/queues/backtest-jobs"
+    },
+    {
+      "principal": "id-worker",
+      "role": "Azure Service Bus Data Receiver",
+      "scope": "microsoft.servicebus/namespaces/*/queues/backtest-jobs"
+    },
+    {
+      "principal": "id-api",
+      "role": "Azure Service Bus Data Sender",
+      "scope": "microsoft.servicebus/namespaces/*/queues/backtest-jobs"
+    },
+    {
+      "principal": "id-api",
+      "role": "Azure Service Bus Data Receiver",
+      "scope": "microsoft.servicebus/namespaces/*/queues/backtest-results"
+    },
+    {
+      "principal": "id-worker",
+      "role": "Azure Service Bus Data Sender",
+      "scope": "microsoft.servicebus/namespaces/*/queues/backtest-results"
+    },
+    {
+      "principal": "id-tiering",
+      "role": "Azure Service Bus Data Owner",
+      "scope": "microsoft.servicebus/namespaces/*/queues/tiering-jobs"
+    },
+    {
+      "principal": "id-api",
+      "role": "Azure Service Bus Data Sender",
+      "scope": "microsoft.servicebus/namespaces/*/queues/tiering-jobs"
+    },
+    {
+      "principal": "id-worker",
+      "role": "Storage Blob Data Contributor",
+      "scope": "microsoft.storage/storageaccounts/*/blobservices/default/containers/backtests"
+    },
+    {
+      "principal": "id-api",
+      "role": "Storage Blob Data Reader",
+      "scope": "microsoft.storage/storageaccounts/*/blobservices/default/containers/backtests"
+    },
+    {
+      "principal": "id-legacy-vm",
+      "role": "Storage Blob Data Contributor",
+      "scope": "microsoft.storage/storageaccounts/*/blobservices/default/containers/exports"
+    },
+    {
+      "principal": "id-ingest",
+      "role": "Storage Blob Data Contributor",
+      "scope": "microsoft.storage/storageaccounts/*/blobservices/default/containers/marketdata"
+    },
+    {
+      "principal": "id-tiering",
+      "role": "Storage Blob Data Owner",
+      "scope": "microsoft.storage/storageaccounts/*/blobservices/default/containers/marketdata"
+    },
+    {
+      "principal": "id-api",
+      "role": "Storage Blob Data Reader",
+      "scope": "microsoft.storage/storageaccounts/*/blobservices/default/containers/marketdata"
+    },
+    {
+      "principal": "id-legacy-vm",
+      "role": "Storage Blob Data Reader",
+      "scope": "microsoft.storage/storageaccounts/*/blobservices/default/containers/marketdata"
+    },
+    {
+      "principal": "id-query",
+      "role": "Storage Blob Data Reader",
+      "scope": "microsoft.storage/storageaccounts/*/blobservices/default/containers/marketdata"
+    },
+    {
+      "principal": "id-worker",
+      "role": "Storage Blob Data Reader",
+      "scope": "microsoft.storage/storageaccounts/*/blobservices/default/containers/marketdata"
+    },
+    {
+      "principal": "id-ingest",
+      "role": "Storage Blob Data Contributor",
+      "scope": "microsoft.storage/storageaccounts/*/blobservices/default/containers/raw"
+    },
+    {
+      "principal": "id-ingest",
+      "role": "Storage Blob Data Contributor",
+      "scope": "microsoft.storage/storageaccounts/*/blobservices/default/containers/reference"
+    },
+    {
+      "principal": "id-api",
+      "role": "Storage Blob Data Reader",
+      "scope": "microsoft.storage/storageaccounts/*/blobservices/default/containers/reference"
+    },
+    {
+      "principal": "id-query",
+      "role": "Storage Blob Data Reader",
+      "scope": "microsoft.storage/storageaccounts/*/blobservices/default/containers/reference"
+    },
+    {
+      "principal": "id-worker",
+      "role": "Storage Blob Data Reader",
+      "scope": "microsoft.storage/storageaccounts/*/blobservices/default/containers/reference"
+    },
+    {
+      "principal": "sp-tidal-deploy",
+      "role": "Website Contributor",
+      "scope": "microsoft.web/sites/*"
+    }
+  ],
+  "schema": 1
+}
