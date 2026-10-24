@@ -9,7 +9,9 @@ and the GitHub OIDC CI identity. See `docs/runbooks/bootstrap.md` for the proced
 | Storage account (StorageV2, LRS, Hot) | Shared key disabled, TLS 1.2, no public blob, versioning, 7 d soft delete (blobs and containers) |
 | Container `tfstate` | Remote state for `envs/*` |
 | Entra app + SP `sp-tidal-ci` | CI identity, no client secret |
-| Federated credential | `repo:<owner>/<repo>:environment:<env>` only. No `pull_request` credential (it would bypass environment protection); T-127 adds a separate app `sp-tidal-ci-plan` with Reader + Storage Blob Data Reader for PR plans |
+| Federated credential | `repo:<owner>/<repo>:environment:<env>` only on `sp-tidal-ci`. No `pull_request` credential there (it would bypass environment protection) |
+| Entra app + SP `sp-tidal-ci-plan` (T-408) | PR plan identity, no write role. Credentials `repo:<owner>/<repo>:pull_request` and `repo:<owner>/<repo>:ref:refs/heads/main`; Reader on the dev RG, Storage Blob Data Reader on the `tfstate` container, Graph `Application.Read.All`. Read exposure accepted per ADR-0008 R-27. Import the hand-made app first (runbook) |
+| Entra app + SP `sp-tidal-rbac-drift` (T-408) | Nightly drift identity. Credential `repo:<owner>/<repo>:environment:rbac-drift` (environment restricted to main); custom role `tidal-rbac-drift-reader` at subscription scope; Graph `Application.Read.All`; no state role |
 | Management lock + `prevent_destroy` | `CanNotDelete` on the state account (see runbook Rollback) |
 | Lifecycle rule | Delete noncurrent blob versions after 30 days |
 
@@ -32,10 +34,14 @@ Provider requirements: Terraform >= 1.9, azurerm ~> 4.0, azuread ~> 3.0.
 | `github_owner` | GitHub owner trusted by OIDC | `muguclu` |
 | `github_repo` | GitHub repository trusted by OIDC | `tidal` |
 | `state_soft_delete_days` | Soft delete retention (1-365) | `7` |
+| `dev_resource_group_name` | Dev RG on which the plan identity gets Reader | `rg-tidal-dev` |
+| `assign_plan_dev_rg_reader` | Assign that Reader (false before envs/dev exists) | `true` |
+| `rbac_drift_environment` | GitHub environment of the drift identity (restricted to main) | `rbac-drift` |
+| `grant_plan_graph_permission` | Grant Graph `Application.Read.All` (needs admin consent rights) | `true` |
 
 ## Outputs
 
-`tenant_id`, `subscription_id`, `ci_client_id`, `ci_service_principal_object_id`,
+`tenant_id`, `subscription_id`, `ci_client_id`, `ci_service_principal_object_id`, `ci_plan_client_id` (GitHub variable `AZURE_PLAN_CLIENT_ID`), `ci_plan_service_principal_object_id`, `rbac_drift_client_id` (GitHub variable `AZURE_RBAC_DRIFT_CLIENT_ID`), `rbac_drift_service_principal_object_id`,
 `state_resource_group_name`, `state_storage_account_name`, `state_container_name`, `backend_config`.
 
 ## Accepted checkov skips (inline in `main.tf`)

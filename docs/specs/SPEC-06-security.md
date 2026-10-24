@@ -13,7 +13,7 @@ Owner agents: `infra-engineer`, `api-engineer`; reviewer: `security-reviewer` ·
 - CI uses **GitHub OIDC** federated credentials, one subject per app (identity isolation, T-403):
   `repo:<owner>/tidal:environment:dev` → `sp-tidal-ci` (image push, AcrPush only) and
   `repo:<owner>/tidal:environment:dev-deploy` → `sp-tidal-deploy` (deploy; the environment allows `main` only and
-  requires a reviewer, `docs/runbooks/deploy.md`). Neither app has a second subject, a client secret or a certificate.
+  requires a reviewer, `docs/runbooks/deploy.md`). Neither app has a second subject, a client secret or a certificate. Two read-only apps are the exception (T-408): `sp-tidal-ci-plan` may use `repo:<owner>/tidal:pull_request` and `repo:<owner>/tidal:ref:refs/heads/main` (PR and push plans; no write role; read exposure accepted per ADR-0008 R-27), and `sp-tidal-rbac-drift` uses `repo:<owner>/tidal:environment:rbac-drift` (environment restricted to `main`; nightly drift, no state role).
 
 ## 2. Azure RBAC matrix (least privilege, scoped to resource not RG)
 
@@ -28,6 +28,8 @@ Owner agents: `infra-engineer`, `api-engineer`; reviewer: `security-reviewer` ·
 | AKS kubelet | — | — | — | — | — | AcrPull |
 | KEDA operator (workload identity) | — | — | — | Data Owner on `backtest-jobs` only (queue-length reads need management rights; identity `id-keda-operator`, federated to `system:serviceaccount:kube-system:keda-operator`; a narrower custom role was not adopted: the Service Bus data actions KEDA calls are not documented as separable) | — | — |
 | sp-tidal-ci | — | — | — | — | — | AcrPush on the registry **only**. The RG-wide Contributor was dropped in T-403: app updates move to `sp-tidal-deploy` (next row), so the image-push identity cannot change infrastructure |
+| sp-tidal-ci-plan (T-408) | — | Blob Data Reader on the `tfstate` container (state) | — | — | — | No ACR role. No write role: Reader on the dev resource group, Storage Blob Data Reader on the `tfstate` container, Microsoft Graph `Application.Read.All` (needed to refresh the azuread resources in the PR plan). Created by `infra/terraform/bootstrap` |
+| sp-tidal-rbac-drift (T-408) | — | — | — | — | — | No ACR role, **no state role**. Custom role `tidal-rbac-drift-reader` at subscription scope (`roleAssignments/read`, `roleDefinitions/read`, identity, federated credential, AKS and resource group reads), Microsoft Graph `Application.Read.All` |
 | sp-tidal-deploy (T-403) | — | — | — | — | — | AcrPull on the registry. Other scopes: Website Contributor on the web app; Contributor on `ca-tidal-query` and on each Container Apps Job; Reader + Cluster User Role on the AKS cluster and RBAC Writer on namespace `tidal`; Managed Identity Operator on the identities of those targets. Never `terraform apply` (needs role-assignment and Graph rights, human-only) |
 
 `sp-tidal-deploy` effectively holds the union of the rights of its target identities (`id-api`, `id-query`, `id-ingest`,
@@ -73,7 +75,7 @@ risks: `docs/adr/0008-threat-model.md`. Only items that are PASS are ticked.
 - [x] Zero secrets in repo, image layers, app settings (except KV references). **PASS**: gitleaks v8.24.3 over full history
   (264 commits) found no leaks; app-setting validation in `modules/{app_service,container_apps}/variables.tf`; trivy secret scan.
 - [ ] Each identity has exactly the roles in §2 (`scripts/rbac-export.sh`: role assignments, Entra app role assignments and app credentials, diffed against `docs/rbac/expected.json` by the nightly, non-required `rbac-drift` job in `iac.yml`).
-  **NEEDS-CLOUD**: IaC matches §2; the diff needs a live tenant; `sp-tidal-ci-plan` is outside IaC and the baseline (ADR-0008 R-18).
+  **NEEDS-CLOUD**: IaC matches §2; the diff needs a live tenant; `sp-tidal-ci-plan` is in `bootstrap` IaC and in the baseline since T-408 (ADR-0008 R-18), pending import of the hand-made app; the drift job runs as `sp-tidal-rbac-drift`.
 - [x] Shared key access disabled on storage; SQL Entra-only. **PASS**: `modules/storage/main.tf:27`, `bootstrap/main.tf:51`,
   `modules/sql/main.tf:33`.
 - [ ] Role tests: Reader cannot POST backtests (403); Trader cannot call admin (403). **PASS (dev, with caveat)**: Reader 403

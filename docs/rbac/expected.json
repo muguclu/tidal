@@ -2,7 +2,9 @@
   "entra": {
     "appRoleAssignedTo": {
       "sp-tidal-ci": [],
+      "sp-tidal-ci-plan": [],
       "sp-tidal-deploy": [],
+      "sp-tidal-rbac-drift": [],
       "tidal-api": [],
       "tidal-cli": [],
       "tidal-query": [
@@ -27,11 +29,35 @@
         "keyCredentials": [],
         "passwordCredentials": []
       },
+      "sp-tidal-ci-plan": {
+        "federatedCredentials": [
+          {
+            "name": "github-pull-request",
+            "subject": "repo:<repo>:pull_request"
+          },
+          {
+            "name": "github-ref-main",
+            "subject": "repo:<repo>:ref:refs/heads/main"
+          }
+        ],
+        "keyCredentials": [],
+        "passwordCredentials": []
+      },
       "sp-tidal-deploy": {
         "federatedCredentials": [
           {
             "name": "github-env-dev-deploy",
             "subject": "repo:<repo>:environment:dev-deploy"
+          }
+        ],
+        "keyCredentials": [],
+        "passwordCredentials": []
+      },
+      "sp-tidal-rbac-drift": {
+        "federatedCredentials": [
+          {
+            "name": "github-env-rbac-drift",
+            "subject": "repo:<repo>:environment:rbac-drift"
           }
         ],
         "keyCredentials": [],
@@ -74,6 +100,16 @@
     ]
   },
   "roleAssignments": [
+    {
+      "principal": "sp-tidal-rbac-drift",
+      "role": "tidal-rbac-drift-reader",
+      "scope": "/subscriptions/*"
+    },
+    {
+      "principal": "sp-tidal-ci-plan",
+      "role": "Storage Blob Data Reader",
+      "scope": "/subscriptions/*/resourcegroups/rg-tidal-tfstate/providers/microsoft.storage/storageaccounts/*/blobservices/default/containers/tfstate"
+    },
     {
       "principal": "sp-tidal-deploy",
       "role": "Contributor",
@@ -303,6 +339,11 @@
       "principal": "sp-tidal-deploy",
       "role": "Website Contributor",
       "scope": "microsoft.web/sites/*"
+    },
+    {
+      "principal": "sp-tidal-ci-plan",
+      "role": "Reader",
+      "scope": "resourcegroup"
     }
   ],
   "schema": 1
