@@ -1,0 +1,5 @@
+Method,Name,Error,Occurrences,First Seen,Last Seen
+GET,GET /v1/bars,HTTPError('429 Client Error: Too Many Requests for url: GET /v1/bars'),117,2026-10-24T22:28:04Z,2026-10-24T22:29:20Z
+GET,GET /v1/spreads,HTTPError('429 Client Error: Too Many Requests for url: GET /v1/spreads'),41,2026-10-24T22:28:09Z,2026-10-24T22:29:18Z
+GET,GET /v1/ticks,HTTPError('429 Client Error: Too Many Requests for url: GET /v1/ticks'),32,2026-10-24T22:28:08Z,2026-10-24T22:29:17Z
+GET,GET /v1/latest,HTTPError('429 Client Error: Too Many Requests for url: GET /v1/latest'),98,2026-10-24T22:28:04Z,2026-10-24T22:29:19Z
