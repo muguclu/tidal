@@ -302,6 +302,16 @@ prices:
   tierMinimumUnits: 0.0
   unit: 1 Second
   unitPrice: 0.0
+- effectiveStartDate: '2021-01-01T00:00:00Z'
+  key: defender_sql_server_month
+  meterId: cb0969aa-aaaa-4d6c-ab4b-7e182fa06aff
+  meterName: Standard Node
+  note: per server per month; billed regardless of auto-pause
+  productName: Microsoft Defender for SQL
+  skuName: Standard
+  tierMinimumUnits: 0.0
+  unit: 1/Month
+  unitPrice: 13.1996
 - effectiveStartDate: '2018-05-01T00:00:00Z'
   key: disk_premium_p10_month
   meterId: 137d3f72-fe0e-4a78-b5d0-92d704aa3cac

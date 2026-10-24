@@ -175,3 +175,43 @@ variable "component" {
     error_message = "component must not be empty."
   }
 }
+
+variable "log_analytics_workspace_id" {
+  description = "Resource ID of the Log Analytics workspace that receives the SQL audit events (module log_analytics output workspace_id). null disables server auditing (only for isolated module tests)."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.log_analytics_workspace_id == null || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft.OperationalInsights/workspaces/[^/]+$", var.log_analytics_workspace_id))
+    error_message = "log_analytics_workspace_id must be null or a Log Analytics workspace resource ID."
+  }
+}
+
+variable "enable_defender_for_sql" {
+  description = "Enable Microsoft Defender for SQL on this server (13.20 EUR/month per server, billed while the server exists, not reduced by auto-pause). Off by default per ADR-0017."
+  type        = bool
+  default     = false
+}
+
+variable "enable_vulnerability_assessment" {
+  description = "Enable SQL Vulnerability Assessment (Express configuration, no storage account). Only effective when enable_defender_for_sql is true. Off by default per ADR-0017."
+  type        = bool
+  default     = false
+}
+
+variable "audit_action_groups" {
+  description = "Server audit action groups. Dev default is low volume: failed logins and security-relevant changes. Add SUCCESSFUL_DATABASE_AUTHENTICATION_GROUP or BATCH_COMPLETED_GROUP only with a daily-cap check (docs/finops/deltas/T-407_model.py), because the workspace cap is 0.2 GB/day."
+  type        = list(string)
+  default = [
+    "FAILED_DATABASE_AUTHENTICATION_GROUP",
+    "DATABASE_PRINCIPAL_CHANGE_GROUP",
+    "DATABASE_ROLE_MEMBER_CHANGE_GROUP",
+    "DATABASE_PERMISSION_CHANGE_GROUP",
+    "SCHEMA_OBJECT_CHANGE_GROUP",
+  ]
+
+  validation {
+    condition     = length(var.audit_action_groups) > 0 && alltrue([for g in var.audit_action_groups : can(regex("^[A-Z_]+_GROUP$", g))])
+    error_message = "audit_action_groups must be a non-empty list of audit action group names such as FAILED_DATABASE_AUTHENTICATION_GROUP."
+  }
+}

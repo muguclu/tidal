@@ -151,6 +151,15 @@ METERS: tuple[MeterSpec, ...] = (
         meter_id="2fb5f78a-0428-4e17-8fee-5b176a3ef34c",
         note="per 10K index tags per month (not per blob); a blob with 5 tags counts as 5",
     ),
+    # --- Defender for SQL (T-407, ADR-0017): per server per month, not reduced by auto-pause ---
+    _m(
+        "defender_sql_server_month",
+        "Microsoft Defender for Cloud",
+        "Microsoft Defender for SQL",
+        "Standard",
+        "Standard Node",
+        note="per server per month; billed regardless of auto-pause",
+    ),
     # Early-delete meters exist for Cold and Archive only (see module docstring).
     _blob("blob_cold_early_delete_gb", "Cold LRS", "Cold LRS Early Delete", note="90-day minimum"),
     _blob(

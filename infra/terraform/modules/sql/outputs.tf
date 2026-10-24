@@ -27,3 +27,8 @@ output "server_principal_id" {
   description = "Principal ID of the server system-assigned identity, or null when disabled."
   value       = try(azurerm_mssql_server.this.identity[0].principal_id, null)
 }
+
+output "auditing_enabled" {
+  description = "True when server auditing to Log Analytics is configured."
+  value       = local.auditing_enabled
+}

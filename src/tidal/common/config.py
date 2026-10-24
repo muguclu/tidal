@@ -1,4 +1,4 @@
-"""Settings mirroring ``docs/contracts/config-contract.md`` v1.2.
+"""Settings mirroring ``docs/contracts/config-contract.md`` v1.3.
 
 Prefix ``TIDAL_``, nested delimiter ``__``. Use :func:`get_settings` in services and
 :meth:`Settings.from_env` with an explicit mapping in tests.
@@ -52,6 +52,27 @@ def _check_http_url(value: str) -> str:
 Url = Annotated[str, AfterValidator(_check_http_url)]
 
 
+def _guid_set(value: str | None) -> frozenset[str]:
+    if not value:
+        return frozenset()
+    return frozenset(p.strip().lower() for p in value.split(",") if p.strip())
+
+
+def _check_guids(value: str | None, *, single: bool) -> str | None:
+    """Validate one GUID or a comma-separated list of GUIDs (errors never echo the input)."""
+    if value is None:
+        return None
+    parts = [p.strip() for p in value.split(",") if p.strip()]
+    if single and len(parts) > 1:
+        raise ValueError("expected a single GUID")
+    for part in parts:
+        try:
+            UUID(part)
+        except ValueError:
+            raise ValueError("expected GUID(s)") from None
+    return ",".join(parts) or None
+
+
 class _Section(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
@@ -86,6 +107,12 @@ class QuerySettings(_Section):
 
     base_url: Url = "http://query:8000"
     audience: str = "api://tidal-query"
+    app_client_id: str | None = None  # tidal-query app client id: v2 tokens carry it as aud
+
+    @field_validator("app_client_id")
+    @classmethod
+    def _guid(cls, value: str | None) -> str | None:
+        return _check_guids(value, single=True)
 
 
 class AuthSettings(_Section):
@@ -94,6 +121,42 @@ class AuthSettings(_Section):
     tenant_id: UUID | None = None
     audience: str = "api://tidal"
     disabled: bool = False
+    jwks_url: str | None = None  # local only: http(s) URL or file path (.data/dev-jwks/jwks.json)
+    query_role: str = "Tidal.Query.Read"  # app role tidal-query requires from its caller
+    api_app_client_id: str | None = None  # tidal-api app client id: v2 tokens carry it as aud
+    allowed_client_ids: str | None = None  # comma-separated GUIDs: client apps (azp) for the api
+    query_caller_client_ids: str | None = None  # comma-separated GUIDs allowed as azp/appid
+    query_caller_object_ids: str | None = None  # comma-separated GUIDs allowed as oid
+
+    @field_validator("api_app_client_id")
+    @classmethod
+    def _guid(cls, value: str | None) -> str | None:
+        return _check_guids(value, single=True)
+
+    @field_validator("allowed_client_ids", "query_caller_client_ids", "query_caller_object_ids")
+    @classmethod
+    def _guid_list(cls, value: str | None) -> str | None:
+        return _check_guids(value, single=False)
+
+    def allowed_clients(self) -> frozenset[str]:
+        """Client apps (``azp``) whose user tokens ``tidal-api`` accepts (lower case)."""
+        return _guid_set(self.allowed_client_ids)
+
+    def caller_client_ids(self) -> frozenset[str]:
+        """Allowed ``azp``/``appid`` values for ``tidal-query`` callers (lower case)."""
+        return _guid_set(self.query_caller_client_ids)
+
+    def caller_object_ids(self) -> frozenset[str]:
+        """Allowed ``oid`` values for ``tidal-query`` callers (lower case)."""
+        return _guid_set(self.query_caller_object_ids)
+
+
+class CursorSettings(_Section):
+    """``TIDAL_CURSOR__*``: HMAC key for pagination cursors (shared by all api replicas)."""
+
+    key: SecretStr | None = None
+    keyvault_url: Url | None = None
+    secret_name: str = "cursor-hmac-key"  # noqa: S105 - a Key Vault secret name, not a secret
 
 
 class SynthSettings(_Section):
@@ -177,6 +240,7 @@ class Settings(BaseSettings):
     servicebus: ServiceBusSettings = ServiceBusSettings()
     query: QuerySettings = QuerySettings()
     auth: AuthSettings = AuthSettings()
+    cursor: CursorSettings = CursorSettings()
     synth: SynthSettings = SynthSettings()
     clock: ClockSettings = ClockSettings()
     otel: OtelSettings = OtelSettings()
@@ -228,6 +292,19 @@ class Settings(BaseSettings):
     def _startup_rules(self) -> Self:
         problems: list[str] = []
         if self.env != "local":
+            if (
+                self.service_name == "query"
+                and not self.auth.disabled
+                and not (self.auth.caller_client_ids() or self.auth.caller_object_ids())
+            ):
+                problems.append(
+                    "TIDAL_AUTH__QUERY_CALLER_CLIENT_IDS or TIDAL_AUTH__QUERY_CALLER_OBJECT_IDS "
+                    f"is required for tidal-query when TIDAL_ENV={self.env}"
+                )
+            if self.auth.jwks_url is not None:
+                problems.append(f"TIDAL_AUTH__JWKS_URL must not be set when TIDAL_ENV={self.env}")
+            if self.cursor.key is not None:
+                problems.append(f"TIDAL_CURSOR__KEY must not be set when TIDAL_ENV={self.env}")
             if self.auth.disabled:
                 problems.append("TIDAL_AUTH__DISABLED=true is only allowed when TIDAL_ENV=local")
             elif self.auth.tenant_id is None:

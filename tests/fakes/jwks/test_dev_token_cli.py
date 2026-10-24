@@ -9,7 +9,13 @@ import jwt
 import pytest
 from typer.testing import CliRunner
 
-from fakes.jwks.core import DEFAULT_AUDIENCE, issuer_for
+from fakes.jwks.core import (
+    DEFAULT_AUDIENCE,
+    DEV_API_CLIENT_ID,
+    DEV_APP_OID,
+    DEV_CLI_CLIENT_ID,
+    issuer_for,
+)
 
 SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "dev-token.py"
 
@@ -51,6 +57,26 @@ def test_mints_token_and_caches_keys(
         assert claims["roles"] == ["Tidal.Quant"]
     assert "PRIVATE" not in first.output
     assert "PRIVATE" not in jwks_out.read_text(encoding="utf-8")
+
+
+def test_user_and_app_token_shapes(
+    script: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TIDAL_ENV", "local")
+    keys = ["--keys-dir", str(tmp_path / "keys")]
+    runner = CliRunner()
+    user = runner.invoke(script.app, ["--role", "Tidal.Reader", *keys])
+    app = runner.invoke(script.app, ["--app", "--audience", "api://tidal-query", *keys])
+    assert user.exit_code == 0, user.output
+    assert app.exit_code == 0, app.output
+    u = jwt.decode(user.stdout.strip(), options={"verify_signature": False})
+    a = jwt.decode(app.stdout.strip(), options={"verify_signature": False})
+    assert (u["scp"], u["azp"]) == ("access_as_user", DEV_CLI_CLIENT_ID)
+    assert "idtyp" not in u
+    assert "scp" not in a
+    assert (a["idtyp"], a["azp"], a["oid"]) == ("app", DEV_API_CLIENT_ID, DEV_APP_OID)
+    assert a["roles"] == ["Tidal.Query.Read"]
+    assert runner.invoke(script.app, keys).exit_code == 2  # no role and not --app
 
 
 def test_unset_env_refused(
