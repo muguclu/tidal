@@ -48,7 +48,7 @@ The last step always runs `docker logout` and `az logout`.
 
 | Item | Enforced by |
 |---|---|
-| Multi-stage build, non-root UID 10001, read-only root FS | `deploy/docker/Dockerfile` (T-305); chart `securityContext` (`readOnlyRootFilesystem`, `runAsNonRoot`), kube-linter in CI |
+| Multi-stage build, non-root UID 10001, read-only root FS | `deploy/docker/Dockerfile` (T-305); chart `securityContext` (`readOnlyRootFilesystem`, `runAsNonRoot`); `chart.yml` job `chart-lint` (helm lint, kubeconform strict, kube-linter; not a required check); `tests/unit/deploy/test_helm_chart.py` asserts no privileged/host*, non-root, read-only FS, drop ALL |
 | Pinned base digest | Dockerfile `FROM ...@sha256:`; Dependabot `docker` ecosystem raises bumps weekly |
 | Pinned emulator and test images | Same `tag@sha256` in `docker-compose.yml`, `integration.yml`, `bench.yml`, `tests/integration/**` (azurite 3.37.0, mssql 2022-CU27-ubuntu-22.04, servicebus-emulator 2.0.1); keep them in sync when bumping |
 | Helm image pinned by digest | `values-dev.yaml` sets `image.digest`; `deploy.yml` passes `--set-string image.digest`; `tests/unit/deploy/test_helm_chart.py::test_non_local_values_pin_image_by_digest` |
