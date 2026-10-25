@@ -171,11 +171,11 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 
 | ID | Title | Agent | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|---|
-| T-601 | README + architecture diagram | docs-writer | G5 | `README.md`, `docs/img/architecture.*` | 5-minute read; numbers from report | todo |
-| T-602 | Runbooks | docs-writer | G5 | `docs/runbooks/**` | park/unpark, DLQ, key rotation, restore | todo |
-| T-603 | Demo script + video outline | docs-writer | T-601 | `docs/demo.md` | 3-minute script | todo |
+| T-601 | README + architecture diagram | docs-writer | G5 | `README.md`, `docs/img/architecture.*` | 5-minute read; numbers from report | done |
+| T-602 | Runbooks | docs-writer | G5 | `docs/runbooks/**` | park/unpark, DLQ, key rotation, restore | done |
+| T-603 | Demo script + video outline | docs-writer | T-601 | `docs/demo.md` | 3-minute script | done |
 | T-604 | Final review pass | code-reviewer + security-reviewer | T-601 | review comments only | no open blocking findings | todo |
-| T-605 | Launch post draft | docs-writer | T-603 | `docs/launch-post.md` | LinkedIn-length, business framing | todo |
+| T-605 | Launch post draft | docs-writer | T-603 | `docs/launch-post.md` | LinkedIn-length, business framing | done |
 | T-606 | API Service Bus producer (found by the T-603 demo dry run) | api-engineer | T-303, T-410 | `src/tidal/api/bus.py`, `src/tidal/api/app.py` (run/lifespan), `tests/unit/api/test_bus.py`, `tests/integration/test_api_bus.py` | `POST /v1/backtests` and `/v1/admin/tiering/run` return 202 against the emulator; MI + FQDN only off local; coroutine-safe senders | done |
 | T-607 | SQL job store + in-process result aggregator (found by the T-603 demo dry run) | api-engineer | T-304, T-606 | `src/tidal/api/job_store.py`, `src/tidal/api/app.py` (run/lifespan), `docs/rbac/sql-grants.sql`, `tests/unit/api/test_job_store.py`, `tests/integration/test_job_store_sql.py` | locally: `POST /v1/backtests` -> 202, worker -> `backtest-results`, aggregator (SPEC-05 §4: in the API) -> `GET /v1/backtests/{id}` `succeeded` with metrics; id-api gets `SELECT, INSERT, UPDATE` on `ops.backtest_job` only | done |
 
