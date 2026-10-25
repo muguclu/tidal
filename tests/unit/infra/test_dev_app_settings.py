@@ -179,5 +179,9 @@ def test_missing_wiring_would_still_fail(planned: dict[str, dict[str, str]]) -> 
 @pytest.mark.parametrize("module", ["app_service", "container_apps"])
 def test_guard_exempts_only_the_cursor_vault_url(module: str) -> None:
     text = (MODULES / module / "variables.tf").read_text(encoding="utf-8")
-    assert text.count('k == "TIDAL_CURSOR__KEYVAULT_URL"') == 1
+    # app_service guards one map; container_apps guards common_env, query.extra_env, jobs extra_env.
+    assert text.count('k == "TIDAL_CURSOR__KEYVAULT_URL"') == (1 if module == "app_service" else 3)
+    assert text.count('"TIDAL_CURSOR__KEYVAULT_URL"') == text.count(
+        'k == "TIDAL_CURSOR__KEYVAULT_URL"'
+    )
     assert "PASSWORD|CONNECTION_STRING|SECRET|KEY|TOKEN|SAS|CREDENTIAL" in text

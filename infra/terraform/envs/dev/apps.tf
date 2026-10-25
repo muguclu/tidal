@@ -172,7 +172,7 @@ module "container_apps" {
   )
 
   # The identities must be able to pull before the first revision is created.
-  depends_on = [azurerm_role_assignment.apps_acr_pull]
+  depends_on = [azurerm_role_assignment.apps_acr_pull, azurerm_role_assignment.apps_kv_otel]
 }
 
 module "app_service" {
@@ -202,7 +202,7 @@ module "app_service" {
     TIDAL_OTEL__CONNECTION_STRING = local.apps_otel_app_service_ref
   })
 
-  depends_on = [azurerm_role_assignment.apps_acr_pull]
+  depends_on = [azurerm_role_assignment.apps_acr_pull, azurerm_role_assignment.apps_kv_otel]
 }
 
 # Flag off: only the web app's outbound IPs may call tidal-query. Patched with azapi because the web app needs the query

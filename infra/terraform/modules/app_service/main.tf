@@ -56,10 +56,12 @@ resource "azurerm_linux_web_app" "this" {
   }
 
   site_config {
-    always_on                                     = true
-    http2_enabled                                 = true
-    minimum_tls_version                           = "1.2"
-    ftps_state                                    = "Disabled"
+    always_on           = true
+    http2_enabled       = true
+    minimum_tls_version = "1.2"
+    ftps_state          = "Disabled"
+    # Key Vault references resolve through the VNet when the integration subnet is set (private networking).
+    vnet_route_all_enabled                        = var.vnet_integration_subnet_id != null
     remote_debugging_enabled                      = false
     health_check_path                             = var.health_check_path
     health_check_eviction_time_in_min             = 5

@@ -103,8 +103,8 @@ resource "azapi_resource" "cursor_hmac" {
   tags = merge(module.resource_group.tags, { component = "secrets" })
 }
 
-# SPEC-06 section 3: the Key Vault holds the App Insights connection string. The apps do not reference it yet
-# (apps.tf still leaves TIDAL_OTEL__CONNECTION_STRING unwired); the secret and the reader roles are ready for that.
+# SPEC-06 section 3: the Key Vault holds the App Insights connection string. apps.tf passes it to tidal-api (App Service Key
+# Vault reference) and tidal-query (Container Apps Key Vault secret); the reader roles are apps_kv_otel below.
 # The version is a hash of the value, so a changed connection string is rewritten without the value being kept in state.
 resource "azapi_resource" "appinsights_connection_string" {
   type      = "Microsoft.KeyVault/vaults/secrets@2023-07-01"
@@ -122,6 +122,19 @@ resource "azapi_resource" "appinsights_connection_string" {
   sensitive_body_version = { "properties.value" = substr(sha256(module.log_analytics.app_insights_connection_string), 0, 16) }
 
   tags = merge(module.resource_group.tags, { component = "secrets" })
+}
+
+# Secret-scoped Key Vault Secrets User for the two apps that read the connection string. A dedicated resource with a static
+# scope (not local.scopes, which depends on the app modules): Container Apps validates Key Vault secret access while it
+# provisions the revision, so the grants must exist before the apps (both app modules depend on this resource).
+resource "azurerm_role_assignment" "apps_kv_otel" {
+  for_each = { api = "id-api", query = "id-query" }
+
+  scope                = "${module.key_vault.id}/secrets/${azapi_resource.appinsights_connection_string.name}"
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = module.identity.identities[each.value].principal_id
+  principal_type       = "ServicePrincipal"
+  description          = "SPEC-06 s3: telemetry connection string via Key Vault reference"
 }
 
 # --- Deploy-only OIDC app (separate from sp-tidal-ci, which only pushes images) ---------------------
@@ -200,13 +213,12 @@ locals {
     { for n, id in module.storage.container_ids : "container:${n}" => id },
     { for n, id in module.servicebus.queue_ids : "queue:${n}" => id },
     {
-      "secret:cursor-hmac-key"               = "${module.key_vault.id}/secrets/${azapi_resource.cursor_hmac.name}"
-      "secret:appinsights-connection-string" = "${module.key_vault.id}/secrets/${azapi_resource.appinsights_connection_string.name}"
-      "appinsights"                          = module.log_analytics.app_insights_id
-      "acr"                                  = module.acr.id
-      "aks"                                  = module.aks.id
-      "aks-namespace"                        = "${module.aks.id}/namespaces/${var.k8s_namespace}"
-      "containerapp:query"                   = module.container_apps.query_app_id
+      "secret:cursor-hmac-key" = "${module.key_vault.id}/secrets/${azapi_resource.cursor_hmac.name}"
+      "appinsights"            = module.log_analytics.app_insights_id
+      "acr"                    = module.acr.id
+      "aks"                    = module.aks.id
+      "aks-namespace"          = "${module.aks.id}/namespaces/${var.k8s_namespace}"
+      "containerapp:query"     = module.container_apps.query_app_id
     },
     { for n, id in module.container_apps.job_ids : "job:${n}" => id },
     { for n, i in module.identity.identities : "identity:${n}" => i.id },
@@ -238,12 +250,10 @@ locals {
       { who = "id-api", role = local.sb_sender, on = "queue:tiering-jobs", why = "SPEC-06 s2: API requests tiering runs" },
       { who = "id-api", role = local.sb_receiver, on = "queue:backtest-results", why = "SPEC-06 s2: API consumes backtest results" },
       { who = "id-api", role = local.kv_secrets_user, on = "secret:cursor-hmac-key", why = "T-402: signs and verifies pagination cursors" },
-      { who = "id-api", role = local.kv_secrets_user, on = "secret:appinsights-connection-string", why = "SPEC-06 s3: telemetry connection string via Key Vault reference" },
 
       # id-query: read-only on market data and reference.
       { who = "id-query", role = local.blob_reader, on = "container:marketdata", why = "SPEC-06 s2: query reads cold bars" },
       { who = "id-query", role = local.blob_reader, on = "container:reference", why = "SPEC-06 s2: query reads reference data" },
-      { who = "id-query", role = local.kv_secrets_user, on = "secret:appinsights-connection-string", why = "SPEC-06 s3: telemetry connection string via Key Vault reference" },
 
       # id-worker: no SQL (ADR-0016) and no Key Vault. Reads data through tidal-query (Entra role in entra.tf).
       { who = "id-worker", role = local.blob_reader, on = "container:marketdata", why = "SPEC-06 s2: worker reads market data" },
