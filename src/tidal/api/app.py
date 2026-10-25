@@ -2,7 +2,7 @@
 
 import re
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
 
 import uvicorn
@@ -116,9 +116,11 @@ def create_app(
         try:
             yield
         finally:
-            aclose = getattr(reader, "aclose", None)
-            if aclose is not None:  # RemoteReader owns an HTTP client; fakes have none
-                await aclose()
+            async with AsyncExitStack() as stack:  # each closes even if the other raises
+                for client in (reader, bus):
+                    aclose = getattr(client, "aclose", None)
+                    if aclose is not None:  # RemoteReader / ServiceBusBus own connections
+                        stack.push_async_callback(aclose)
             logger.info("api_stopped")
 
     app = FastAPI(
@@ -154,11 +156,16 @@ def create_app(
 
 def run() -> None:
     """``tidal-api`` entrypoint: reads go through ``tidal-query`` (0.0.0.0:8000)."""
+    from tidal.api.bus import bus_from_settings  # noqa: PLC0415
     from tidal.query.service import remote_reader_from_settings  # noqa: PLC0415 - avoids a cycle
 
     settings = get_settings()
     uvicorn.run(
-        create_app(settings, reader=remote_reader_from_settings(settings)),
+        create_app(
+            settings,
+            reader=remote_reader_from_settings(settings),
+            bus=bus_from_settings(settings),
+        ),
         host="0.0.0.0",  # noqa: S104 - container bind
         port=8000,
         log_config=None,

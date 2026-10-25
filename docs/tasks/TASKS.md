@@ -176,5 +176,6 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | T-603 | Demo script + video outline | docs-writer | T-601 | `docs/demo.md` | 3-minute script | todo |
 | T-604 | Final review pass | code-reviewer + security-reviewer | T-601 | review comments only | no open blocking findings | todo |
 | T-605 | Launch post draft | docs-writer | T-603 | `docs/launch-post.md` | LinkedIn-length, business framing | todo |
+| T-606 | API Service Bus producer (found by the T-603 demo dry run) | api-engineer | T-303, T-410 | `src/tidal/api/bus.py`, `src/tidal/api/app.py` (run/lifespan), `tests/unit/api/test_bus.py`, `tests/integration/test_api_bus.py` | `POST /v1/backtests` and `/v1/admin/tiering/run` return 202 against the emulator; MI + FQDN only off local; coroutine-safe senders | done |
 
 **Gate G6 = portfolio-ready**
