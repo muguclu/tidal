@@ -88,6 +88,20 @@ variable "allow_azure_services" {
   default     = false
 }
 
+variable "allowed_ip_addresses" {
+  description = "Public IPv4 addresses allowed through the SQL firewall, one single-address rule each (start = end). Typically the outbound IPs of App Service and Container Apps plus an operator IP while enable_private_networking is false. No ranges, no 0.0.0.0. Ignored (no rules) when enable_private_networking is true. Must be known at plan time because the addresses become resource keys."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for ip in var.allowed_ip_addresses :
+      can(regex("^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$", ip)) && ip != "0.0.0.0"
+    ])
+    error_message = "allowed_ip_addresses must contain single dotted-quad IPv4 addresses (no CIDR ranges) and must not contain 0.0.0.0."
+  }
+}
+
 variable "database_name" {
   description = "Database name (config-contract TIDAL_SQL__DATABASE default: tidal)."
   type        = string

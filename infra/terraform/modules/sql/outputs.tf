@@ -32,3 +32,8 @@ output "auditing_enabled" {
   description = "True when server auditing to Log Analytics is configured."
   value       = local.auditing_enabled
 }
+
+output "firewall_rule_names" {
+  description = "Names of the single-IP firewall rules created from allowed_ip_addresses (empty with private networking)."
+  value       = sort([for r in azurerm_mssql_firewall_rule.allowed_ip : r.name])
+}
