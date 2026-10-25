@@ -210,7 +210,7 @@ Checked by the orchestrator against `main` with no Azure access. Notes are in [`
 | G3 | Backtests on AKS | NEEDS-CLOUD | Code complete; the 100-job 0 to N to 0 run needs Azure |
 | G4 | Security | PASS (dev, with conditions) | Gitleaks clean on full history; admin routes added later in T-410 (#84); RBAC drift check NEEDS-CLOUD |
 | G5 | FinOps and observability | PARTIAL | C1 to C10 each have a number and label; only C1 and C2 (local) are MEASURED; budget and anomaly alerts PASS in Terraform |
-| G6 | Portfolio-ready | In progress | Wave 6: README, diagram, runbooks, demo |
+| G6 | Portfolio-ready | PASS locally; video and launch post are human steps | README, diagram, runbooks, demo script verified by a local end-to-end dry run; final code and security review with no open blocking findings ([G6 note](docs/status/2026-W43-G6.md)) |
 
 ## Repo map
 
