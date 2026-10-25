@@ -26,6 +26,19 @@ locals {
     { "id-api" = module.identity.identities["id-api"] },
     var.entra_query_read_include_worker ? { "id-worker" = module.identity.identities["id-worker"] } : {}
   )
+
+  # Config-contract keys derived from the Entra registrations. apps.tf merges the subsets each app needs (the api gets the
+  # user-token and query-audience keys, tidal-query gets its audience and the caller allowlists); the output below
+  # publishes the whole map. Lists are comma separated (config-contract.md).
+  entra_config = {
+    TIDAL_AUTH__AUDIENCE                = module.entra_app.api.identifier_uri
+    TIDAL_AUTH__API_APP_CLIENT_ID       = module.entra_app.api.client_id
+    TIDAL_AUTH__ALLOWED_CLIENT_IDS      = module.entra_app.cli.client_id
+    TIDAL_QUERY__AUDIENCE               = module.entra_app.query.identifier_uri
+    TIDAL_QUERY__APP_CLIENT_ID          = module.entra_app.query.client_id
+    TIDAL_AUTH__QUERY_CALLER_CLIENT_IDS = join(",", [for name in sort(keys(local.query_callers)) : local.query_callers[name].client_id])
+    TIDAL_AUTH__QUERY_CALLER_OBJECT_IDS = join(",", [for name in sort(keys(local.query_callers)) : local.query_callers[name].principal_id])
+  }
 }
 
 module "entra_app" {
@@ -49,14 +62,6 @@ output "entra" {
     api       = module.entra_app.api
     cli       = module.entra_app.cli
     query     = module.entra_app.query
-    config = {
-      TIDAL_AUTH__AUDIENCE                = module.entra_app.api.identifier_uri
-      TIDAL_AUTH__API_APP_CLIENT_ID       = module.entra_app.api.client_id
-      TIDAL_AUTH__ALLOWED_CLIENT_IDS      = module.entra_app.cli.client_id
-      TIDAL_QUERY__AUDIENCE               = module.entra_app.query.identifier_uri
-      TIDAL_QUERY__APP_CLIENT_ID          = module.entra_app.query.client_id
-      TIDAL_AUTH__QUERY_CALLER_CLIENT_IDS = join(",", [for name in sort(keys(local.query_callers)) : local.query_callers[name].client_id])
-      TIDAL_AUTH__QUERY_CALLER_OBJECT_IDS = join(",", [for name in sort(keys(local.query_callers)) : local.query_callers[name].principal_id])
-    }
+    config    = local.entra_config
   }
 }

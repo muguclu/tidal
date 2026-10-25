@@ -72,8 +72,8 @@ variable "common_env" {
   default     = {}
 
   validation {
-    condition     = alltrue([for k in keys(var.common_env) : !contains(["TIDAL_ENV", "AZURE_CLIENT_ID", "TIDAL_SERVICE_NAME"], k) && !can(regex("(?i)(PASSWORD|CONNECTION_STRING|SECRET|KEY|TOKEN|SAS|CREDENTIAL)", k)) && !can(regex("(?i)(sig=|AccountKey=|SharedAccessKey=)", var.common_env[k]))])
-    error_message = "common_env must not set TIDAL_ENV, AZURE_CLIENT_ID or TIDAL_SERVICE_NAME (the module sets them) and must not carry secrets (names containing PASSWORD, CONNECTION_STRING, SECRET, KEY, TOKEN, SAS or CREDENTIAL, any case) and values must not look like SAS or storage keys (sig=, AccountKey=, SharedAccessKey=)."
+    condition     = alltrue([for k in keys(var.common_env) : !contains(["TIDAL_ENV", "AZURE_CLIENT_ID", "TIDAL_SERVICE_NAME"], k) && (can(regex("^@Microsoft\\.KeyVault\\(SecretUri=https://[a-z0-9-]{3,24}\\.vault\\.azure\\.net/secrets/[A-Za-z0-9-]{1,127}(/[0-9a-f]{32})?\\)$", var.common_env[k])) || (k == "TIDAL_CURSOR__KEYVAULT_URL" && can(regex("^https://[a-z0-9-]{3,24}\\.vault\\.azure\\.net/?$", var.common_env[k]))) || !can(regex("(?i)(PASSWORD|CONNECTION_STRING|SECRET|KEY|TOKEN|SAS|CREDENTIAL)", k))) && !can(regex("(?i)(sig=|AccountKey=|SharedAccessKey=)", var.common_env[k]))])
+    error_message = "common_env must not set TIDAL_ENV, AZURE_CLIENT_ID or TIDAL_SERVICE_NAME (the module sets them) and must not carry secrets: names containing PASSWORD, CONNECTION_STRING, SECRET, KEY, TOKEN, SAS or CREDENTIAL (any case) are only accepted with a Key Vault reference value (@Microsoft.KeyVault(SecretUri=...)); TIDAL_CURSOR__KEYVAULT_URL is the one name exempt and must be a vault URL. Secrets belong in query.key_vault_env. Values must not look like SAS or storage keys (sig=, AccountKey=, SharedAccessKey=)."
   }
 }
 
@@ -106,7 +106,13 @@ variable "query" {
     memory              = optional(string, "1Gi")
     external_ingress    = optional(bool, true)
     extra_env           = optional(map(string), {})
+    key_vault_env       = optional(map(string), {})
   })
+
+  validation {
+    condition     = alltrue([for k, v in var.query.key_vault_env : can(regex("^[A-Z][A-Z0-9_]*$", k)) && !contains(["TIDAL_ENV", "AZURE_CLIENT_ID", "TIDAL_SERVICE_NAME"], k) && can(regex("^https://[a-z0-9-]{3,24}\\.vault\\.azure\\.net/secrets/[A-Za-z0-9-]{1,127}(/[0-9a-f]{32})?$", v))])
+    error_message = "query.key_vault_env maps env var names (upper case) to Key Vault secret URIs (https://<vault>.vault.azure.net/secrets/<name>[/<version>]); the value is read by the query identity, never stored in state."
+  }
 
   validation {
     condition     = var.query.min_replicas >= 0 && var.query.max_replicas >= 1 && var.query.max_replicas <= 30 && var.query.min_replicas <= var.query.max_replicas

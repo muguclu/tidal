@@ -129,8 +129,8 @@ variable "app_settings" {
   default     = {}
 
   validation {
-    condition     = alltrue([for k in keys(var.app_settings) : !contains(["TIDAL_ENV", "AZURE_CLIENT_ID", "TIDAL_SERVICE_NAME", "WEBSITES_PORT"], k) && !can(regex("(?i)(PASSWORD|CONNECTION_STRING|SECRET|KEY|TOKEN|SAS|CREDENTIAL)", k)) && !can(regex("(?i)(sig=|AccountKey=|SharedAccessKey=)", var.app_settings[k]))])
-    error_message = "app_settings must not set TIDAL_ENV, AZURE_CLIENT_ID, TIDAL_SERVICE_NAME or WEBSITES_PORT (the module sets them) and must not carry secrets (names containing PASSWORD, CONNECTION_STRING, SECRET, KEY, TOKEN, SAS or CREDENTIAL, any case) and values must not look like SAS or storage keys (sig=, AccountKey=, SharedAccessKey=)."
+    condition     = alltrue([for k in keys(var.app_settings) : !contains(["TIDAL_ENV", "AZURE_CLIENT_ID", "TIDAL_SERVICE_NAME", "WEBSITES_PORT"], k) && (can(regex("^@Microsoft\\.KeyVault\\(SecretUri=https://[a-z0-9-]{3,24}\\.vault\\.azure\\.net/secrets/[A-Za-z0-9-]{1,127}(/[0-9a-f]{32})?\\)$", var.app_settings[k])) || (k == "TIDAL_CURSOR__KEYVAULT_URL" && can(regex("^https://[a-z0-9-]{3,24}\\.vault\\.azure\\.net/?$", var.app_settings[k]))) || !can(regex("(?i)(PASSWORD|CONNECTION_STRING|SECRET|KEY|TOKEN|SAS|CREDENTIAL)", k))) && !can(regex("(?i)(sig=|AccountKey=|SharedAccessKey=)", var.app_settings[k]))])
+    error_message = "app_settings must not set TIDAL_ENV, AZURE_CLIENT_ID, TIDAL_SERVICE_NAME or WEBSITES_PORT (the module sets them) and must not carry secrets: names containing PASSWORD, CONNECTION_STRING, SECRET, KEY, TOKEN, SAS or CREDENTIAL (any case) are only accepted with a Key Vault reference value (@Microsoft.KeyVault(SecretUri=https://<vault>.vault.azure.net/secrets/<name>)); TIDAL_CURSOR__KEYVAULT_URL is the one name exempt and must be a vault URL. Values must not look like SAS or storage keys (sig=, AccountKey=, SharedAccessKey=)."
   }
 }
 

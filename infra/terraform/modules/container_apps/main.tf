@@ -10,6 +10,9 @@ locals {
     AZURE_CLIENT_ID    = var.query.identity_client_id
   })
 
+  # Container Apps secret names: lower case letters, digits and hyphens.
+  query_secret_names = { for k in keys(var.query.key_vault_env) : k => lower(replace(k, "_", "-")) }
+
   job_env = {
     for k, j in var.jobs : k => merge(var.common_env, j.extra_env, {
       TIDAL_ENV          = var.tidal_env
@@ -68,6 +71,15 @@ resource "azurerm_container_app" "query" {
     }
   }
 
+  dynamic "secret" {
+    for_each = var.query.key_vault_env
+    content {
+      name                = local.query_secret_names[secret.key]
+      key_vault_secret_id = secret.value
+      identity            = var.query.identity_id
+    }
+  }
+
   template {
     min_replicas = var.query.min_replicas
     max_replicas = var.query.max_replicas
@@ -84,6 +96,15 @@ resource "azurerm_container_app" "query" {
         content {
           name  = env.key
           value = env.value
+        }
+      }
+
+      # Key Vault backed secrets (for example TIDAL_OTEL__CONNECTION_STRING): the value is read by the query identity.
+      dynamic "env" {
+        for_each = var.query.key_vault_env
+        content {
+          name        = env.key
+          secret_name = local.query_secret_names[env.key]
         }
       }
 

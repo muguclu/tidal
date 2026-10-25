@@ -89,6 +89,9 @@ resource "azurerm_linux_web_app" "this" {
 
   app_settings = local.app_settings
 
+  # @Microsoft.KeyVault(...) settings are resolved with the user-assigned identity (there is no system-assigned one).
+  key_vault_reference_identity_id = var.identity_id
+
   # Application and HTTP logs go to the app filesystem with a short retention: no extra meter, and it keeps the
   # 0.2 GB/day Log Analytics cap for OpenTelemetry. Detailed errors and failed request tracing are filesystem-only too. The 35 MB quota makes App Service stop writing when full.
   logs {
