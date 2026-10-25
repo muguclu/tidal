@@ -6,12 +6,15 @@ name: deploy
 # Never `pull_request`. Untrusted values (tag name, inputs) reach `run:` only through env vars.
 # The deployed reference is always <acr>/tidal@sha256:..., never a bare tag.
 #
-# Required variables on the GitHub environment "dev-deploy" (none is a secret; docs/runbooks/deploy.md shows the
-# `terraform output` commands that print them):
-#   AZURE_CLIENT_ID (environment-scoped: client id of sp-tidal-deploy, NOT the images.yml app), AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+# Configuration on the GitHub environment "dev-deploy" (docs/runbooks/deploy.md shows the `terraform output` commands).
+# Environment SECRETS (`gh secret set --env dev-deploy`): IDs are not credentials, but the repo is public and only
+# secrets are masked in logs (ADR-0008 R-29):
+#   AZURE_CLIENT_ID (client id of sp-tidal-deploy, NOT the images.yml app), AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID,
+#   TIDAL_WORKER_CLIENT_ID, TIDAL_KEDA_CLIENT_ID
+# Environment VARIABLES (resource names and public endpoints, deterministic from the Terraform naming):
 #   ACR_NAME, TIDAL_RESOURCE_GROUP, TIDAL_WEBAPP_NAME, TIDAL_QUERY_APP_NAME, TIDAL_JOB_NAMES (space separated),
-#   TIDAL_AKS_NAME, TIDAL_WORKER_CLIENT_ID, TIDAL_KEDA_CLIENT_ID, TIDAL_STORAGE_URL, TIDAL_SQL_SERVER,
-#   TIDAL_SERVICEBUS_FQDN, TIDAL_QUERY_BASE_URL, TIDAL_API_BASE_URL
+#   TIDAL_AKS_NAME, TIDAL_STORAGE_URL, TIDAL_SQL_SERVER, TIDAL_SERVICEBUS_FQDN, TIDAL_QUERY_BASE_URL,
+#   TIDAL_API_BASE_URL
 # GitHub-hosted runners only.
 
 on:
