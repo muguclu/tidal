@@ -197,7 +197,7 @@ jobs:
   # Security: sp-tidal-ci-plan must hold federated credentials ONLY for subject
   # `ref:refs/heads/main` and `pull_request`, and only the Reader + Storage Blob Data Reader roles.
   # Never grant it write roles or an environment subject. See docs/runbooks/bootstrap.md.
-  # NEEDS-CLOUD: inactive until the repo variable AZURE_PLAN_CLIENT_ID is set (client id of the
+  # NEEDS-CLOUD: inactive until the repo secrets AZURE_PLAN_CLIENT_ID, AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID are set (client id of the
   # read-only sp-tidal-ci-plan app, see docs/runbooks/bootstrap.md). Plan only; never apply.
   #
   # Private networking (T-404): with the repo variable TIDAL_PRIVATE_NETWORKING set to "true" the dev environment runs
@@ -214,11 +214,34 @@ jobs:
     steps:
       - run: echo "::notice title=plan skipped::TIDAL_PRIVATE_NETWORKING is true - plan must run from inside the VNet (no such host exists in IaC yet, see modules/network README). Never plan a revert of the private networking flag from CI."
 
+  # vars.* print unmasked in public logs, so the Azure ids are SECRETS; job-level `if:` cannot read secrets, hence this
+  # preflight (T-609 fix round 1). Unconfigured repos and fork PRs skip the plan cleanly.
+  azure-config:
+    name: azure config preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    outputs:
+      plan: ${{ steps.cfg.outputs.plan }}
+    steps:
+      - id: cfg
+        env:
+          PLAN_CLIENT: ${{ secrets.AZURE_PLAN_CLIENT_ID }}
+          TENANT: ${{ secrets.AZURE_TENANT_ID }}
+          SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          if [ -n "$PLAN_CLIENT" ] && [ -n "$TENANT" ] && [ -n "$SUB" ]; then
+            echo "plan=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "plan=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::terraform plan skipped: AZURE_PLAN_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID secrets not set"
+          fi
+
   plan:
     name: plan (envs/dev)
-    needs: [changes, iac]
+    needs: [changes, iac, azure-config]
     if: >-
-      vars.AZURE_PLAN_CLIENT_ID != '' &&
+      needs.azure-config.outputs.plan == 'true' &&
       vars.TIDAL_PRIVATE_NETWORKING != 'true' &&
       needs.changes.outputs.infra == 'true' &&
       (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
@@ -230,9 +253,9 @@ jobs:
     env:
       ARM_USE_OIDC: "true"
       ARM_USE_AZUREAD: "true"
-      ARM_CLIENT_ID: ${{ vars.AZURE_PLAN_CLIENT_ID }}
-      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ARM_CLIENT_ID: ${{ secrets.AZURE_PLAN_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -249,9 +272,9 @@ jobs:
       - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         if: steps.env.outputs.present == 'true'
         with:
-          client-id: ${{ vars.AZURE_PLAN_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_PLAN_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         if: steps.env.outputs.present == 'true'
         with:
@@ -260,28 +283,42 @@ jobs:
       - name: terraform plan (read-only, no state lock)
         if: steps.env.outputs.present == 'true'
         working-directory: infra/terraform/envs/dev
-        shell: bash # bash -e -o pipefail: a failed plan must fail the job despite `| tee`
+        shell: bash
         run: |
-          terraform init -lockfile=readonly
-          terraform plan -lock=false -no-color -out=tfplan | tee plan.txt
-          {
-            echo '### terraform plan (envs/dev)'
-            echo '```'
-            tail -c 60000 plan.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          # Public repo (T-609, ADR-0008 R-29): logs, summaries and artifacts are world-readable and the plan text
+          # carries subscription, resource and principal ids. Nothing but the counts line and pass/fail leaves
+          # this step; the plan stays on the runner (no later job consumes a planfile, so none is uploaded).
+          terraform init -lockfile=readonly > init.log 2>&1 || {
+            echo "::error::terraform init failed"; grep -m5 '^Error:' init.log | sed -E 's/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/<id>/g' | sed -E 's/[0-9a-fA-F]{32}/<hex>/g; s/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+/<upn>/g'; exit 1
+          }
+          if terraform plan -lock=false -no-color -out=tfplan > plan.log 2>&1; then
+            counts="$(grep -E '^(Plan:|No changes\.)' plan.log | tail -n 1 || true)"
+            : "${counts:=Plan finished}"
+            echo "$counts"
+            {
+              echo '### terraform plan (envs/dev)'
+              echo "Result: success. ${counts}"
+              echo 'Full plan text is not published (public repo); run the plan locally to read it.'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::terraform plan failed (first line of up to five errors only; full output withheld, public repo)"
+            grep -m5 '^Error:' plan.log | sed -E 's/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/<id>/g' | sed -E 's/[0-9a-fA-F]{32}/<hex>/g; s/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+/<upn>/g' || true
+            {
+              echo '### terraform plan (envs/dev)'
+              echo 'Result: FAILED. Error details withheld on a public repo; rerun the plan locally.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
   # SPEC-06 section 7: "each identity has exactly the roles in section 2". Exports the live RBAC state with the
   # read-only sp-tidal-rbac-drift identity and diffs it against docs/rbac/expected.json. NOT a required check and not part
   # of the `iac` aggregate: a failure is a drift signal, not a merge blocker. Nightly and on demand only.
-  # NEEDS-CLOUD: inactive until AZURE_RBAC_DRIFT_CLIENT_ID is set. That app holds a custom read-only role (no state
+  # NEEDS-CLOUD: inactive until the secret AZURE_RBAC_DRIFT_CLIENT_ID is set. That app holds a custom read-only role (no state
   # access, no write role) and Microsoft Graph Application.Read.All (admin consent). It signs in through the GitHub
   # environment `rbac-drift`, which must be restricted to main. See docs/rbac/README.md.
   rbac-drift:
     name: rbac-drift
-    if: >-
-      vars.AZURE_RBAC_DRIFT_CLIENT_ID != '' &&
-      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: rbac-drift
@@ -292,24 +329,39 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+      # Environment secrets are invisible to a job-level `if:`, so the gate is a first step (T-609 fix round 1).
+      - id: cfg
+        env:
+          DRIFT_CLIENT: ${{ secrets.AZURE_RBAC_DRIFT_CLIENT_ID }}
+          TENANT: ${{ secrets.AZURE_TENANT_ID }}
+          SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          if [ -n "$DRIFT_CLIENT" ] && [ -n "$TENANT" ] && [ -n "$SUB" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::rbac-drift skipped: AZURE_RBAC_DRIFT_CLIENT_ID / tenant / subscription secrets not set"
+          fi
+      - if: steps.cfg.outputs.ok == 'true'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
-          client-id: ${{ vars.AZURE_RBAC_DRIFT_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_RBAC_DRIFT_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: Export live RBAC and diff against docs/rbac/expected.json
+        if: steps.cfg.outputs.ok == 'true'
         env:
           TIDAL_RESOURCE_GROUP: ${{ vars.TIDAL_RESOURCE_GROUP || 'rg-tidal-dev' }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          bash scripts/rbac-export.sh | tee rbac-live.json > /dev/null
-          bash scripts/rbac-export.sh --check docs/rbac/expected.json | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Upload live export
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: rbac-live
-          path: rbac-live.json
-          if-no-files-found: ignore
-          retention-days: 14
+          # Public repo (T-609): the live export and the diff carry principal and role-assignment ids, so neither
+          # goes to the summary, the log or an artifact. Only pass/fail is published.
+          bash scripts/rbac-export.sh > rbac-live.json
+          if bash scripts/rbac-export.sh --check docs/rbac/expected.json > rbac-check.log 2>&1; then
+            echo "### rbac-drift: no drift" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### rbac-drift: DRIFT detected (details withheld on a public repo; run scripts/rbac-export.sh --check locally)" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::rbac drift detected"
+            exit 1
+          fi

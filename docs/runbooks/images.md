@@ -18,8 +18,8 @@ SBOM: SPDX JSON, artifact `tidal-sbom-spdx` (90 days). Pushed digest: job summar
 
 The GitHub Terraform provider is not in the stack (ADR-0007), so these are manual. Checklist:
 
-- [ ] Repository variables (not secrets): `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`,
-  `ACR_NAME` (registry name without `.azurecr.io`, from the Terraform output `ACR_LOGIN_SERVER`).
+- [ ] Repository secrets (public repo: `vars.*` print unmasked in logs, ADR-0008 R-29): `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+  `AZURE_SUBSCRIPTION_ID`. Repository variable: `ACR_NAME` (registry name without `.azurecr.io`, from the Terraform output `ACR_LOGIN_SERVER`).
 - [ ] Optional variable `IMAGE_ATTEST=true`: publishes build provenance and, for tag builds, an SBOM attestation
   (needs attestation support on the plan). With it off, the `attestations: write` permission is unused.
 - [ ] Environment `dev` -> Deployment branches and tags: allow only `main` and tags matching `v*`.

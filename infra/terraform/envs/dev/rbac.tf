@@ -320,7 +320,7 @@ locals {
 }
 
 output "keda_identity" {
-  description = "KEDA operator identity for the Helm chart (T-307 keda.identityClientId) and the GitHub environment variable TIDAL_KEDA_CLIENT_ID."
+  description = "KEDA operator identity for the Helm chart (T-307 keda.identityClientId) and the GitHub environment secret TIDAL_KEDA_CLIENT_ID."
   value = {
     client_id    = module.rbac.identities["id-keda-operator"].client_id
     principal_id = module.rbac.identities["id-keda-operator"].principal_id
@@ -328,7 +328,7 @@ output "keda_identity" {
 }
 
 output "deploy_client_id" {
-  description = "Client ID of sp-tidal-deploy (GitHub environment variable AZURE_CLIENT_ID for deploy), or null when github_repo_path is null."
+  description = "Client ID of sp-tidal-deploy (GitHub environment secret AZURE_CLIENT_ID for deploy), or null when github_repo_path is null."
   value       = one(azuread_application.deploy[*].client_id)
 }
 
