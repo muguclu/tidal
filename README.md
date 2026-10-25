@@ -228,8 +228,11 @@ CLI entrypoints: `tidal`, `tidal-api`, `tidal-query`, `tidal-worker`, `tidal-tie
 
 ## Runbooks and documentation
 
-* Runbooks: [bootstrap](docs/runbooks/bootstrap.md), [deploy](docs/runbooks/deploy.md), [images](docs/runbooks/images.md),
-  [park](docs/runbooks/park.md), [integration tests](docs/runbooks/integration-tests.md)
+* Runbooks ([index](docs/runbooks/README.md)): [bootstrap](docs/runbooks/bootstrap.md), [deploy](docs/runbooks/deploy.md),
+  [images](docs/runbooks/images.md), [park](docs/runbooks/park.md), [DLQ](docs/runbooks/dlq.md),
+  [key rotation](docs/runbooks/key-rotation.md), [restore](docs/runbooks/restore.md),
+  [integration tests](docs/runbooks/integration-tests.md)
+* Demo: [3-minute script with a local dry-run record](docs/demo.md)
 * Cost: [`cost-optimization.md`](docs/finops/cost-optimization.md), [`cost-model.md`](docs/finops/cost-model.md),
   [C1 to C3](docs/finops/results/c1-c3.md), [C4 to C10](docs/finops/results/c4-c10.md)
 * Plan and rules: [`docs/PLANNING.md`](docs/PLANNING.md), [`docs/tasks/TASKS.md`](docs/tasks/TASKS.md),

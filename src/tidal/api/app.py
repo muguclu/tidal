@@ -118,9 +118,10 @@ def create_app(
 ) -> FastAPI:
     """Build the API (Factory pattern); every external client is injected.
 
-    ``reader`` and ``bus`` default to ``None`` (real clients arrive with T-208); the ready probe
-    then reports ``not_ready``. ``clock`` defaults to the system clock. ``token_validator`` defaults
-    to the Entra JWT validator and ``secret_source`` (Key Vault) supplies the cursor HMAC key;
+    ``reader`` and ``bus`` default to ``None`` (tests inject fakes; ``run()`` builds the real
+    ones from settings); the ready probe then reports ``not_ready``. ``clock`` defaults to the
+    system clock. ``token_validator`` defaults to the Entra JWT validator and ``secret_source``
+    (Key Vault) supplies the cursor HMAC key;
     outside local a missing key fails startup with ``ConfigError``. ``backtest_store`` is the
     ``ops.backtest_job`` store (``None``: submit answers 503); ``aggregator`` is the in-process
     ``backtest-results`` consumer (SPEC-05 §4), run as a lifespan background task when given.
