@@ -30,9 +30,10 @@ def _emulator_up() -> bool:
         return False
 
 
+# Declared skip, not a runtime skip: the CI integration job runs Azurite + SQL only (no Service Bus
+# emulator), so TIDAL_TEST_REQUIRE_SQL must not fail it. Locally: `docker compose up -d`.
+@pytest.mark.skipif(not _emulator_up(), reason="no Service Bus emulator on 127.0.0.1:5672")
 async def test_send_ping_and_receive() -> None:
-    if not _emulator_up():
-        pytest.skip("Service Bus emulator is not reachable on 127.0.0.1:5672")
     settings = Settings.from_env(
         {
             "TIDAL_ENV": "local",

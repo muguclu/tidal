@@ -263,7 +263,7 @@ async def test_concurrent_send_batches_do_not_overlap() -> None:
     client = FakeClient()
     bus = ServiceBusBus(client)
     results = await asyncio.gather(bus.send_batch([tiering(1)]), bus.send_batch([tiering(2)]))
-    assert results == [1, 1]
+    assert list(results) == [1, 1]
     assert client.senders[QUEUE_TIERING_JOBS].max_active == 1
 
 
