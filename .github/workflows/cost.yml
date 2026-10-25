@@ -4,6 +4,9 @@ name: cost
 # Reads the CSV export written by infra/terraform/modules/cost_export with the READ-ONLY identity
 # sp-tidal-ci-plan (Storage Blob Data Reader on the cost-exports container). Writes nothing to the repo or to
 # Azure: the report is a job summary plus a workflow artifact, so no write token is needed.
+# The repo is PUBLIC (T-609, ADR-0008 R-29): summary and artifact are world-readable, so the report is generated
+# with GUID redaction (the default; subscription -> <sub>, other GUIDs -> <id>; resource group/resource names are
+# kept) and the raw export CSVs are never uploaded. Spend totals per resource name remain public by design.
 # Subject: no `environment:` is set on purpose. sp-tidal-ci-plan only trusts `ref:refs/heads/main` and
 # `pull_request`; a scheduled or dispatched run on main presents the first (docs/runbooks/bootstrap.md).
 # NEEDS-CLOUD: inactive until the repo variables AZURE_PLAN_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID and
@@ -90,7 +93,11 @@ jobs:
         run: |
           args=(--export exports --out-dir out)
           if [ -n "$REPORT_WEEK" ]; then args+=(--week "$REPORT_WEEK"); fi
+          # Redaction is on by default; never pass --no-redact in CI (public repo).
           path="$(uv run --no-dev python -m tidal.finops.cost_report "${args[@]}")"
+          if grep -Eiq '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$path"; then
+            echo "::error::GUID found in the report after redaction; refusing to publish" >&2; exit 1
+          fi
           echo "path=$path" >> "$GITHUB_OUTPUT"
           # Job summaries are limited to 1 MiB; the report is a few KB.
           cat "$path" >> "$GITHUB_STEP_SUMMARY"
@@ -100,4 +107,4 @@ jobs:
           name: cost-weekly
           path: out/cost-weekly-*.md
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 30

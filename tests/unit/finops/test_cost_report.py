@@ -1,5 +1,6 @@
 """Tests for the weekly cost report (T-502); fixtures in tests/fixtures/finops."""
 
+import re
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -157,3 +158,43 @@ def test_directory_runs_are_snapshots_and_partitions_are_kept(tmp_path: Path) ->
     assert len(snaps) == 1
     assert len(snaps[0]) == 2
     assert len(cr.merge_snapshots(snaps)) == len(rows)
+
+
+SUB = "12345678-90ab-cdef-1234-567890abcdef"
+OTHER = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+
+def test_redact_subscription_and_guids_keep_names() -> None:
+    rid = f"/subscriptions/{SUB}/resourceGroups/rg-tidal-dev/providers/Microsoft.App/ca-x/{OTHER}"
+    out = cr.redact(f"| {rid} | 12.34 EUR |")
+    assert SUB not in out
+    assert OTHER not in out
+    assert "/subscriptions/<sub>/resourceGroups/rg-tidal-dev/" in out
+    assert "Microsoft.App/ca-x/<id>" in out
+    assert "12.34 EUR" in out
+
+
+def test_redact_is_case_insensitive() -> None:
+    assert cr.redact(f"/SUBSCRIPTIONS/{SUB.upper()}/x") == "/subscriptions/<sub>/x"
+
+
+def test_report_redaction_does_not_change_numbers(tmp_path: Path) -> None:
+    raw = cr.generate(
+        [A, B],
+        out_dir=tmp_path / "raw",
+        prices=PRICES,
+        cost_model=MODEL,
+        week="2026-W43",
+        redact_ids=False,
+    )
+    red = _gen(tmp_path / "red", [A, B])
+    raw_text = raw.read_text(encoding="utf-8")
+    assert cr.redact(raw_text) == red.read_text(encoding="utf-8")
+    nums = r"\d+(?:[.,]\d+)*"
+    assert re.findall(nums, raw_text) == re.findall(nums, cr.redact(raw_text))
+
+
+def test_cli_redacts_by_default_and_accepts_no_redact(tmp_path: Path) -> None:
+    args = ["--export", str(A), "--week", "2026-W43"]
+    assert cr.main([*args, "--out-dir", str(tmp_path / "a")]) == 0
+    assert cr.main([*args, "--out-dir", str(tmp_path / "b"), "--no-redact"]) == 0

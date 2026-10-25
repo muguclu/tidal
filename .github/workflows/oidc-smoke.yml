@@ -30,4 +30,5 @@ jobs:
           allow-no-subscriptions: true
 
       - name: Show account
-        run: az account show --query "{subscription:id, tenant:tenantId, user:user.name, type:user.type}" -o table
+        # Public repo: never print subscription, tenant or principal IDs (ADR-0008 R-29).
+        run: az account show --query "{state:state, type:user.type}" -o table
