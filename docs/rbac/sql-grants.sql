@@ -5,10 +5,13 @@
 -- id-worker has NO SQL access (ADR-0016): it reads market data through tidal-query. id-legacy-vm has none either.
 -- Requires the schemas ref, md and ops (sql/migrations/0001_init.sql).
 
--- id-api: read everywhere, execute the ops procedures.
+-- id-api: read everywhere, execute the ops procedures, write ops.backtest_job only.
 IF USER_ID('id-api') IS NULL CREATE USER [id-api] FROM EXTERNAL PROVIDER;
 ALTER ROLE db_datareader ADD MEMBER [id-api];
 GRANT EXECUTE ON SCHEMA::ops TO [id-api];
+-- Backtest job store and in-process result aggregator (T-607): the API inserts and updates job rows.
+-- No DELETE, and no db_datawriter (which would open md and ref to writes).  Idempotent.
+GRANT SELECT, INSERT, UPDATE ON ops.backtest_job TO [id-api];
 
 -- id-query: read only.
 IF USER_ID('id-query') IS NULL CREATE USER [id-query] FROM EXTERNAL PROVIDER;
