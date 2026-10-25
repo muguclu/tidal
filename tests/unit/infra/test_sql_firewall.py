@@ -1,4 +1,4 @@
-"""SQL firewall wiring (T-610): single-IP rules only, no Allow Azure services, list built from outbound IPs."""
+"""SQL firewall wiring (T-610): single-IP rules, no Allow Azure services, list from outbound IPs."""
 
 import re
 from pathlib import Path
@@ -23,16 +23,23 @@ def test_rule_is_single_address_and_only_with_public_access() -> None:
 
 
 def test_no_open_range_rules() -> None:
-    assert "255.255.255.255" not in SQL_MAIN + DEV_APPS + DEV_MAIN
+    all_tf = SQL_MAIN + DEV_APPS + DEV_MAIN
+    assert not re.search(r'end_ip_address\s*=\s*"255\.255\.255\.255"', all_tf)
     starts = re.findall(r'start_ip_address\s*=\s*"([^"]+)"', SQL_MAIN)
-    assert starts == ["0.0.0.0"]  # only the optional allow_azure_services rule
+    assert starts == ["0.0.0.0"]  # noqa: S104 - only the optional allow_azure_services rule
     assert "allow_azure_services" not in DEV_MAIN
 
 
 def test_module_validation_rejects_zero_and_ranges() -> None:
     var = _block(SQL_VARS, 'variable "allowed_ip_addresses"')
-    assert 'ip != "0.0.0.0"' in var
-    assert "/" not in re.search(r"regex\(\"([^\"]+)\"", var).group(1)  # type: ignore[union-attr]
+    assert '!contains(["0.0.0.0", "255.255.255.255"], ip)' in var
+    pattern = re.search(r"regex\(\"([^\"]+)\"", var).group(1)  # type: ignore[union-attr]
+    assert "/" not in pattern
+    octet_re = pattern.replace("\\\\", "\\")  # HCL "\\." -> regex "\."
+    for ok in ("203.0.113.7", "20.1.2.3"):
+        assert re.fullmatch(octet_re, ok)
+    for bad in ("01.2.3.4", "1.2.3.4/32", "1.2.3", "256.1.1.1", " 1.2.3.4", "1.2.3.4\n"):
+        assert not re.fullmatch(octet_re, bad)
     assert "default     = []" in var
 
 

@@ -96,9 +96,9 @@ variable "allowed_ip_addresses" {
   validation {
     condition = alltrue([
       for ip in var.allowed_ip_addresses :
-      can(regex("^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$", ip)) && ip != "0.0.0.0"
+      can(regex("^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$", ip)) && !contains(["0.0.0.0", "255.255.255.255"], ip)
     ])
-    error_message = "allowed_ip_addresses must contain single dotted-quad IPv4 addresses (no CIDR ranges) and must not contain 0.0.0.0."
+    error_message = "allowed_ip_addresses must contain single dotted-quad IPv4 addresses (no CIDR ranges) and must not contain 0.0.0.0 or 255.255.255.255."
   }
 }
 

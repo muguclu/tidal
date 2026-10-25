@@ -31,16 +31,17 @@ variable "sql_app_outbound_rules_enabled" {
 }
 
 variable "sql_admin_ip_addresses" {
-  description = "Public IPv4 addresses of human operators who run docs/rbac/sql-grants.sql or sqlcmd against the dev server while the public endpoint is on (single addresses, no ranges, no 0.0.0.0). Default empty."
+  description = "Public IPv4 addresses of human operators who run docs/rbac/sql-grants.sql or sqlcmd against the dev server while the public endpoint is on (single addresses, no ranges, no 0.0.0.0). Temporary: set for one grants session, then reset to [] and re-apply the same day (home IPs get reassigned). Default empty."
   type        = list(string)
   default     = []
 
+  # Same check as modules/sql/variables.tf (allowed_ip_addresses): keep both in sync. Duplicated here to fail early.
   validation {
     condition = alltrue([
       for ip in var.sql_admin_ip_addresses :
-      can(regex("^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$", ip)) && ip != "0.0.0.0"
+      can(regex("^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$", ip)) && !contains(["0.0.0.0", "255.255.255.255"], ip)
     ])
-    error_message = "sql_admin_ip_addresses must contain single dotted-quad IPv4 addresses (no CIDR ranges) and must not contain 0.0.0.0."
+    error_message = "sql_admin_ip_addresses must contain single dotted-quad IPv4 addresses (no CIDR ranges) and must not contain 0.0.0.0 or 255.255.255.255."
   }
 }
 

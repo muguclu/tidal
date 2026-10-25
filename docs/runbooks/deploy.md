@@ -106,8 +106,10 @@ the Container Apps environment egress addresses (read from tidal-query, shared b
 keyed by address, so Terraform cannot plan them on a fresh environment. Apply in two steps (human applier, no `-target`):
 1. `terraform apply -var-file=dev.tfvars -var sql_app_outbound_rules_enabled=false` (creates everything, no app rules).
 2. `terraform apply -var-file=dev.tfvars` (default `true`; adds one rule per outbound IP).
-Add your own IP via `sql_admin_ip_addresses = ["203.0.113.7"]` before running `sql-grants.sql`.
-Later plans are single-step. Re-apply after replacing the web app or the Container Apps environment (outbound IPs change).
+Add your own IP via `sql_admin_ip_addresses = ["203.0.113.7"]` only for the `sql-grants.sql`/sqlcmd session, then set it
+back to `[]` and re-apply the same day (home and ISP addresses get reassigned).
+Later plans are single-step. Re-apply **immediately** after replacing the web app or the Container Apps environment, and
+on any SQL error 40615: rules for retired addresses stay open until the next apply (fail-open window, ADR-0008 R-25).
 Residual: Container Apps consumption egress addresses are not contractually stable, and the web app's possible outbound
 list is large (shared with other tenants on the scale unit). If SQL starts refusing with error 40615 after a platform
 change, re-apply. Stable alternatives: `enable_private_networking = true` (private endpoint, no firewall rules) or a NAT
