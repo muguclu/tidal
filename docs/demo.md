@@ -24,8 +24,8 @@ Run it once end to end the day before. Clock 2026-10-25 or later.
    The first run is the slow one. Time the synth step: the committed reports show about 105 s for `daily-history`
    including container start (`docs/status/2026-W43-G1-synthetic.md`). Pre-record or speed up that wait; do not talk
    over a silent screen.
-6. Decide before recording whether the backtest worker step (segment 7, optional part) works on your machine. If you
-   did not verify it, use the fallback in that segment.
+6. Rehearse segment 7 once: the worker runs inside the `api` container and processes one job per
+   `--max-messages`. Leave the first rehearsal job processed so the queue is empty when you record.
 7. Terminal: font size 18 or larger, 100 columns, dark theme, history cleared, no tokens or `.env` in the scrollback.
 8. Browser tabs ready: `docs/finops/cost-optimization.md` (rendered, scrolled to the "Register C1 to C10" table) and
    `docs/img/architecture.md` (rendered Mermaid diagram).
@@ -59,7 +59,9 @@ curl -s -X POST http://127.0.0.1:8000/v1/backtests \
   -d '{"strategy":"ma_crossover","instrument_ids":["EIA.BRENT.SPOT"],"params":{"fast":10,"slow":50},
        "interval":"1d","start":"2015-01-01T00:00:00Z","end":"2020-01-01T00:00:00Z",
        "costs":{"fee_bps":1,"slippage_bps":2},"seed":1}'
-# then, with the job_id from the 202 response:
+# run one worker pass (in Azure, KEDA starts these on spot nodes from zero)
+docker compose exec api tidal-worker --queue backtest-jobs --max-messages 1 --max-wait 30
+# then, with the job_id from the 202 response (the in-API aggregator applies the result within seconds):
 curl -s http://127.0.0.1:8000/v1/backtests/<job_id>
 
 # teardown after recording
@@ -98,7 +100,7 @@ Spoken pace is about 150 words per minute. The voice-over below is about 415 wor
 | 4 | 1:05 to 1:30 | Terminal: `docker compose exec api tidal db migrate`, then `docker compose exec api tidal synth daily-history` (sped up). Show the log lines at the end. | Now data. All of it is synthetic and seeded, so every run gives the same bytes. This command builds twenty years of daily history for twelve series. Recent bars land in SQL, the hot tier. Older bars are written as epoch Parquet files in blob storage, the cold tier. |
 | 5 | 1:30 to 1:55 | Terminal: `curl` `/v1/latest` for Brent. Then `curl -si` `/v1/bars` for WTI, 17 to 23 April 2020; highlight the `X-Tidal-Tier` header and the negative close on 2020-04-20. | Ask for the latest Brent bar. That comes from the hot tier. Now ask for WTI around April 2020. The price is negative, about minus thirty-seven, and the system never clamps it. This range comes from cold storage, and the tier header says so. |
 | 6 | 1:55 to 2:15 | Terminal: the two `tidal tiering run` commands. Then the C2 row from the cost report: "MEASURED (local): `md.tick_hot` reserved KB 71,368 to 2,184". | Tiering moves rows older than the ninety-day hot window from SQL to Parquet. Dry run first. It only prints the plan. On the real local run, the tick table fell from seventy-one thousand to two thousand kilobytes. That is measured, on this laptop. |
-| 7 | 2:15 to 2:35 | Terminal: `POST /v1/backtests`, response `202` with `job_id` and `"status":"queued"`. Back to the diagram, highlight Service Bus, KEDA ScaledJob and the spot pool. Overlay: "Scale 0 to N: NEEDS-CLOUD". | Backtests are queued, not run inside the API. I post a moving average crossover on Brent. The API answers 202 with a job id. In Azure, KEDA would start spot workers from zero for each queue message. That scaling has not run yet, and compose has no worker, so I will not pretend it did. |
+| 7 | 2:15 to 2:35 | Terminal: `POST /v1/backtests` → `202` with `job_id`; one `tidal-worker` pass; `GET /v1/backtests/<job_id>` → `"status":"succeeded"` with Sharpe and trade count. Back to the diagram, highlight Service Bus, KEDA ScaledJob and the spot pool. Overlay: "Scale 0 to N: NEEDS-CLOUD". | Backtests are queued, not run inside the API. I post a moving average crossover on Brent and get a job id back. A worker picks it up, writes the equity curve to blob storage and reports the result. Same seed, same result hash, every time. In Azure, KEDA would start those workers on spot nodes from zero; that scaling has not run yet. |
 | 8 | 2:35 to 3:00 | Cost report: the Register C1 to C10 table. Highlight in turn: C1 `98.35 -> 27.10 MiB`, `72.4 %`, MEASURED; C4 `667.95 -> 1.63 / 6.12`, MODELLED, NEEDS-CLOUD; the totals `68.40 to 126.86` active and `46.61` parked, MODELLED. End card: repo name and "docs/finops/cost-optimization.md". | This is the cost report. The epoch Parquet format is seventy-two percent smaller than SQL rows. That is measured. The big savings are modelled: backtest nodes on spot machines, six hundred sixty-eight euros down to about two to six. A month is modelled at sixty-eight to one hundred twenty-seven euros active, forty-seven parked. These are not invoices. A short cloud window would turn them into measurements. Thanks for watching. |
 
 Voice-over word count by segment (hand count, plus or minus 5 in total): 1 = 46, 2 = 49, 3 = 47, 4 = 48, 5 = 48,
@@ -126,10 +128,10 @@ The 71,368 to 2,184 figure in the report came from the S-scale tick data and a s
 (which writes bars only). Say "the report's measured run", and point at the table; do not claim this run produced it.
 If the dry run says nothing to move, show that output and go to the table.
 
-Segment 7. Optional extension if the worker works on your machine: `docker compose exec api tidal-worker --queue backtest-jobs --max-messages 1`, then
-`curl` the job status. The worker reads bars through `tidal-query` (`TIDAL_QUERY__BASE_URL`), and the compose `query`
-service is `expose`d only, not published to the host, so this needs a rehearsal or a published port. It was not verified
-when this script was written. If you skip it, keep the voice-over as written.
+Segment 7. The worker runs inside the `api` container, so it reaches `tidal-query` on the compose network
+(`TIDAL_QUERY__BASE_URL=http://query:8000`); nothing needs to be published. On the dry run (2026-10-25) the job went from
+`queued` to `succeeded` about 12 seconds after the worker pass (Sharpe 0.593, 30 trades), and a second identical
+request produced the same `result_sha256`. Show the real response, not these values.
 
 ## Fallback if a step fails live
 
@@ -143,22 +145,26 @@ when this script was written. If you skip it, keep the voice-over as written.
 * Backtest returns 503: the Service Bus emulator is not ready (it starts after SQL Server). Wait 20 seconds, retry. If
   it still fails, skip to segment 8 and state that the submit path is covered by the contract and unit tests
   (`tests/contract/test_backtests_contract.py`, `tests/unit/api/test_backtests.py`).
+* Backtest stays `queued`: the worker pass found no message (run it again) or the result is waiting for the
+  aggregator; check `docker compose logs --tail 30 api` for `result_applied` or `aggregator_failed`.
 * Anything else: show the cost report and the diagram only (segments 1, 2, 8). They need no running stack and carry the
   main message.
 
-## Commands not verified by running
+## Dry-run record (2026-10-25, local compose stack)
 
-This script was written without running the stack. Each command was checked against the source, not executed.
+Every command in "Setup commands used in the video" was run once by the orchestrator:
 
-* `docker compose --profile app up -d`: checked against `docker-compose.yml` (services `api`, `query` in profile `app`).
-* `docker compose exec api tidal db migrate`, `docker compose exec api tidal synth daily-history`, `docker compose exec api tidal tiering run [--dry-run]`: groups and
-  options checked in `src/tidal/cli.py`, `src/tidal/ingest/cli.py`, `src/tidal/storage/tiering_cli.py`. Not executed.
-  The need for `db migrate` before `synth` comes from `deploy/local/README.md`; whether `synth` also migrates was not checked.
-* The API routes and parameters: checked against `docs/contracts/openapi.yaml`. Responses were not observed.
-* Whether the anonymous principal (auth disabled) holds the `Tidal.Quant` role needed for `POST /v1/backtests` was not
-  checked. If you get 403, enable auth and use a dev token as above.
-* The `ma_crossover` example values (`fast` 10, `slow` 50, fees 1 and 2 bps, seed 1) are valid against the schema but
-  are arbitrary.
-* The tier header value for the 2020 range and the exact tiering dry-run output on `daily-history` data.
-* `docker compose exec api tidal-worker --queue backtest-jobs --max-messages 1` against the compose stack (see segment 7).
-* `scripts/dev-token.py --role Tidal.Quant`: options checked in the script; the token was not minted.
+* `docker compose --profile app up -d`, `/v1/health/live` and `/v1/health/ready`: OK.
+* `tidal db migrate` (no-op on an existing schema) and `tidal synth daily-history`: 12 instruments.
+* `/v1/latest` for Brent: `"tier":"hot"`. `/v1/bars` for WTI 2020-04-17 to 2020-04-23: `x-tidal-tier: cold`, close -37.0
+  on 2020-04-20.
+* `tidal tiering run --dry-run` with the frozen clock: `md.bar_hot: moved=780`, `md.tick_hot: moved=0`.
+* Backtest: 202, worker pass, then `succeeded` with metrics; resubmitting gave an identical `result_sha256`.
+
+The dry run exposed three gaps that unit tests with fakes had hidden. All are fixed:
+
+* T-606 (#96): the API had no Service Bus producer.
+* T-607 (#98): there was no SQL job store and the aggregator never ran.
+* T-607 (#98): Azurite had no `backtests` container.
+
+Not run: `scripts/dev-token.py` (the JWT path in "Not in the 3 minutes"), and the recording itself.
