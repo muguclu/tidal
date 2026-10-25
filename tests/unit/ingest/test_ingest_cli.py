@@ -109,7 +109,7 @@ def test_build_store_local_default_and_azure_variants(
     assert isinstance(
         cli.build_store(Settings.from_env({"TIDAL_ENV": "local", **conn})), AzureBlobStore
     )
-    assert created == ["marketdata"]
+    assert created == ["marketdata", "reference", "backtests"]
 
     import azure.identity as ident
 
