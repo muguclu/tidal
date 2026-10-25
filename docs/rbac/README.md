@@ -40,7 +40,7 @@ nightly and manual, not a required check).
 2. Entra: Application Administrator (or Graph `Application.ReadWrite.All` + `AppRoleAssignment.ReadWrite.All`) for `sp-tidal-deploy`.
 3. Nothing extra for the secrets: the applier writes them through ARM (`Microsoft.KeyVault/vaults/secrets/write`, included in Owner/Contributor), no Key Vault data-plane role.
 4. tfvars: `ci_client_id` (output of `bootstrap`), `github_repo_path` (`owner/repo`); `deploy_github_environment` defaults to `dev-deploy`. Create that GitHub environment first (main only, required reviewer; docs/runbooks/deploy.md). Re-apply `bootstrap` once to remove the old `ci_state_blob` role from sp-tidal-ci.
-5. After apply: run `docs/rbac/sql-grants.sql` as the SQL Entra admin; set GitHub environment variables
+5. After apply: run `docs/rbac/sql-grants.sql` as the SQL Entra admin; set GitHub environment secrets (`gh secret set --env dev-deploy`)
    `TIDAL_KEDA_CLIENT_ID` (output `keda_identity`) on the `dev-deploy` environment, and set that environment's own `AZURE_CLIENT_ID` to the output
    `deploy_client_id` (`deploy.yml` runs in `dev-deploy`; `sp-tidal-ci` keeps the `dev` environment).
 6. AKS: the human applier creates namespace `tidal` (`kubectl create namespace tidal`) before the namespace-scoped RBAC Writer
@@ -51,6 +51,6 @@ nightly and manual, not a required check).
 az login   # Reader on the subscription + Graph Application.Read.All
 GITHUB_REPOSITORY=<owner>/<repo> scripts/rbac-export.sh --check docs/rbac/expected.json
 ```
-The nightly job uses the read-only app `sp-tidal-rbac-drift` (environment `rbac-drift`, restricted to main; variable `AZURE_RBAC_DRIFT_CLIENT_ID`; created by `bootstrap` since T-408). It holds the custom role `tidal-rbac-drift-reader` (reads only, no state access) at subscription scope and Graph `Application.Read.All`. Run by hand, `az login` needs the same. `sp-tidal-ci-plan` (PR plans) is covered by the same check. The Graph grants sit on the Microsoft Graph service principal and are not part of the export. The export also lists assignments of known Tidal principals at any scope (not only inside the resource group). Humans (`<user>`) and groups (`<group>`) are normalized; secrets never appear. Update
+The nightly job uses the read-only app `sp-tidal-rbac-drift` (environment `rbac-drift`, restricted to main; environment secret `AZURE_RBAC_DRIFT_CLIENT_ID`; created by `bootstrap` since T-408). It holds the custom role `tidal-rbac-drift-reader` (reads only, no state access) at subscription scope and Graph `Application.Read.All`. Run by hand, `az login` needs the same. `sp-tidal-ci-plan` (PR plans) is covered by the same check. The Graph grants sit on the Microsoft Graph service principal and are not part of the export. The export also lists assignments of known Tidal principals at any scope (not only inside the resource group). Humans (`<user>`) and groups (`<group>`) are normalized; secrets never appear. Update
 `expected.json` in the same PR as any intentional change (regenerate with `scripts/rbac-export.sh` and review the diff).
 Known limit: the SQL roles and Kubernetes RBAC inside the cluster are not exported.

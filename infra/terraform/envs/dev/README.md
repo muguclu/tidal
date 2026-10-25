@@ -56,7 +56,7 @@ this task the identities exist but hold no roles.
 
 ## NEEDS-CLOUD: human-only steps
 
-Agents and CI never run these. CI runs `plan` read-only once `AZURE_PLAN_CLIENT_ID` is set
+Agents and CI never run these. CI runs `plan` read-only once the `AZURE_PLAN_CLIENT_ID` secret is set
 (`.github/workflows/iac.yml`).
 
 0. **SQL Entra admin group** (once). SQL is Entra-only, so the server needs an admin group before the first apply:

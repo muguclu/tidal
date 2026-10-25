@@ -749,6 +749,25 @@ def _reconciliation_section(wk: Sequence[CostRow], book: PriceBook, currency: st
     return out
 
 
+# --- Redaction --------------------------------------------------------------------------------------
+
+_GUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+_SUBSCRIPTION_RE = re.compile(rf"/subscriptions/{_GUID}", re.IGNORECASE)
+_GUID_RE = re.compile(rf"{_GUID}|(?<![0-9a-fA-F])[0-9a-fA-F]{{32}}(?![0-9a-fA-F])")
+
+
+def redact(text: str) -> str:
+    """Remove tenant-identifying GUIDs from report text (T-609, ADR-0008 R-29).
+
+    The repository is public, so CI job summaries and artifacts are world-readable.
+    ``/subscriptions/<guid>`` becomes ``/subscriptions/<sub>`` and every other GUID (resource ids,
+    principal or client ids) becomes ``<id>``. Resource group and resource names are **kept**: they
+    are deterministic from the public Terraform naming and the report needs them to be useful.
+    Digits, money amounts and dates never match a GUID, so no number changes.
+    """
+    return _GUID_RE.sub("<id>", _SUBSCRIPTION_RE.sub("/subscriptions/<sub>", text))
+
+
 # --- CLI --------------------------------------------------------------------------------------------
 
 
@@ -759,8 +778,12 @@ def generate(
     prices: Path,
     cost_model: Path,
     week: str | None,
+    redact_ids: bool = True,
 ) -> Path:
-    """Read exports (oldest first), write ``cost-weekly-<YYYY-Www>.md`` into ``out_dir`` and return its path."""
+    """Read exports (oldest first), write ``cost-weekly-<YYYY-Www>.md`` into ``out_dir`` and return its path.
+
+    ``redact_ids`` (default on) strips subscription and other GUIDs via :func:`redact`.
+    """
     snapshots = [snap for snap in expand_snapshots(exports) if snap]
     if not snapshots:
         msg = "no export CSV files found"
@@ -778,6 +801,8 @@ def generate(
         cost_model_text=cost_model.read_text(encoding="utf-8"),
         source_names=[f.name for f in files],
     )
+    if redact_ids:
+        text = redact(text)
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / f"cost-weekly-{iso_week_label(window[0])}.md"
     target.write_text(text, encoding="utf-8", newline="\n")
@@ -796,6 +821,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--week", default=None, help="ISO week, e.g. 2026-W44 (default: week of the latest day)"
     )
+    parser.add_argument(
+        "--no-redact",
+        action="store_true",
+        help="keep subscription/resource GUIDs in the report (local use only; CI must redact)",
+    )
     args = parser.parse_args(argv)
     try:
         target = generate(
@@ -804,6 +834,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             prices=args.prices,
             cost_model=args.cost_model,
             week=args.week,
+            redact_ids=not args.no_redact,
         )
     except CostReportError as exc:
         print(f"error: {exc}", file=sys.stderr)  # noqa: T201 - CLI

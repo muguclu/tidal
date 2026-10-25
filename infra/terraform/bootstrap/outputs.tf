@@ -1,15 +1,15 @@
 output "tenant_id" {
-  description = "Entra tenant ID (GitHub variable AZURE_TENANT_ID)."
+  description = "Entra tenant ID (GitHub secret AZURE_TENANT_ID). Not a credential, but kept out of public CI logs (ADR-0008 R-29)."
   value       = data.azuread_client_config.current.tenant_id
 }
 
 output "subscription_id" {
-  description = "Subscription ID (GitHub variable AZURE_SUBSCRIPTION_ID)."
+  description = "Subscription ID (GitHub secret AZURE_SUBSCRIPTION_ID). Not a credential, but kept out of public CI logs (ADR-0008 R-29)."
   value       = var.subscription_id
 }
 
 output "ci_client_id" {
-  description = "Application (client) ID of sp-tidal-ci (GitHub variable AZURE_CLIENT_ID). Not a secret."
+  description = "Application (client) ID of sp-tidal-ci (GitHub secret AZURE_CLIENT_ID). Not a credential, but kept out of public CI logs (ADR-0008 R-29)."
   value       = azuread_application.ci.client_id
 }
 
@@ -49,7 +49,7 @@ output "backend_config" {
 }
 
 output "ci_plan_client_id" {
-  description = "Application (client) ID of sp-tidal-ci-plan (GitHub repository variable AZURE_PLAN_CLIENT_ID). Not a secret."
+  description = "Application (client) ID of sp-tidal-ci-plan (GitHub repository secret AZURE_PLAN_CLIENT_ID). Not a credential, but kept out of public CI logs (ADR-0008 R-29)."
   value       = azuread_application.ci_plan.client_id
 }
 
@@ -59,7 +59,7 @@ output "ci_plan_service_principal_object_id" {
 }
 
 output "rbac_drift_client_id" {
-  description = "Application (client) ID of sp-tidal-rbac-drift (GitHub variable AZURE_RBAC_DRIFT_CLIENT_ID). Not a secret."
+  description = "Application (client) ID of sp-tidal-rbac-drift (GitHub environment secret AZURE_RBAC_DRIFT_CLIENT_ID). Not a credential, but kept out of public CI logs (ADR-0008 R-29)."
   value       = azuread_application.rbac_drift.client_id
 }
 

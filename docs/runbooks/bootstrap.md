@@ -60,18 +60,19 @@ gh api repos/muguclu/tidal/environments/dev/deployment-branch-policies --jq '[.b
 ```
 Each smoke run then waits for approval, and runs dispatched from other branches are rejected.
 
-### Set the GitHub variables (variables, not secrets)
+### Set the GitHub secrets (secrets, not variables)
+The repo is public and `vars.*` print unmasked in step headers, so every Azure ID is a secret (ADR-0008 R-29). Secrets are masked in logs. Fork PRs get none, which matches the no-OIDC-for-forks behaviour.
 ```bash
 cd infra/terraform/bootstrap
-gh variable set AZURE_CLIENT_ID       --repo muguclu/tidal --body "$(terraform output -raw ci_client_id)"
-gh variable set AZURE_TENANT_ID       --repo muguclu/tidal --body "$(terraform output -raw tenant_id)"
-gh variable set AZURE_SUBSCRIPTION_ID --repo muguclu/tidal --body "$(terraform output -raw subscription_id)"
+gh secret set AZURE_CLIENT_ID         --repo muguclu/tidal --body "$(terraform output -raw ci_client_id)"
+gh secret set AZURE_TENANT_ID         --repo muguclu/tidal --body "$(terraform output -raw tenant_id)"
+gh secret set AZURE_SUBSCRIPTION_ID   --repo muguclu/tidal --body "$(terraform output -raw subscription_id)"
 ```
 The OIDC subject for the main credential is `repo:muguclu/tidal:environment:dev`, so the environment name must be exactly `dev`.
 
-The plan identity uses a repository variable (no environment, so it works for PRs):
+The plan identity uses repository secrets (no environment, so it works for PRs; the preflight jobs of `iac.yml` and `cost.yml` read repository secrets only):
 ```bash
-gh variable set AZURE_PLAN_CLIENT_ID --repo muguclu/tidal --body "$(terraform output -raw ci_plan_client_id)"
+gh secret set AZURE_PLAN_CLIENT_ID --repo muguclu/tidal --body "$(terraform output -raw ci_plan_client_id)"
 ```
 `iac.yml` job `plan` runs on `pull_request` (subject `repo:muguclu/tidal:pull_request`) and on `push` to main (subject
 `repo:muguclu/tidal:ref:refs/heads/main`), hence two credentials. The identity holds no write role, which is what makes the `pull_request`
@@ -82,7 +83,7 @@ The nightly drift job uses the separate app `sp-tidal-rbac-drift`, so it needs n
 GitHub environment `rbac-drift` first and restrict it to `main` (same calls as for `dev` above, without a reviewer: the job is read-only and
 scheduled), then:
 ```bash
-gh variable set AZURE_RBAC_DRIFT_CLIENT_ID --repo muguclu/tidal --env rbac-drift --body "$(terraform output -raw rbac_drift_client_id)"
+gh secret set AZURE_RBAC_DRIFT_CLIENT_ID --repo muguclu/tidal --env rbac-drift --body "$(terraform output -raw rbac_drift_client_id)"
 ```
 
 ### Import the hand-made `sp-tidal-ci-plan` (before the first apply that includes T-408)
@@ -118,7 +119,7 @@ terraform import 'azuread_app_role_assignment.ci_plan_graph_application_read_all
 terraform plan   # must show only the missing pieces (for example the main credential) and no create of the application or service principal
 ```
 Terraform does not remove extras on the hand-made app (other role assignments or credentials): delete them by hand
-(`az role assignment delete`, `az ad app federated-credential delete`) and let `rbac-drift` confirm. The `AZURE_PLAN_CLIENT_ID` variable
+(`az role assignment delete`, `az ad app federated-credential delete`) and let `rbac-drift` confirm. The `AZURE_PLAN_CLIENT_ID` secret
 already holds the right value after an import (same client id). `sp-tidal-rbac-drift` is new: nothing to import, but create it only after
 the `rbac-drift` environment exists.
 
@@ -148,8 +149,8 @@ The state account is protected by `prevent_destroy` and a `CanNotDelete` lock, s
 - [ ] `terraform apply` of bootstrap done by a human; `terraform plan` shows no drift
 - [ ] State account hardening verified (steps 1-2)
 - [ ] `dev` environment has required reviewer and `main`-only branch policy (verification calls above)
-- [ ] GitHub variables `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` set; environment `dev` exists
-- [ ] T-408: hand-made `sp-tidal-ci-plan` imported, `terraform plan` clean, `AZURE_PLAN_CLIENT_ID` set; environment `rbac-drift` (main only) created, `AZURE_RBAC_DRIFT_CLIENT_ID` set, `rbac-drift` run via `workflow_dispatch` is green
+- [ ] GitHub secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` set; environment `dev` exists
+- [ ] T-408: hand-made `sp-tidal-ci-plan` imported, `terraform plan` clean, `AZURE_PLAN_CLIENT_ID` secret set; environment `rbac-drift` (main only) created, `AZURE_RBAC_DRIFT_CLIENT_ID` secret set, `rbac-drift` run via `workflow_dispatch` is green
 - [ ] `oidc-smoke` workflow green (`az account show` succeeds)
 - [ ] `backend_config` output handed to the T-12x env task
 - [ ] Orchestrator marks T-008 done in `docs/tasks/TASKS.md`

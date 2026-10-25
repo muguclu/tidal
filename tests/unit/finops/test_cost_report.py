@@ -1,5 +1,6 @@
 """Tests for the weekly cost report (T-502); fixtures in tests/fixtures/finops."""
 
+import re
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -157,3 +158,58 @@ def test_directory_runs_are_snapshots_and_partitions_are_kept(tmp_path: Path) ->
     assert len(snaps) == 1
     assert len(snaps[0]) == 2
     assert len(cr.merge_snapshots(snaps)) == len(rows)
+
+
+SUB = "12345678-90ab-cdef-1234-567890abcdef"
+OTHER = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+
+def test_redact_subscription_and_guids_keep_names() -> None:
+    rid = f"/subscriptions/{SUB}/resourceGroups/rg-tidal-dev/providers/Microsoft.App/ca-x/{OTHER}"
+    out = cr.redact(f"| {rid} | 12.34 EUR |")
+    assert SUB not in out
+    assert OTHER not in out
+    assert "/subscriptions/<sub>/resourceGroups/rg-tidal-dev/" in out
+    assert "Microsoft.App/ca-x/<id>" in out
+    assert "12.34 EUR" in out
+
+
+def test_redact_is_case_insensitive() -> None:
+    assert cr.redact(f"/SUBSCRIPTIONS/{SUB.upper()}/x") == "/subscriptions/<sub>/x"
+
+
+def test_report_redaction_does_not_change_numbers(tmp_path: Path) -> None:
+    raw = cr.generate(
+        [A, B],
+        out_dir=tmp_path / "raw",
+        prices=PRICES,
+        cost_model=MODEL,
+        week="2026-W43",
+        redact_ids=False,
+    )
+    red = _gen(tmp_path / "red", [A, B])
+    raw_text = raw.read_text(encoding="utf-8")
+    assert cr.redact(raw_text) == red.read_text(encoding="utf-8")
+    nums = r"\d+(?:[.,]\d+)*"
+    assert re.findall(nums, raw_text) == re.findall(nums, cr.redact(raw_text))
+
+
+def test_redact_catches_hyphenless_guid() -> None:
+    raw = "abcdef0123456789abcdef0123456789"
+    assert cr.redact(f"id {raw} end") == "id <id> end"
+    assert cr.redact("amount 12345678.90 and 2026-10-24") == "amount 12345678.90 and 2026-10-24"
+
+
+def test_cli_redacts_by_default_and_accepts_no_redact(tmp_path: Path) -> None:
+    # Fixture guarantee: put a subscription GUID where the report prints it (the source file name).
+    guid = "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"
+    src = tmp_path / f"part_{guid}.csv"
+    src.write_bytes(A.read_bytes())
+    args = ["--export", str(src), "--week", "2026-W43"]
+    assert cr.main([*args, "--out-dir", str(tmp_path / "a")]) == 0
+    assert cr.main([*args, "--out-dir", str(tmp_path / "b"), "--no-redact"]) == 0
+    red = next((tmp_path / "a").glob("*.md")).read_text(encoding="utf-8")
+    raw = next((tmp_path / "b").glob("*.md")).read_text(encoding="utf-8")
+    assert guid in raw
+    assert guid not in red
+    assert cr.redact(raw) == red

@@ -1,8 +1,8 @@
 name: oidc-smoke
 
 # Manual check that GitHub OIDC -> Entra (sp-tidal-ci) works. T-008, NEEDS-CLOUD.
-# Requires repository variables AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
-# (variables, not secrets: none of them is confidential) and the GitHub environment "dev".
+# Requires repository SECRETS AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+# (secrets, not variables: the repo is public and vars print unmasked in step headers, ADR-0008 R-29) and the GitHub environment "dev".
 
 on:
   workflow_dispatch:
@@ -23,11 +23,12 @@ jobs:
       - name: Azure login (OIDC)
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           # sp-tidal-ci has no subscription/RG role until later tasks; login must still succeed.
           allow-no-subscriptions: true
 
       - name: Show account
-        run: az account show --query "{subscription:id, tenant:tenantId, user:user.name, type:user.type}" -o table
+        # Public repo: never print subscription, tenant or principal IDs (ADR-0008 R-29).
+        run: az account show --query "{state:state, type:user.type}" -o table
