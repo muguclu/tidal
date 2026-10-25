@@ -94,7 +94,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | ID | Title | Deps | Owns | Done when | Status |
 |---|---|---|---|---|---|
 | T-209 | Wire reader; split `tidal-query` service | T-111, T-208 | `src/tidal/api/routers/*` (read), `src/tidal/query/service.py`, `src/tidal/api/app.py` (run/lifespan), `docker-compose.yml` (query service) | `X-Tidal-Tier` correct; internal call via MI | done |
-| T-210 | Arrow/Parquet streaming, as_of, fill | T-209 | `src/tidal/api/streaming.py` +tests; also `api/routers/{bars,ticks}.py`, `api/pagination.py`, `query/service.py`, `query/protocols.py` (additive `ObservedRowStream`), `query/reader.py` (`RowStream` tier reporting only), `docs/contracts/api-contract.md` §1 (docs note) | 10M rows RSS < 500 MB | todo |
+| T-210 | Arrow/Parquet streaming, as_of, fill | T-209 | `src/tidal/api/streaming.py` +tests; also `api/routers/{bars,ticks}.py`, `api/pagination.py`, `query/service.py`, `query/protocols.py` (additive `ObservedRowStream`), `query/reader.py` (`RowStream` tier reporting only), `docs/contracts/api-contract.md` §1 (docs note) | 10M rows RSS < 500 MB | done |
 
 **Gate G2**
 
@@ -174,7 +174,7 @@ Tasks that add Azure resources write `docs/finops/deltas/T-xxx.md` instead of ed
 | T-601 | README + architecture diagram | docs-writer | G5 | `README.md`, `docs/img/architecture.*` | 5-minute read; numbers from report | done |
 | T-602 | Runbooks | docs-writer | G5 | `docs/runbooks/**` | park/unpark, DLQ, key rotation, restore | done |
 | T-603 | Demo script + video outline | docs-writer | T-601 | `docs/demo.md` | 3-minute script | done |
-| T-604 | Final review pass | code-reviewer + security-reviewer | T-601 | review comments only | no open blocking findings | todo |
+| T-604 | Final review pass | code-reviewer + security-reviewer | T-601 | review comments only | no open blocking findings | done |
 | T-605 | Launch post draft | docs-writer | T-603 | `docs/launch-post.md` | LinkedIn-length, business framing | done |
 | T-606 | API Service Bus producer (found by the T-603 demo dry run) | api-engineer | T-303, T-410 | `src/tidal/api/bus.py`, `src/tidal/api/app.py` (run/lifespan), `tests/unit/api/test_bus.py`, `tests/integration/test_api_bus.py` | `POST /v1/backtests` and `/v1/admin/tiering/run` return 202 against the emulator; MI + FQDN only off local; coroutine-safe senders | done |
 | T-607 | SQL job store + in-process result aggregator (found by the T-603 demo dry run) | api-engineer | T-304, T-606 | `src/tidal/api/job_store.py`, `src/tidal/api/app.py` (run/lifespan), `docs/rbac/sql-grants.sql`, `tests/unit/api/test_job_store.py`, `tests/integration/test_job_store_sql.py` | locally: `POST /v1/backtests` -> 202, worker -> `backtest-results`, aggregator (SPEC-05 §4: in the API) -> `GET /v1/backtests/{id}` `succeeded` with metrics; id-api gets `SELECT, INSERT, UPDATE` on `ops.backtest_job` only | done |

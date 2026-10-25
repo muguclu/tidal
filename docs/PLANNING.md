@@ -120,7 +120,7 @@ Cost exporter, measured before/after for each optimisation, dashboards, alerts, 
 
 ### Phase 6 — Polish (Wave 6)
 README, architecture diagram, runbooks, demo script, 3-minute video, LinkedIn post draft.
-**Gate G6 = portfolio-ready** (see CLAUDE.md §9).
+**Gate G6 = portfolio-ready** (see CLAUDE.md §9). Status: PASS locally, recording and posting are human steps — `docs/status/2026-W43-G6.md`.
 
 ## 5. Timeline (part-time, ~10 h/week)
 
