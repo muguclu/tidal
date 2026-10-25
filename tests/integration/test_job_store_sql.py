@@ -217,6 +217,30 @@ async def test_update_parent_is_monotonic_and_keeps_finished_at(store: SqlBackte
     assert again.finished_at == fin
 
 
+async def test_update_parent_same_done_count_keeps_higher_succeeded(
+    store: SqlBacktestStore,
+) -> None:
+    """An ENQUEUE_FAILED override turns a failure into a success at the same done count."""
+    rows = _sweep(2)
+    await store.insert(rows)
+    parent = rows[0].job_id
+    fin = T0 + timedelta(minutes=5)
+    await store.update_parent(
+        parent, status=JobStatus.SUCCEEDED, succeeded=2, failed=0, finished_at=fin
+    )
+    # stale snapshot taken before the override: same done count (2), one more failure
+    await store.update_parent(
+        parent, status=JobStatus.PARTIAL, succeeded=1, failed=1, finished_at=fin
+    )
+    got = await store.get(parent)
+    assert got is not None
+    assert (got.status, got.children_succeeded, got.children_failed) == (
+        JobStatus.SUCCEEDED,
+        2,
+        0,
+    )
+
+
 async def test_list_parents_keyset_by_owner_status_and_excludes_children(
     store: SqlBacktestStore,
 ) -> None:

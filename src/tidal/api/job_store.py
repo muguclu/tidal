@@ -65,7 +65,7 @@ _UPDATE_PARENT = text(
     "UPDATE ops.backtest_job SET status = :status, children_succeeded = :succeeded, "
     "children_failed = :failed, finished_at = COALESCE(finished_at, :finished_at) "
     "WHERE job_id = :job_id AND COALESCE(children_succeeded, 0) + COALESCE(children_failed, 0) "
-    "<= :done"
+    "<= :done AND COALESCE(children_succeeded, 0) <= :succeeded"
 )
 _STALE = text(
     "SELECT job_id FROM ops.backtest_job WHERE status IN ('queued', 'running') "

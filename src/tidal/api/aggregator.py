@@ -120,9 +120,11 @@ class BacktestStore(Protocol):
     ) -> None:
         """Set status and counters, monotonically; never overwrites a non-null ``finished_at``.
 
-        Writes only if the new done count (succeeded + failed) is >= the stored one; SQL form:
+        Writes only if the new done count (succeeded + failed) and the new succeeded count are
+        both >= the stored ones (an ENQUEUE_FAILED override turns a failure into a success at the
+        same done count, so a stale snapshot must not win); SQL form:
         ``UPDATE ... WHERE job_id = :id AND COALESCE(children_succeeded, 0) +
-        COALESCE(children_failed, 0) <= :done``.
+        COALESCE(children_failed, 0) <= :done AND COALESCE(children_succeeded, 0) <= :succeeded``.
         """
         ...
 
