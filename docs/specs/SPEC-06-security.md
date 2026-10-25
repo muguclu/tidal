@@ -19,7 +19,7 @@ Owner agents: `infra-engineer`, `api-engineer`; reviewer: `security-reviewer` ·
 
 | Identity | Storage (md, reference) | Storage (backtests) | SQL | Service Bus | Key Vault | ACR |
 |---|---|---|---|---|---|---|
-| id-api | Blob Data Reader | Blob Data Reader | db_datareader + exec on `ops` procs | Data Sender (`backtest-jobs`, `tiering-jobs`), Data Receiver (`backtest-results`) | Secrets User on secrets `cursor-hmac-key` and `appinsights-connection-string` | AcrPull on the registry (only while `enable_app_service` is true) |
+| id-api | Blob Data Reader | Blob Data Reader | db_datareader + exec on `ops` procs + `SELECT, INSERT, UPDATE` on `ops.backtest_job` (T-607) | Data Sender (`backtest-jobs`, `tiering-jobs`), Data Receiver (`backtest-results`) | Secrets User on secrets `cursor-hmac-key` and `appinsights-connection-string` | AcrPull on the registry (only while `enable_app_service` is true) |
 | id-query | Blob Data Reader | — | db_datareader | — | Secrets User on secret `appinsights-connection-string` | AcrPull on the registry |
 | id-worker | Blob Data Reader | Blob Data Contributor | calls tidal-query (app role/audience per T-402), no SQL access (ADR-0016) | Data Receiver (`backtest-jobs`), Data Sender (`backtest-results`) | — | — |
 | id-ingest | Blob Data Contributor (`raw`,`marketdata`,`reference`) | — | db_datareader + db_datawriter on `md`, `ref`, `ops` (checkpoints, instrument first/last ts) | — | — | AcrPull on the registry |

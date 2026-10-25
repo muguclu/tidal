@@ -36,6 +36,7 @@ from tidal.common.logging import (
     get_logger,
 )
 from tidal.common.timeutil import Clock, FixedClock, clock_from_settings
+from tidal.contracts.paths import CONTAINER_BACKTESTS
 from tidal.contracts.schemas import Interval
 from tidal.ingest.router import Routed, Router
 from tidal.ingest.sources import synthetic as syn
@@ -98,7 +99,13 @@ def build_store(settings: Settings) -> ObjectStore:
 
     if conn is not None:
         service = BlobServiceClient.from_connection_string(conn.get_secret_value())
-        for name in (layout.CONTAINER_MARKETDATA, layout.CONTAINER_RAW):
+        # Azurite only (Terraform creates them in Azure): every container a local process writes to.
+        for name in (
+            layout.CONTAINER_MARKETDATA,
+            layout.CONTAINER_RAW,
+            layout.CONTAINER_REFERENCE,
+            CONTAINER_BACKTESTS,
+        ):
             if not service.get_container_client(name).exists():
                 service.create_container(name)
     else:
