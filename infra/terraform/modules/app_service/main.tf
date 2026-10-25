@@ -56,10 +56,12 @@ resource "azurerm_linux_web_app" "this" {
   }
 
   site_config {
-    always_on                                     = true
-    http2_enabled                                 = true
-    minimum_tls_version                           = "1.2"
-    ftps_state                                    = "Disabled"
+    always_on           = true
+    http2_enabled       = true
+    minimum_tls_version = "1.2"
+    ftps_state          = "Disabled"
+    # Key Vault references resolve through the VNet when the integration subnet is set (private networking).
+    vnet_route_all_enabled                        = var.vnet_integration_subnet_id != null
     remote_debugging_enabled                      = false
     health_check_path                             = var.health_check_path
     health_check_eviction_time_in_min             = 5
@@ -88,6 +90,9 @@ resource "azurerm_linux_web_app" "this" {
   }
 
   app_settings = local.app_settings
+
+  # @Microsoft.KeyVault(...) settings are resolved with the user-assigned identity (there is no system-assigned one).
+  key_vault_reference_identity_id = var.identity_id
 
   # Application and HTTP logs go to the app filesystem with a short retention: no extra meter, and it keeps the
   # 0.2 GB/day Log Analytics cap for OpenTelemetry. Detailed errors and failed request tracing are filesystem-only too. The 35 MB quota makes App Service stop writing when full.

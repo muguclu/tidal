@@ -38,6 +38,24 @@ locals {
     TIDAL_SERVICEBUS__FQDN              = module.servicebus.fqdn
   }
 
+  # Key Vault URL (trailing slash removed) and the versionless URI of the App Insights connection string secret
+  # (rbac.tf). The value is never in state or in the settings: App Service resolves the reference with the api identity,
+  # Container Apps resolves the secret with the query identity (both hold Key Vault Secrets User on that one secret).
+  apps_key_vault_url        = trimsuffix(module.key_vault.vault_uri, "/")
+  apps_otel_secret_uri      = "${local.apps_key_vault_url}/secrets/${azapi_resource.appinsights_connection_string.name}"
+  apps_otel_app_service_ref = "@Microsoft.KeyVault(SecretUri=${local.apps_otel_secret_uri})"
+
+  # Entra-derived keys per app (local.entra_config in entra.tf). Without them the api rejects every azp
+  # and tidal-query refuses to start (empty caller allowlists).
+  apps_api_entra_env = {
+    for k in ["TIDAL_AUTH__AUDIENCE", "TIDAL_AUTH__API_APP_CLIENT_ID", "TIDAL_AUTH__ALLOWED_CLIENT_IDS", "TIDAL_QUERY__AUDIENCE", "TIDAL_QUERY__APP_CLIENT_ID"] :
+    k => local.entra_config[k]
+  }
+  apps_query_entra_env = {
+    for k in ["TIDAL_QUERY__AUDIENCE", "TIDAL_QUERY__APP_CLIENT_ID", "TIDAL_AUTH__QUERY_CALLER_CLIENT_IDS", "TIDAL_AUTH__QUERY_CALLER_OBJECT_IDS"] :
+    k => local.entra_config[k]
+  }
+
   # Identities that pull the tidal image from ACR (SPEC-06 section 2 lists no ACR role for them; AcrPull is the
   # least-privilege way to pull with a managed identity, scoped to the registry only).
   apps_acr_pull_identities = merge(
@@ -80,8 +98,7 @@ module "container_apps" {
   component           = "compute"
 
   # Environment logs go to the shared workspace, which already has the 0.2 GB/day cap (cost-model).
-  # TIDAL_OTEL__CONNECTION_STRING is not wired: it needs a Key Vault secret that no module creates yet
-  # (secret { key_vault_secret_id, identity } on the app, planned with T-403/T-501); until then telemetry export stays off.
+  # TIDAL_OTEL__CONNECTION_STRING reaches tidal-query as a Container Apps secret backed by Key Vault (query.key_vault_env).
   log_analytics_workspace_id = module.log_analytics.workspace_id
 
   # Flag on (network.tf): the environment moves into snet-aca with an internal load balancer, so tidal-query is reachable
@@ -96,8 +113,11 @@ module "container_apps" {
   query = {
     identity_id        = module.identity.identities["id-query"].id
     identity_client_id = module.identity.identities["id-query"].client_id
-    extra_env = {
+    extra_env = merge(local.apps_query_entra_env, {
       TIDAL_AUTH__TENANT_ID = data.azurerm_client_config.current.tenant_id
+    })
+    key_vault_env = {
+      TIDAL_OTEL__CONNECTION_STRING = local.apps_otel_secret_uri
     }
   }
 
@@ -152,7 +172,7 @@ module "container_apps" {
   )
 
   # The identities must be able to pull before the first revision is created.
-  depends_on = [azurerm_role_assignment.apps_acr_pull]
+  depends_on = [azurerm_role_assignment.apps_acr_pull, azurerm_role_assignment.apps_kv_otel]
 }
 
 module "app_service" {
@@ -175,12 +195,14 @@ module "app_service" {
   # snet-app when enable_private_networking is true (network.tf), null otherwise.
   vnet_integration_subnet_id = module.network.app_subnet_id
 
-  app_settings = merge(local.apps_common_env, {
-    TIDAL_QUERY__BASE_URL = "https://${module.container_apps.query_fqdn}"
-    TIDAL_AUTH__TENANT_ID = data.azurerm_client_config.current.tenant_id
+  app_settings = merge(local.apps_common_env, local.apps_api_entra_env, {
+    TIDAL_QUERY__BASE_URL         = "https://${module.container_apps.query_fqdn}"
+    TIDAL_AUTH__TENANT_ID         = data.azurerm_client_config.current.tenant_id
+    TIDAL_CURSOR__KEYVAULT_URL    = local.apps_key_vault_url
+    TIDAL_OTEL__CONNECTION_STRING = local.apps_otel_app_service_ref
   })
 
-  depends_on = [azurerm_role_assignment.apps_acr_pull]
+  depends_on = [azurerm_role_assignment.apps_acr_pull, azurerm_role_assignment.apps_kv_otel]
 }
 
 # Flag off: only the web app's outbound IPs may call tidal-query. Patched with azapi because the web app needs the query
