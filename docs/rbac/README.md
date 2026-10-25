@@ -40,7 +40,7 @@ nightly and manual, not a required check).
 2. Entra: Application Administrator (or Graph `Application.ReadWrite.All` + `AppRoleAssignment.ReadWrite.All`) for `sp-tidal-deploy`.
 3. Nothing extra for the secrets: the applier writes them through ARM (`Microsoft.KeyVault/vaults/secrets/write`, included in Owner/Contributor), no Key Vault data-plane role.
 4. tfvars: `ci_client_id` (output of `bootstrap`), `github_repo_path` (`owner/repo`); `deploy_github_environment` defaults to `dev-deploy`. Create that GitHub environment first (main only, required reviewer; docs/runbooks/deploy.md). Re-apply `bootstrap` once to remove the old `ci_state_blob` role from sp-tidal-ci.
-5. After apply: run `docs/rbac/sql-grants.sql` as the SQL Entra admin; set GitHub environment variables
+5. After apply: run `docs/rbac/sql-grants.sql` as the SQL Entra admin; set GitHub environment secrets (`gh secret set --env dev-deploy`)
    `TIDAL_KEDA_CLIENT_ID` (output `keda_identity`) on the `dev-deploy` environment, and set that environment's own `AZURE_CLIENT_ID` to the output
    `deploy_client_id` (`deploy.yml` runs in `dev-deploy`; `sp-tidal-ci` keeps the `dev` environment).
 6. AKS: the human applier creates namespace `tidal` (`kubectl create namespace tidal`) before the namespace-scoped RBAC Writer

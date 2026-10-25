@@ -9,8 +9,8 @@ name: cost
 # kept) and the raw export CSVs are never uploaded. Spend totals per resource name remain public by design.
 # Subject: no `environment:` is set on purpose. sp-tidal-ci-plan only trusts `ref:refs/heads/main` and
 # `pull_request`; a scheduled or dispatched run on main presents the first (docs/runbooks/bootstrap.md).
-# NEEDS-CLOUD: inactive until the repo variables AZURE_PLAN_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID and
-# TIDAL_COST_STORAGE_ACCOUNT are set and envs/dev has been applied with ci_plan_principal_id.
+# NEEDS-CLOUD: inactive until the repo secrets AZURE_PLAN_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID and the
+# variable TIDAL_COST_STORAGE_ACCOUNT are set and envs/dev has been applied with ci_plan_principal_id.
 
 on:
   schedule:
@@ -32,9 +32,35 @@ env:
   UV_LOCKED: "1"
 
 jobs:
+  # vars.* print unmasked in public logs, so the Azure ids are SECRETS; job-level `if:` cannot read secrets, hence this
+  # preflight (T-609 fix round 1). Unconfigured repos skip cleanly.
+  preflight:
+    name: preflight
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    outputs:
+      configured: ${{ steps.cfg.outputs.configured }}
+    steps:
+      - id: cfg
+        env:
+          PLAN_CLIENT: ${{ secrets.AZURE_PLAN_CLIENT_ID }}
+          TENANT: ${{ secrets.AZURE_TENANT_ID }}
+          SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          STORAGE: ${{ vars.TIDAL_COST_STORAGE_ACCOUNT }}
+        run: |
+          if [ -n "$PLAN_CLIENT" ] && [ -n "$TENANT" ] && [ -n "$SUB" ] && [ -n "$STORAGE" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::cost report skipped: Azure secrets / TIDAL_COST_STORAGE_ACCOUNT not configured"
+          fi
+
   report:
     name: weekly cost report
-    if: github.ref == 'refs/heads/main' && vars.AZURE_PLAN_CLIENT_ID != '' && vars.TIDAL_COST_STORAGE_ACCOUNT != ''
+    needs: preflight
+    if: needs.preflight.outputs.configured == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -66,9 +92,9 @@ jobs:
       - name: Azure login (OIDC, read-only identity)
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
-          client-id: ${{ vars.AZURE_PLAN_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_PLAN_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       # Blob paths keep their layout: <prefix><YYYYMMDD-YYYYMMDD>/<run id>/part_*.csv, so the report treats each run
       # directory as one snapshot and orders snapshots by path (= month order). Entra auth only; the account has
@@ -95,7 +121,7 @@ jobs:
           if [ -n "$REPORT_WEEK" ]; then args+=(--week "$REPORT_WEEK"); fi
           # Redaction is on by default; never pass --no-redact in CI (public repo).
           path="$(uv run --no-dev python -m tidal.finops.cost_report "${args[@]}")"
-          if grep -Eiq '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$path"; then
+          if grep -Eiq '[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}' "$path"; then
             echo "::error::GUID found in the report after redaction; refusing to publish" >&2; exit 1
           fi
           echo "path=$path" >> "$GITHUB_OUTPUT"

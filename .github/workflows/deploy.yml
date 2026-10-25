@@ -66,15 +66,15 @@ jobs:
       - name: Validate configuration variables
         id: urls
         env:
-          V_CLIENT: ${{ vars.AZURE_CLIENT_ID }}
-          V_TENANT: ${{ vars.AZURE_TENANT_ID }}
-          V_SUB: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          V_CLIENT: ${{ secrets.AZURE_CLIENT_ID }}
+          V_TENANT: ${{ secrets.AZURE_TENANT_ID }}
+          V_SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           V_WEBAPP: ${{ vars.TIDAL_WEBAPP_NAME }}
           V_QUERY: ${{ vars.TIDAL_QUERY_APP_NAME }}
           V_JOBS: ${{ vars.TIDAL_JOB_NAMES }}
           V_AKS: ${{ vars.TIDAL_AKS_NAME }}
-          V_WORKER: ${{ vars.TIDAL_WORKER_CLIENT_ID }}
-          V_KEDA: ${{ vars.TIDAL_KEDA_CLIENT_ID }}
+          V_WORKER: ${{ secrets.TIDAL_WORKER_CLIENT_ID }}
+          V_KEDA: ${{ secrets.TIDAL_KEDA_CLIENT_ID }}
           V_STORAGE: ${{ vars.TIDAL_STORAGE_URL }}
           V_SQL: ${{ vars.TIDAL_SQL_SERVER }}
           V_SB: ${{ vars.TIDAL_SERVICEBUS_FQDN }}
@@ -97,9 +97,9 @@ jobs:
       - name: Azure login (OIDC)
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Resolve and pin the image digest
         id: resolve
@@ -176,9 +176,9 @@ jobs:
         env:
           IMAGE_DIGEST: ${{ steps.resolve.outputs.digest }}
           AKS_NAME: ${{ vars.TIDAL_AKS_NAME }}
-          TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-          WORKER_CLIENT_ID: ${{ vars.TIDAL_WORKER_CLIENT_ID }}
-          KEDA_CLIENT_ID: ${{ vars.TIDAL_KEDA_CLIENT_ID }}
+          TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          WORKER_CLIENT_ID: ${{ secrets.TIDAL_WORKER_CLIENT_ID }}
+          KEDA_CLIENT_ID: ${{ secrets.TIDAL_KEDA_CLIENT_ID }}
           STORAGE_URL: ${{ vars.TIDAL_STORAGE_URL }}
           SQL_SERVER: ${{ vars.TIDAL_SQL_SERVER }}
           SB_FQDN: ${{ vars.TIDAL_SERVICEBUS_FQDN }}

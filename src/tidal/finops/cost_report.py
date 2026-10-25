@@ -753,7 +753,7 @@ def _reconciliation_section(wk: Sequence[CostRow], book: PriceBook, currency: st
 
 _GUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 _SUBSCRIPTION_RE = re.compile(rf"/subscriptions/{_GUID}", re.IGNORECASE)
-_GUID_RE = re.compile(_GUID)
+_GUID_RE = re.compile(rf"{_GUID}|(?<![0-9a-fA-F])[0-9a-fA-F]{{32}}(?![0-9a-fA-F])")
 
 
 def redact(text: str) -> str:

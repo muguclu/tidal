@@ -21,8 +21,8 @@ The chart and smoke tests are checked out at the tag's commit.
 Never trusted: a bare tag. Everything is deployed as `<acr>.azurecr.io/tidal@sha256:...` (App Service, Container Apps,
 Helm `image.digest`). The digest and UTC time are in the job summary.
 
-## Configuration source (no secrets, no Terraform in CI)
-The workflow reads **environment variables of the GitHub environment `dev-deploy`** that a human sets once after
+## Configuration source (IDs as environment secrets, names as environment variables; no Terraform in CI)
+The workflow reads **secrets and variables of the GitHub environment `dev-deploy`** that a human sets once after
 `terraform apply` (never from CI). Run in `infra/terraform/envs/dev`:
 
 ```bash
@@ -31,10 +31,12 @@ terraform output -raw resource_group_name; terraform output -raw aks_name
 terraform output -raw api_hostname; terraform output -json apps_job_names
 ```
 
-| Variable | Source |
+IDs are **secrets** (`gh secret set --env dev-deploy`), names and URLs stay variables (public repo: `vars.*` print unmasked in logs, ADR-0008 R-29; names are deterministic from the public Terraform naming).
+
+| Name | Source |
 |---|---|
-| `AZURE_CLIENT_ID` | **environment-scoped** to `dev-deploy`: output `deploy_client_id` (app `sp-tidal-deploy`). Never the `images.yml` app and never a repository-level variable |
-| `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `ACR_NAME` | as for `images.yml` |
+| `AZURE_CLIENT_ID` (secret) | **environment-scoped** to `dev-deploy`: output `deploy_client_id` (app `sp-tidal-deploy`). Never the `images.yml` app and never a repository-level secret |
+| `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (secrets), `ACR_NAME` (variable) | as for `images.yml` |
 | `TIDAL_RESOURCE_GROUP` | output `resource_group_name` |
 | `TIDAL_WEBAPP_NAME` | web app name, `app-tidal-api-dev-<suffix>` (output `api_hostname` minus `.azurewebsites.net`) |
 | `TIDAL_API_BASE_URL` | `https://<api_hostname>` |
@@ -42,8 +44,8 @@ terraform output -raw api_hostname; terraform output -json apps_job_names
 | `TIDAL_QUERY_BASE_URL` | `https://<query FQDN>` (module output `query_fqdn`, same value as `TIDAL_QUERY__BASE_URL`) |
 | `TIDAL_JOB_NAMES` | space separated values of output `apps_job_names` (`caj-tidal-...`) |
 | `TIDAL_AKS_NAME` | output `aks_name` |
-| `TIDAL_WORKER_CLIENT_ID` | `IDENTITY_CLIENT_ID_WORKER` |
-| `TIDAL_KEDA_CLIENT_ID` | output `keda_identity.client_id` (T-403) |
+| `TIDAL_WORKER_CLIENT_ID` (secret) | `IDENTITY_CLIENT_ID_WORKER` |
+| `TIDAL_KEDA_CLIENT_ID` (secret) | output `keda_identity.client_id` (T-403) |
 | `TIDAL_STORAGE_URL`, `TIDAL_SQL_SERVER`, `TIDAL_SERVICEBUS_FQDN` | `TIDAL_STORAGE__ACCOUNT_URL`, `TIDAL_SQL__SERVER`, `TIDAL_SERVICEBUS__FQDN` |
 
 Every value is format-validated in the first step; a missing or malformed one fails the run before any login.

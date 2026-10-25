@@ -194,7 +194,22 @@ def test_report_redaction_does_not_change_numbers(tmp_path: Path) -> None:
     assert re.findall(nums, raw_text) == re.findall(nums, cr.redact(raw_text))
 
 
+def test_redact_catches_hyphenless_guid() -> None:
+    raw = "abcdef0123456789abcdef0123456789"
+    assert cr.redact(f"id {raw} end") == "id <id> end"
+    assert cr.redact("amount 12345678.90 and 2026-10-24") == "amount 12345678.90 and 2026-10-24"
+
+
 def test_cli_redacts_by_default_and_accepts_no_redact(tmp_path: Path) -> None:
-    args = ["--export", str(A), "--week", "2026-W43"]
+    # Fixture guarantee: put a subscription GUID where the report prints it (the source file name).
+    guid = "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"
+    src = tmp_path / f"part_{guid}.csv"
+    src.write_bytes(A.read_bytes())
+    args = ["--export", str(src), "--week", "2026-W43"]
     assert cr.main([*args, "--out-dir", str(tmp_path / "a")]) == 0
     assert cr.main([*args, "--out-dir", str(tmp_path / "b"), "--no-redact"]) == 0
+    red = next((tmp_path / "a").glob("*.md")).read_text(encoding="utf-8")
+    raw = next((tmp_path / "b").glob("*.md")).read_text(encoding="utf-8")
+    assert guid in raw
+    assert guid not in red
+    assert cr.redact(raw) == red

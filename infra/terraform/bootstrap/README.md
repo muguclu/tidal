@@ -41,7 +41,7 @@ Provider requirements: Terraform >= 1.9, azurerm ~> 4.0, azuread ~> 3.0.
 
 ## Outputs
 
-`tenant_id`, `subscription_id`, `ci_client_id`, `ci_service_principal_object_id`, `ci_plan_client_id` (GitHub variable `AZURE_PLAN_CLIENT_ID`), `ci_plan_service_principal_object_id`, `rbac_drift_client_id` (GitHub variable `AZURE_RBAC_DRIFT_CLIENT_ID`), `rbac_drift_service_principal_object_id`,
+`tenant_id`, `subscription_id`, `ci_client_id`, `ci_service_principal_object_id`, `ci_plan_client_id` (GitHub secret `AZURE_PLAN_CLIENT_ID`), `ci_plan_service_principal_object_id`, `rbac_drift_client_id` (GitHub variable `AZURE_RBAC_DRIFT_CLIENT_ID`), `rbac_drift_service_principal_object_id`,
 `state_resource_group_name`, `state_storage_account_name`, `state_container_name`, `backend_config`.
 
 ## Accepted checkov skips (inline in `main.tf`)
