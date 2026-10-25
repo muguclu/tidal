@@ -74,6 +74,19 @@ resource "azurerm_mssql_firewall_rule" "allow_azure_services" {
   end_ip_address   = "0.0.0.0"
 }
 
+# One firewall rule per allowed public IPv4 address (start = end, never a range, never 0.0.0.0). Only created while the
+# public endpoint is on; with enable_private_networking = true there are no rules at all. The keys are the addresses
+# themselves, so the list must be known at plan time (see the envs/dev two-step apply for addresses that are outputs of
+# other resources). Rules are free.
+resource "azurerm_mssql_firewall_rule" "allowed_ip" {
+  for_each = local.public_network_access_enabled ? toset(var.allowed_ip_addresses) : toset([])
+
+  name             = "allow-${replace(each.value, ".", "-")}"
+  server_id        = azurerm_mssql_server.this.id
+  start_ip_address = each.value
+  end_ip_address   = each.value
+}
+
 # Free offer (ADR-0011, LOCAL-DEV section 2): 100k vCore-s + 32 GB per month, AutoPause at the limit.
 # azurerm 4.81.0 has no native arguments (upstream PRs 32055 / 32277 open), so azapi sets the properties.
 # When azurerm ships use_free_limit / free_limit_exhaustion_behavior: set them on azurerm_mssql_database,

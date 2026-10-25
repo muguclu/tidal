@@ -24,7 +24,49 @@ variable "enable_tiering_event_job" {
   default     = true
 }
 
+variable "sql_app_outbound_rules_enabled" {
+  description = "Build the SQL firewall allow-list from the outbound IPs of the web app and of the Container Apps environment (T-610). These addresses exist only after the first apply, and the firewall rules are keyed by address, so a fresh environment needs two applies: first with false, then with true (docs/runbooks/deploy.md, SQL firewall). Ignored while enable_private_networking is true (no rules, private endpoint instead)."
+  type        = bool
+  default     = true
+}
+
+variable "sql_admin_ip_addresses" {
+  description = "Public IPv4 addresses of human operators who run docs/rbac/sql-grants.sql or sqlcmd against the dev server while the public endpoint is on (single addresses, no ranges, no 0.0.0.0). Temporary: set for one grants session, then reset to [] and re-apply the same day (home IPs get reassigned). Default empty."
+  type        = list(string)
+  default     = []
+
+  # Same check as modules/sql/variables.tf (allowed_ip_addresses): keep both in sync. Duplicated here to fail early.
+  validation {
+    condition = alltrue([
+      for ip in var.sql_admin_ip_addresses :
+      can(regex("^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$", ip)) && !contains(["0.0.0.0", "255.255.255.255"], ip)
+    ])
+    error_message = "sql_admin_ip_addresses must contain single dotted-quad IPv4 addresses (no CIDR ranges) and must not contain 0.0.0.0 or 255.255.255.255."
+  }
+}
+
+# Outbound addresses of tidal-query and of the Container Apps jobs that open SQL connections (id-query, id-ingest,
+# id-tiering). A consumption-only environment has no static outbound IP of its own: azurerm_container_app_environment
+# static_ip_address is the INBOUND address. The apps report the addresses they currently egress from, shared by every app
+# and job in the environment; Azure does not promise they never change (environment recreation, platform maintenance).
+# No depends_on on purpose: with it, any pending change in the module would defer the read and make the addresses unknown
+# at plan time. The read therefore needs the app to exist already, hence the two-step first apply.
+data "azurerm_container_app" "query_egress" {
+  count = var.sql_app_outbound_rules_enabled && !var.enable_private_networking ? 1 : 0
+
+  name                = module.container_apps.query_app_name
+  resource_group_name = module.resource_group.name
+}
+
 locals {
+  # SQL firewall allow-list (T-610). Empty with private networking (the private endpoint is the path) and during step 1 of
+  # a fresh environment. No 0.0.0.0 rule, no ranges: one rule per address.
+  sql_allowed_ip_addresses = var.enable_private_networking ? [] : distinct(concat(
+    var.sql_admin_ip_addresses,
+    var.sql_app_outbound_rules_enabled ? flatten(module.app_service[*].possible_outbound_ip_addresses) : [],
+    flatten(data.azurerm_container_app.query_egress[*].outbound_ip_addresses),
+  ))
+
   apps_image = "${module.acr.login_server}/tidal:${var.apps_image_tag}"
 
   # Non-secret config-contract keys shared by every app and job (docs/contracts/config-contract.md). TIDAL_ENV,

@@ -100,5 +100,22 @@ and `/ready`, query `/health/live`. The backtest-submit check (202) **skips** un
 `TIDAL_SMOKE_TOKEN` + `TIDAL_SMOKE_BACKTEST_JSON` are provided. Without URLs every test skips, so the normal suites are unaffected.
 The `smoke` marker is registered in `tests/smoke/conftest.py` (pyproject unchanged).
 
+## SQL firewall (T-610, public endpoint, `enable_private_networking = false`)
+The dev SQL server has no "Allow Azure services" rule. Each caller IP gets a single-address firewall rule
+(`modules/sql`, `allowed_ip_addresses`), built in `envs/dev/apps.tf` from the web app's `possible_outbound_ip_addresses`,
+the Container Apps environment egress addresses (read from tidal-query, shared by tidal-query and the three jobs) and
+`sql_admin_ip_addresses` (operator IPs, default empty). These addresses exist only after the apps exist and the rules are
+keyed by address, so Terraform cannot plan them on a fresh environment. Apply in two steps (human applier, no `-target`):
+1. `terraform apply -var-file=dev.tfvars -var sql_app_outbound_rules_enabled=false` (creates everything, no app rules).
+2. `terraform apply -var-file=dev.tfvars` (default `true`; adds one rule per outbound IP).
+Add your own IP via `sql_admin_ip_addresses = ["203.0.113.7"]` only for the `sql-grants.sql`/sqlcmd session, then set it
+back to `[]` and re-apply the same day (home and ISP addresses get reassigned).
+Later plans are single-step. Re-apply **immediately** after replacing the web app or the Container Apps environment, and
+on any SQL error 40615: rules for retired addresses stay open until the next apply (fail-open window, ADR-0008 R-25).
+Residual: Container Apps consumption egress addresses are not contractually stable, and the web app's possible outbound
+list is large (shared with other tenants on the scale unit). If SQL starts refusing with error 40615 after a platform
+change, re-apply. Stable alternatives: `enable_private_networking = true` (private endpoint, no firewall rules) or a NAT
+gateway on a workload-profile environment (list-price estimate roughly 35 EUR/month with its public IP, not measured, not adopted).
+
 ## Rollback
 Run the workflow manually with the previous digest (from the earlier run summary or `az acr repository show-manifests`).

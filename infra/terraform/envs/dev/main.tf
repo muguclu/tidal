@@ -80,6 +80,7 @@ module "sql" {
   entra_admin_login          = var.sql_entra_admin_login
   entra_admin_object_id      = var.sql_entra_admin_object_id
   enable_private_networking  = var.enable_private_networking
+  allowed_ip_addresses       = local.sql_allowed_ip_addresses
   use_free_offer             = var.use_free_offer
   log_analytics_workspace_id = module.log_analytics.workspace_id
   tags                       = module.resource_group.tags
