@@ -82,7 +82,7 @@ jobs:
           [[ "$EXPORT_PREFIX" =~ ^[A-Za-z0-9._/-]+/$ ]] || { echo "::error::TIDAL_COST_EXPORT_PREFIX must end with /" >&2; exit 1; }
           [[ -z "$REPORT_WEEK" || "$REPORT_WEEK" =~ ^[0-9]{4}-W[0-9]{2}$ ]] || { echo "::error::week must look like 2026-W44" >&2; exit 1; }
 
-      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           python-version-file: .python-version
           enable-cache: true
